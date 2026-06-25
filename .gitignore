@@ -1,0 +1,26 @@
+# Environment
+.env
+
+# Database
+data/db.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# Docker
+*.dockerignore
+
+# OS
+.DS_Store

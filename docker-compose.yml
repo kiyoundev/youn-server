@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    platform: linux/arm64
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/db.sqlite:/app/db.sqlite
+
+  frontend:
+    build: ./frontend
+    platform: linux/arm64
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
