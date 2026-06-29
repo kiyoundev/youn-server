@@ -5,6 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN CHROMIUM_PATH=$(find /ms-playwright -name "chrome" -type f | head -1) && \
+    echo "CHROMIUM_PATH=$CHROMIUM_PATH" >> /etc/environment
+
 COPY . .
 
 RUN chown -R 1000:1000 /app

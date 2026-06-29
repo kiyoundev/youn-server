@@ -16,6 +16,7 @@ class WatchItem(Base):
     target_price: Mapped[float] = mapped_column(Float)
     last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scraper_type: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
