@@ -74,11 +74,27 @@ async def send_alert(title: str, body: str, url: str | None = None) -> None:
     if settings.notify_pushover:
         try:
             await send_pushover(title, body, url)
+        except httpx.TimeoutException:
+            _log.warning("Pushover timeout — transient, not retrying")
+        except httpx.NetworkError as exc:
+            _log.warning("Pushover network error: %s", exc)
+        except httpx.HTTPStatusError as exc:
+            _log.error(
+                "Pushover API error %d: %s",
+                exc.response.status_code,
+                exc.response.text,
+            )
         except Exception:
-            _log.error("Pushover failed", exc_info=True)
+            _log.error("Pushover unexpected error", exc_info=True)
 
     if settings.notify_email:
         try:
             await send_email(title, body, url)
+        except smtplib.SMTPAuthenticationError:
+            _log.error("Gmail auth failed — check app password in settings")
+        except smtplib.SMTPConnectError as exc:
+            _log.warning("Gmail connect failed: %s", exc)
+        except smtplib.SMTPException as exc:
+            _log.error("Gmail SMTP error: %s", exc)
         except Exception:
-            _log.error("Email failed", exc_info=True)
+            _log.error("Email unexpected error", exc_info=True)
