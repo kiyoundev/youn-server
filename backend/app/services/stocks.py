@@ -211,7 +211,7 @@ class FinnhubClient:
                 if alert_row:
                     alert_row.last_price = price
                     alert_row.alerted_at = now
-        await self._queue.put(event)
+        await self._queue.put(event.id)
         _log.info(
             "STOCK_THRESHOLD fired: %s @ %.4f (target %.4f %s)",
             ticker, price, state.target_price, state.direction,

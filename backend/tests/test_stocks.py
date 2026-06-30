@@ -278,20 +278,25 @@ async def test_fire_event_persists_updates_and_enqueues(client: FinnhubClient) -
     now = dt.datetime.now(dt.timezone.utc)
     alert_row = SimpleNamespace(last_price=None, alerted_at=None)
 
+    def _assign_id(obj):
+        obj.id = 42
+
     session = MagicMock()
     session.begin.return_value = _AsyncCM(None)
     session.get = AsyncMock(return_value=alert_row)
-    session.add = MagicMock()
+    session.add = MagicMock(side_effect=_assign_id)
 
     with patch("app.services.stocks.AsyncSessionLocal", return_value=_AsyncCM(session)):
         await client._fire_event(state, "TSLA", 260.0, now)
 
-    session.add.assert_called_once()
-    queued = await client._queue.get()
-    assert queued.type == "STOCK_THRESHOLD"
-    assert queued.status == "pending"
-    assert queued.payload["ticker"] == "TSLA"
-    assert queued.payload["price"] == 260.0
+    added_event = session.add.call_args[0][0]
+    assert added_event.type == "STOCK_THRESHOLD"
+    assert added_event.status == "pending"
+    assert added_event.payload["ticker"] == "TSLA"
+    assert added_event.payload["price"] == 260.0
+
+    event_id = await client._queue.get()
+    assert event_id == 42
     assert alert_row.last_price == 260.0
     assert alert_row.alerted_at == now
 
