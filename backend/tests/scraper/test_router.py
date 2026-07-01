@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.scraper.result import ScraperResult
-from app.services.scraper.router import RetailerRouter
+from app.services.scraper.router import RetailerRouter, detect_scraper_type
 
 OK = ScraperResult(price=99.99, status="ok")
 OOS = ScraperResult(price=None, status="oos")
@@ -91,3 +91,43 @@ async def test_http_oos_does_not_fall_back(router: RetailerRouter) -> None:
         result = await router.get_price(UNKNOWN_URL)
     MockPW.assert_not_called()
     assert result == OOS
+
+
+@pytest.mark.asyncio
+async def test_detect_scraper_type_http_ok_returns_none() -> None:
+    with patch("app.services.scraper.router.HTTPScraper") as MockHTTP:
+        MockHTTP.return_value.get_price = AsyncMock(return_value=OK)
+        result = await detect_scraper_type(UNKNOWN_URL)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_detect_scraper_type_http_oos_returns_none() -> None:
+    with patch("app.services.scraper.router.HTTPScraper") as MockHTTP:
+        MockHTTP.return_value.get_price = AsyncMock(return_value=OOS)
+        result = await detect_scraper_type(UNKNOWN_URL)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_detect_scraper_type_falls_back_to_patchright() -> None:
+    with (
+        patch("app.services.scraper.router.HTTPScraper") as MockHTTP,
+        patch("app.services.scraper.router.PatchrightScraper") as MockPW,
+    ):
+        MockHTTP.return_value.get_price = AsyncMock(return_value=ERR)
+        MockPW.return_value.get_price = AsyncMock(return_value=OK)
+        result = await detect_scraper_type(UNKNOWN_URL)
+    assert result == "patchright"
+
+
+@pytest.mark.asyncio
+async def test_detect_scraper_type_raises_when_both_fail() -> None:
+    with (
+        patch("app.services.scraper.router.HTTPScraper") as MockHTTP,
+        patch("app.services.scraper.router.PatchrightScraper") as MockPW,
+    ):
+        MockHTTP.return_value.get_price = AsyncMock(return_value=ERR)
+        MockPW.return_value.get_price = AsyncMock(return_value=ERR)
+        with pytest.raises(ValueError):
+            await detect_scraper_type(UNKNOWN_URL)

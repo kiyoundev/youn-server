@@ -8,7 +8,7 @@ class AnalysisResultResponse(BaseModel):
     stock_alert_id: int
     event_id: int | None
     ticker: str
-    triggered_price: float
+    triggered_price: float | None
     result: dict | None
     status: str
     action: str | None

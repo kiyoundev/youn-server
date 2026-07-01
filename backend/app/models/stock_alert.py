@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String, func
+from sqlalchemy import Boolean, DateTime, Float, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -8,6 +8,7 @@ from app.models.base import Base
 
 class StockAlert(Base):
     __tablename__ = "stock_alerts"
+    __table_args__ = (UniqueConstraint("ticker", "direction"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker: Mapped[str] = mapped_column(String)

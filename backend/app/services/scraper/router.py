@@ -24,3 +24,19 @@ class RetailerRouter:
         if result.status == "error":
             result = await PatchrightScraper().get_price(url)
         return result
+
+
+async def detect_scraper_type(url: str) -> str | None:
+    """Probe an unknown-domain URL to determine which scraper it needs.
+
+    Called once at item creation (POST /api/items) for domains not in
+    RETAILER_MAP and with no explicit scraper_type override — the result is
+    then cached on WatchItem so later polls skip straight to the right method.
+    """
+    result = await HTTPScraper().get_price(url)
+    if result.status != "error":
+        return None
+    result = await PatchrightScraper().get_price(url)
+    if result.status != "error":
+        return "patchright"
+    raise ValueError("URL not scrapable by any method")

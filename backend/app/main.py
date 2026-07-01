@@ -5,12 +5,15 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import health, items, poll, stocks
 from app.consumers import dispatcher
-from app.core.db import AsyncSessionLocal, get_db
+from app.core.auth import verify_api_key
+from app.core.config import settings
+from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.scheduler.jobs import poll_prices
 from app.services.stocks import FinnhubClient
@@ -64,15 +67,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="youn-server", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/api/health")
-async def health(db: AsyncSession = Depends(get_db)):
-    return {"status": "ok"}
-
-
-@app.post("/api/poll/prices")
-async def trigger_poll(request: Request, background_tasks: BackgroundTasks):
-    # No auth yet (Issue #8) and no concurrency guard — hitting this while the
-    # scheduler job is running starts two concurrent scrape cycles.
-    background_tasks.add_task(poll_prices, request.app.state.event_queue)
-    return {"status": "triggered"}
+app.include_router(health.router)
+app.include_router(items.router, dependencies=[Depends(verify_api_key)])
+app.include_router(stocks.router, dependencies=[Depends(verify_api_key)])
+app.include_router(poll.router, dependencies=[Depends(verify_api_key)])

@@ -11,7 +11,7 @@ class WatchItem(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String)
-    url: Mapped[str] = mapped_column(String)
+    url: Mapped[str] = mapped_column(String, unique=True)
     retailer: Mapped[str] = mapped_column(String)
     target_price: Mapped[float] = mapped_column(Float)
     last_price: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -19,6 +19,9 @@ frontend/.next/
 frontend/node_modules/
 frontend/out/
 
+# ai tools
+.claude/
+
 # Docker
 *.dockerignore
 

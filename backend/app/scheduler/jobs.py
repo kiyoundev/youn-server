@@ -9,29 +9,58 @@ from app.models.event import Event
 from app.models.price_history import PriceHistory
 from app.models.watch_item import WatchItem
 from app.services.scraper.router import RetailerRouter
+from app.services.stocks import FinnhubClient
 
 _log = logging.getLogger(__name__)
 
+_prices_lock = asyncio.Lock()
+_stocks_lock = asyncio.Lock()
+
 
 async def poll_prices(queue: asyncio.Queue) -> None:
-    _log.info("poll_prices: starting cycle")
-    router = RetailerRouter()
+    if _prices_lock.locked():
+        _log.warning("poll_prices: skipping — previous cycle still running")
+        return
 
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(WatchItem.id).where(WatchItem.active == True)  # noqa: E712
-        )
-        item_ids: list[int] = result.scalars().all()
+    async with _prices_lock:
+        _log.info("poll_prices: starting cycle")
+        router = RetailerRouter()
 
-    _log.info("poll_prices: %d active items", len(item_ids))
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(WatchItem.id).where(WatchItem.active == True)  # noqa: E712
+            )
+            item_ids: list[int] = result.scalars().all()
 
-    for item_id in item_ids:
-        try:
-            await _process_item(item_id, router, queue)
-        except Exception:
-            _log.error("poll_prices: unhandled error for item %d", item_id, exc_info=True)
+        _log.info("poll_prices: %d active items", len(item_ids))
 
-    _log.info("poll_prices: cycle complete")
+        for item_id in item_ids:
+            try:
+                await _process_item(item_id, router, queue)
+            except Exception:
+                _log.error("poll_prices: unhandled error for item %d", item_id, exc_info=True)
+
+        _log.info("poll_prices: cycle complete")
+
+
+async def poll_stocks(finnhub: FinnhubClient) -> None:
+    if _stocks_lock.locked():
+        _log.warning("poll_stocks: skipping — previous cycle still running")
+        return
+
+    async with _stocks_lock:
+        tickers = finnhub.cached_tickers()
+        _log.info("poll_stocks: re-checking %d cached ticker(s)", len(tickers))
+
+        for ticker in tickers:
+            try:
+                price = await finnhub.get_price(ticker)
+                if price is not None:
+                    await finnhub.check_threshold(ticker, price)
+            except Exception:
+                _log.error("poll_stocks: unhandled error for %s", ticker, exc_info=True)
+
+        _log.info("poll_stocks: cycle complete")
 
 
 async def _process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:

@@ -187,6 +187,22 @@ def test_update_alert_mutates_cached_state(client: FinnhubClient) -> None:
     assert state.alerted_at == updated.alerted_at
 
 
+def test_cached_tickers_returns_cache_keys(client: FinnhubClient) -> None:
+    client._add_to_cache(_make_alert(1, "AAPL"))
+    client._add_to_cache(_make_alert(2, "TSLA"))
+
+    assert sorted(client.cached_tickers()) == ["AAPL", "TSLA"]
+
+
+@pytest.mark.asyncio
+async def test_check_threshold_public_delegates_to_private(client: FinnhubClient) -> None:
+    client._check_threshold = AsyncMock()
+
+    await client.check_threshold("AAPL", 123.45)
+
+    client._check_threshold.assert_awaited_once_with("AAPL", 123.45)
+
+
 @pytest.mark.asyncio
 async def test_handle_message_ignores_invalid_json(client: FinnhubClient) -> None:
     client._check_threshold = AsyncMock()

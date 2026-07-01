@@ -101,6 +101,12 @@ class FinnhubClient:
                 state.alerted_at = alert.alerted_at
                 return
 
+    def cached_tickers(self) -> list[str]:
+        return list(self._cache)
+
+    async def check_threshold(self, ticker: str, price: float) -> None:
+        await self._check_threshold(ticker, price)
+
     def _add_to_cache(self, alert: StockAlert) -> None:
         state = _AlertState(
             id=alert.id,

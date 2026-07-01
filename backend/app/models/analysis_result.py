@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -9,6 +9,17 @@ from app.models.base import Base
 
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
+    __table_args__ = (
+        # at most one pending/running analysis per ticker at a time — makes the
+        # POST /api/stocks/{id}/analyze 409 guard race-safe, not just an
+        # app-level check-then-insert
+        Index(
+            "uq_analysis_results_ticker_running",
+            "ticker",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     stock_alert_id: Mapped[int] = mapped_column(
@@ -16,7 +27,7 @@ class AnalysisResult(Base):
     )
     event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
     ticker: Mapped[str] = mapped_column(String)
-    triggered_price: Mapped[float] = mapped_column(Float)
+    triggered_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending", server_default="pending")
     action: Mapped[str | None] = mapped_column(String, nullable=True)

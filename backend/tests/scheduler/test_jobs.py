@@ -65,6 +65,20 @@ async def test_poll_prices_processes_all_active_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_poll_prices_skips_when_lock_already_held() -> None:
+    with (
+        patch("app.scheduler.jobs.RetailerRouter") as router_cls,
+        patch("app.scheduler.jobs._process_item", new=AsyncMock()) as process_item,
+    ):
+        async with jobs._prices_lock:
+            queue = asyncio.Queue()
+            await jobs.poll_prices(queue)
+
+    router_cls.assert_not_called()
+    process_item.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_poll_prices_continues_when_item_processing_errors() -> None:
     result = MagicMock()
     scalars = MagicMock()
@@ -190,3 +204,54 @@ async def test_process_item_skips_non_writable_scrape_results(scrape: ScraperRes
     session.add.assert_not_called()
     session.commit.assert_not_awaited()
     assert queue.empty()
+
+
+def _finnhub_mock(tickers: list[str], prices: dict[str, float | None]) -> MagicMock:
+    finnhub = MagicMock()
+    finnhub.cached_tickers.return_value = tickers
+    finnhub.get_price = AsyncMock(side_effect=lambda t: prices.get(t))
+    finnhub.check_threshold = AsyncMock()
+    return finnhub
+
+
+@pytest.mark.asyncio
+async def test_poll_stocks_checks_all_cached_tickers() -> None:
+    finnhub = _finnhub_mock(["AAPL", "TSLA"], {"AAPL": 150.0, "TSLA": 200.0})
+
+    await jobs.poll_stocks(finnhub)
+
+    finnhub.check_threshold.assert_any_await("AAPL", 150.0)
+    finnhub.check_threshold.assert_any_await("TSLA", 200.0)
+    assert finnhub.check_threshold.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_stocks_skips_ticker_with_none_price() -> None:
+    finnhub = _finnhub_mock(["AAPL"], {"AAPL": None})
+
+    await jobs.poll_stocks(finnhub)
+
+    finnhub.check_threshold.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_stocks_continues_when_ticker_processing_errors() -> None:
+    finnhub = MagicMock()
+    finnhub.cached_tickers.return_value = ["AAPL", "TSLA"]
+    finnhub.get_price = AsyncMock(side_effect=[RuntimeError("boom"), 200.0])
+    finnhub.check_threshold = AsyncMock()
+
+    await jobs.poll_stocks(finnhub)
+
+    finnhub.check_threshold.assert_awaited_once_with("TSLA", 200.0)
+
+
+@pytest.mark.asyncio
+async def test_poll_stocks_skips_when_lock_already_held() -> None:
+    finnhub = _finnhub_mock(["AAPL"], {"AAPL": 150.0})
+
+    async with jobs._stocks_lock:
+        await jobs.poll_stocks(finnhub)
+
+    finnhub.cached_tickers.assert_not_called()
+    finnhub.check_threshold.assert_not_awaited()
