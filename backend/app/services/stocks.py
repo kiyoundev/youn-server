@@ -27,6 +27,7 @@ class _AlertState:
     id: int
     target_price: float
     direction: str  # "above" or "below"
+    alert_type: str  # "buy_signal", "stop_loss", or "take_profit"
     alerted_at: datetime | None
 
 
@@ -98,6 +99,7 @@ class FinnhubClient:
             if state.id == alert.id:
                 state.target_price = alert.target_price
                 state.direction = alert.direction
+                state.alert_type = alert.alert_type
                 state.alerted_at = alert.alerted_at
                 return
 
@@ -112,6 +114,7 @@ class FinnhubClient:
             id=alert.id,
             target_price=alert.target_price,
             direction=alert.direction,
+            alert_type=alert.alert_type,
             alerted_at=alert.alerted_at,
         )
         self._cache.setdefault(alert.ticker, []).append(state)
@@ -208,6 +211,7 @@ class FinnhubClient:
             "price": price,
             "target_price": state.target_price,
             "direction": state.direction,
+            "alert_type": state.alert_type,
         }
         async with AsyncSessionLocal() as session:
             async with session.begin():
@@ -219,8 +223,8 @@ class FinnhubClient:
                     alert_row.alerted_at = now
         await self._queue.put(event.id)
         _log.info(
-            "STOCK_THRESHOLD fired: %s @ %.4f (target %.4f %s)",
-            ticker, price, state.target_price, state.direction,
+            "STOCK_THRESHOLD fired: %s @ %.4f (target %.4f %s, %s)",
+            ticker, price, state.target_price, state.direction, state.alert_type,
         )
 
     async def _clear_alerted_at(self, alert_id: int) -> None:

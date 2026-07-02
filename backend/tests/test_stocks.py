@@ -28,6 +28,7 @@ def _make_alert(
     ticker: str,
     target_price: float = 100.0,
     direction: str = "below",
+    alert_type: str = "buy_signal",
     alerted_at: dt.datetime | None = None,
 ):
     return SimpleNamespace(
@@ -35,6 +36,7 @@ def _make_alert(
         ticker=ticker,
         target_price=target_price,
         direction=direction,
+        alert_type=alert_type,
         alerted_at=alerted_at,
     )
 
@@ -253,7 +255,9 @@ async def test_handle_message_swallows_threshold_errors(client: FinnhubClient) -
 
 @pytest.mark.asyncio
 async def test_check_threshold_crossing_fires_once_and_blocks_duplicates(client: FinnhubClient) -> None:
-    state = _AlertState(id=1, target_price=100.0, direction="below", alerted_at=None)
+    state = _AlertState(
+        id=1, target_price=100.0, direction="below", alert_type="buy_signal", alerted_at=None
+    )
     client._cache["AAPL"] = [state]
     client._fire_event = AsyncMock()
 
@@ -269,7 +273,9 @@ async def test_check_threshold_crossing_fires_once_and_blocks_duplicates(client:
 @pytest.mark.asyncio
 async def test_check_threshold_recovery_clears_alerted_and_rearms(client: FinnhubClient) -> None:
     now = dt.datetime.now(dt.timezone.utc)
-    state = _AlertState(id=1, target_price=100.0, direction="below", alerted_at=now)
+    state = _AlertState(
+        id=1, target_price=100.0, direction="below", alert_type="buy_signal", alerted_at=now
+    )
     client._cache["AAPL"] = [state]
     client._clear_alerted_at = AsyncMock()
 
@@ -290,7 +296,9 @@ async def test_check_threshold_noop_for_unknown_ticker(client: FinnhubClient) ->
 
 @pytest.mark.asyncio
 async def test_fire_event_persists_updates_and_enqueues(client: FinnhubClient) -> None:
-    state = _AlertState(id=7, target_price=250.0, direction="above", alerted_at=None)
+    state = _AlertState(
+        id=7, target_price=250.0, direction="above", alert_type="buy_signal", alerted_at=None
+    )
     now = dt.datetime.now(dt.timezone.utc)
     alert_row = SimpleNamespace(last_price=None, alerted_at=None)
 

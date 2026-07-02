@@ -15,6 +15,7 @@ def _alert(
     ticker: str = "AAPL",
     target_price: float = 150.0,
     direction: str = "below",
+    alert_type: str = "buy_signal",
     active: bool = True,
     run_analysis: bool = False,
     last_price: float | None = None,
@@ -24,6 +25,7 @@ def _alert(
         ticker=ticker,
         target_price=target_price,
         direction=direction,
+        alert_type=alert_type,
         active=active,
         run_analysis=run_analysis,
         last_price=last_price,
@@ -93,6 +95,48 @@ async def test_create_stock_alert_duplicate_returns_409() -> None:
 
     assert exc_info.value.status_code == 409
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_stock_alert_same_ticker_direction_different_alert_type_succeeds() -> None:
+    """Proves the widened uniqueness constraint actually allows a buy_signal and a
+    stop_loss to coexist on the same (ticker, direction) — not just in isolation."""
+    db = MagicMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    finnhub = MagicMock()
+    finnhub.validate_ticker = AsyncMock(return_value=True)
+    finnhub.add_alert = MagicMock()
+    request = _request_with_finnhub(finnhub)
+
+    buy_body = StockAlertCreate(
+        ticker="AAPL", target_price=90.0, direction="below", alert_type="buy_signal"
+    )
+    stop_loss_body = StockAlertCreate(
+        ticker="AAPL", target_price=70.0, direction="below", alert_type="stop_loss"
+    )
+
+    buy_result = await stocks.create_stock_alert(buy_body, request, db)
+    stop_result = await stocks.create_stock_alert(stop_loss_body, request, db)
+
+    assert buy_result.alert_type == "buy_signal"
+    assert stop_result.alert_type == "stop_loss"
+    assert finnhub.add_alert.call_count == 2
+    assert db.commit.await_count == 2
+
+
+def test_create_stock_alert_stop_loss_requires_direction_below_rejected() -> None:
+    with pytest.raises(ValueError):
+        StockAlertCreate(
+            ticker="AAPL", target_price=100.0, direction="above", alert_type="stop_loss"
+        )
+
+
+def test_create_stock_alert_take_profit_requires_direction_above_rejected() -> None:
+    with pytest.raises(ValueError):
+        StockAlertCreate(
+            ticker="AAPL", target_price=100.0, direction="below", alert_type="take_profit"
+        )
 
 
 @pytest.mark.asyncio
@@ -182,6 +226,45 @@ async def test_update_stock_alert_run_analysis_only_skips_finnhub_sync() -> None
     finnhub.update_alert.assert_not_called()
     finnhub.add_alert.assert_not_called()
     finnhub.remove_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_stock_alert_alert_type_change_syncs_finnhub_cache() -> None:
+    alert = _alert(active=True, direction="below", alert_type="buy_signal")
+    db = MagicMock()
+    db.get = AsyncMock(return_value=alert)
+    db.commit = AsyncMock()
+    finnhub = MagicMock()
+    request = _request_with_finnhub(finnhub)
+
+    await stocks.update_stock_alert(
+        1, StockAlertUpdate(alert_type="stop_loss"), request, db
+    )
+
+    assert alert.alert_type == "stop_loss"
+    finnhub.update_alert.assert_called_once_with(alert)
+    finnhub.add_alert.assert_not_called()
+    finnhub.remove_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_stock_alert_alert_type_direction_mismatch_returns_422() -> None:
+    """alert_type=stop_loss alone against an existing direction="above" alert must be
+    rejected using the merged state, since StockAlertUpdate only validates when both
+    direction and alert_type are set in the same request."""
+    alert = _alert(active=True, direction="above", alert_type="buy_signal")
+    db = MagicMock()
+    db.get = AsyncMock(return_value=alert)
+    db.commit = AsyncMock()
+    request = _request_with_finnhub(MagicMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await stocks.update_stock_alert(
+            1, StockAlertUpdate(alert_type="stop_loss"), request, db
+        )
+
+    assert exc_info.value.status_code == 422
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

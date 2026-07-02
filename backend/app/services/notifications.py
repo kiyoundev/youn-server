@@ -14,7 +14,9 @@ _log = logging.getLogger(__name__)
 _PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 
 
-async def send_pushover(title: str, body: str, url: str | None = None) -> None:
+async def send_pushover(
+    title: str, body: str, url: str | None = None, priority: int = 0
+) -> None:
     if not settings.pushover_api_token or not settings.pushover_user_key:
         _log.warning("Pushover credentials not configured — skipping")
         return
@@ -28,6 +30,10 @@ async def send_pushover(title: str, body: str, url: str | None = None) -> None:
     if url:
         payload["url"] = url
         payload["url_title"] = "View"
+    if priority:
+        # Priority 2 ("emergency") additionally requires retry/expire params to
+        # repeat until acknowledged — not used anywhere yet, so not wired here.
+        payload["priority"] = priority
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(_PUSHOVER_URL, data=payload)
@@ -70,10 +76,10 @@ async def send_email(title: str, body: str, url: str | None = None) -> None:
     await loop.run_in_executor(None, _send_email_sync, title, body, url)
 
 
-async def send_alert(title: str, body: str, url: str | None = None) -> None:
+async def send_alert(title: str, body: str, url: str | None = None, priority: int = 0) -> None:
     if settings.notify_pushover:
         try:
-            await send_pushover(title, body, url)
+            await send_pushover(title, body, url, priority)
         except httpx.TimeoutException:
             _log.warning("Pushover timeout — transient, not retrying")
         except httpx.NetworkError as exc:

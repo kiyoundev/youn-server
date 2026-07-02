@@ -66,6 +66,7 @@ async def test_dispatch_price_drop_marks_processed() -> None:
         "Price Drop: Shoes",
         "Now $89.99 (target $100.00)",
         "https://example.com/item",
+        0,
     )
     status_session.commit.assert_awaited_once()
     assert status_event.status == "processed"
@@ -122,6 +123,7 @@ async def test_dispatch_stock_threshold_creates_analysis_result_and_marks_proces
         "Stock Alert: AAPL above $180.00",
         "Now $190.5000 (target $180.00 above)",
         None,
+        0,
     )
     analysis_session.add.assert_called_once()
     analysis_result = analysis_session.add.call_args.args[0]

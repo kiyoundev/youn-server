@@ -7,7 +7,12 @@ from app.core.db import get_db
 from app.models.analysis_result import AnalysisResult
 from app.models.stock_alert import StockAlert
 from app.schemas.analysis_result import AnalysisResultResponse
-from app.schemas.stock_alert import StockAlertCreate, StockAlertResponse, StockAlertUpdate
+from app.schemas.stock_alert import (
+    StockAlertCreate,
+    StockAlertResponse,
+    StockAlertUpdate,
+    alert_type_direction_mismatch,
+)
 from app.services import trading_agents
 from app.services.stocks import FinnhubClient
 
@@ -44,6 +49,7 @@ async def create_stock_alert(
         ticker=body.ticker,
         target_price=body.target_price,
         direction=body.direction,
+        alert_type=body.alert_type,
         run_analysis=body.run_analysis,
         deep_think_llm=body.deep_think_llm,
         quick_think_llm=body.quick_think_llm,
@@ -58,7 +64,8 @@ async def create_stock_alert(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="An alert for this ticker and direction already exists"
+            status_code=409,
+            detail="An alert for this ticker, direction, and alert_type already exists",
         )
 
     finnhub.add_alert(alert)
@@ -80,6 +87,8 @@ async def update_stock_alert(
         alert.target_price = body.target_price
     if body.direction is not None:
         alert.direction = body.direction
+    if body.alert_type is not None:
+        alert.alert_type = body.alert_type
     if body.run_analysis is not None:
         alert.run_analysis = body.run_analysis
     if body.active is not None:
@@ -102,12 +111,24 @@ async def update_stock_alert(
     if "analysts" in fields_set:
         alert.analysts = _analysts_to_csv(body.analysts)
 
+    # StockAlertUpdate only validates direction/alert_type against each other when
+    # both are set in the same request. A PATCH that changes only one of the two
+    # against an existing alert's other field (e.g. alert_type=take_profit alone
+    # on an existing direction="below" alert) must be checked against the merged
+    # state here.
+    if alert_type_direction_mismatch(alert.direction, alert.alert_type):
+        raise HTTPException(
+            status_code=422,
+            detail="stop_loss requires direction='below'; take_profit requires direction='above'",
+        )
+
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="An alert for this ticker and direction already exists"
+            status_code=409,
+            detail="An alert for this ticker, direction, and alert_type already exists",
         )
 
     if body.active is not None and body.active != was_active:
@@ -115,7 +136,7 @@ async def update_stock_alert(
             finnhub.add_alert(alert)
         else:
             finnhub.remove_alert(alert.id, alert.ticker)
-    elif body.target_price is not None or body.direction is not None:
+    elif body.target_price is not None or body.direction is not None or body.alert_type is not None:
         finnhub.update_alert(alert)
 
     return alert

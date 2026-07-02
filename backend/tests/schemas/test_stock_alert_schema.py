@@ -9,6 +9,7 @@ def _base_kwargs(**overrides) -> dict:
         ticker="AAPL",
         target_price=200.0,
         direction="above",
+        alert_type="buy_signal",
         last_price=None,
         alerted_at=None,
         active=True,
