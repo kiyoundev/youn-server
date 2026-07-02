@@ -13,7 +13,7 @@ class AnalysisResultResponse(BaseModel):
     status: str
     action: str | None
     price_target: float | None
-    stop_loss: float | None
+    report_path: str | None
     created_at: datetime
     completed_at: datetime | None
 

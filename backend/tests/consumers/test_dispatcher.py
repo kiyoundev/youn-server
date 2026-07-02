@@ -17,6 +17,14 @@ class _AsyncCM:
         return False
 
 
+def _closing_spawn(coro):
+    """Stand-in for trading_agents.spawn() — closes the coroutine instead of
+    scheduling it, so tests never trigger a real subprocess/DB call and never
+    leak a "coroutine was never awaited" warning."""
+    coro.close()
+    return MagicMock()
+
+
 @pytest.mark.asyncio
 async def test_dispatch_price_drop_marks_processed() -> None:
     event = SimpleNamespace(
@@ -104,8 +112,11 @@ async def test_dispatch_stock_threshold_creates_analysis_result_and_marks_proces
             ],
         ),
         patch("app.consumers.notify.send_alert", new=AsyncMock()) as send_alert,
+        patch("app.services.trading_agents.spawn", side_effect=_closing_spawn) as spawn,
     ):
         await dispatcher._dispatch(2)
+
+    spawn.assert_called_once()
 
     send_alert.assert_awaited_once_with(
         "Stock Alert: AAPL above $180.00",
@@ -119,7 +130,10 @@ async def test_dispatch_stock_threshold_creates_analysis_result_and_marks_proces
     assert analysis_result.ticker == "AAPL"
     assert analysis_result.triggered_price == 190.5
     assert analysis_result.status == "pending"
-    analysis_session.commit.assert_awaited_once()
+    # handle() commits for real (must be durable before spawn() hands the row to a
+    # background task on a separate connection); dispatcher._dispatch's own commit
+    # after handle() returns is then a harmless no-op on top — hence 2, not 1.
+    assert analysis_session.commit.await_count == 2
 
     status_session.commit.assert_awaited_once()
     assert status_event.status == "processed"

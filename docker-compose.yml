@@ -6,6 +6,8 @@ services:
     env_file: .env
     ports:
       - "8000:8000"
+    volumes:
+      - /opt/tradingagents:/opt/tradingagents
 
   frontend:
     build: ./frontend

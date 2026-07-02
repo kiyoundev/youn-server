@@ -18,6 +18,11 @@ class Settings(BaseSettings):
 
     finnhub_api_key: str = ""
 
+    anthropic_api_key: str = ""
+    tradingagents_path: str = "/opt/tradingagents"
+    tradingagents_venv_python: str = "/opt/tradingagents/.venv/bin/python"
+    tradingagents_results_dir: str = "/opt/tradingagents/data"
+
     # ["../.env", ".env"]: root .env for local dev (run from backend/); Docker injects env vars directly so neither file needs to exist
     model_config = SettingsConfigDict(env_file=["../.env", ".env"], env_file_encoding="utf-8")
 

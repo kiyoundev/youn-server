@@ -35,6 +35,14 @@ def _request_with_finnhub(finnhub) -> SimpleNamespace:
     return SimpleNamespace(app=app)
 
 
+def _closing_spawn(coro):
+    """Stand-in for trading_agents.spawn() — closes the coroutine instead of
+    scheduling it, so tests never trigger a real subprocess/DB call and never
+    leak a "coroutine was never awaited" warning."""
+    coro.close()
+    return MagicMock()
+
+
 @pytest.mark.asyncio
 async def test_create_stock_alert_invalid_ticker_returns_400() -> None:
     db = MagicMock()
@@ -264,13 +272,15 @@ async def test_analyze_stock_alert_creates_pending_row_with_last_price() -> None
     exec_result.scalars.return_value = scalars
     db.execute = AsyncMock(return_value=exec_result)
 
-    result = await stocks.analyze_stock_alert(1, db)
+    with patch("app.services.trading_agents.spawn", side_effect=_closing_spawn) as spawn:
+        result = await stocks.analyze_stock_alert(1, db)
 
     assert result.stock_alert_id == alert.id
     assert result.ticker == alert.ticker
     assert result.triggered_price == 142.5
     assert result.status == "pending"
     db.commit.assert_awaited_once()
+    spawn.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -310,7 +320,8 @@ async def test_analyze_stock_alert_allows_null_triggered_price() -> None:
     exec_result.scalars.return_value = scalars
     db.execute = AsyncMock(return_value=exec_result)
 
-    result = await stocks.analyze_stock_alert(1, db)
+    with patch("app.services.trading_agents.spawn", side_effect=_closing_spawn):
+        result = await stocks.analyze_stock_alert(1, db)
 
     assert result.triggered_price is None
 

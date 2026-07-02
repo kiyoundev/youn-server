@@ -32,7 +32,7 @@ class AnalysisResult(Base):
     status: Mapped[str] = mapped_column(String, default="pending", server_default="pending")
     action: Mapped[str | None] = mapped_column(String, nullable=True)
     price_target: Mapped[float | None] = mapped_column(Float, nullable=True)
-    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    report_path: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

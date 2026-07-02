@@ -8,9 +8,14 @@ from app.models.analysis_result import AnalysisResult
 from app.models.stock_alert import StockAlert
 from app.schemas.analysis_result import AnalysisResultResponse
 from app.schemas.stock_alert import StockAlertCreate, StockAlertResponse, StockAlertUpdate
+from app.services import trading_agents
 from app.services.stocks import FinnhubClient
 
 router = APIRouter()
+
+
+def _analysts_to_csv(analysts: list[str] | None) -> str | None:
+    return ",".join(analysts) if analysts is not None else None
 
 
 @router.get("/api/stocks", response_model=list[StockAlertResponse])
@@ -40,6 +45,12 @@ async def create_stock_alert(
         target_price=body.target_price,
         direction=body.direction,
         run_analysis=body.run_analysis,
+        deep_think_llm=body.deep_think_llm,
+        quick_think_llm=body.quick_think_llm,
+        anthropic_effort=body.anthropic_effort,
+        max_debate_rounds=body.max_debate_rounds,
+        max_risk_discuss_rounds=body.max_risk_discuss_rounds,
+        analysts=_analysts_to_csv(body.analysts),
     )
     db.add(alert)
     try:
@@ -73,6 +84,23 @@ async def update_stock_alert(
         alert.run_analysis = body.run_analysis
     if body.active is not None:
         alert.active = body.active
+
+    # These are nullable and independently settable back to null (to revert to the
+    # global default), so use fields_set rather than "is not None" — an omitted
+    # field must be left alone, but an explicit `null` must actually clear it.
+    fields_set = body.model_fields_set
+    if "deep_think_llm" in fields_set:
+        alert.deep_think_llm = body.deep_think_llm
+    if "quick_think_llm" in fields_set:
+        alert.quick_think_llm = body.quick_think_llm
+    if "anthropic_effort" in fields_set:
+        alert.anthropic_effort = body.anthropic_effort
+    if "max_debate_rounds" in fields_set:
+        alert.max_debate_rounds = body.max_debate_rounds
+    if "max_risk_discuss_rounds" in fields_set:
+        alert.max_risk_discuss_rounds = body.max_risk_discuss_rounds
+    if "analysts" in fields_set:
+        alert.analysts = _analysts_to_csv(body.analysts)
 
     try:
         await db.commit()
@@ -141,6 +169,8 @@ async def analyze_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db))
         raise HTTPException(
             status_code=409, detail="An analysis is already running for this ticker"
         )
+
+    trading_agents.spawn(trading_agents.run_analysis(alert, analysis.id))
     return analysis
 
 
