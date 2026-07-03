@@ -16,7 +16,7 @@ from app.services.notifications import send_alert
 _log = logging.getLogger(__name__)
 
 _WRAPPER_SCRIPT = str(Path(__file__).resolve().parents[2] / "scripts" / "run_tradingagents.py")
-_TIMEOUT_SECONDS = 30 * 60
+_HEARTBEAT_FIELDS = ("llm_calls", "tokens_in", "tokens_out", "tool_calls")
 
 _background_tasks: set[asyncio.Task[None]] = set()
 
@@ -59,6 +59,69 @@ async def _set_status(result_id: int, **fields) -> None:
         for key, value in fields.items():
             setattr(analysis, key, value)
         await session.commit()
+
+
+def _parse_heartbeat(line: bytes) -> dict[str, int] | None:
+    """Parses a HEARTBEAT stderr line into its counter fields.
+
+    Matches on substring, not prefix — the child logs via ``logging.info``,
+    which prepends "INFO:__main__:" (default format, left untouched so other
+    log lines in the child aren't affected).
+    """
+    text = line.decode(errors="replace")
+    if "HEARTBEAT" not in text:
+        return None
+    fields: dict[str, int] = {}
+    for token in text.split():
+        key, sep, value = token.partition("=")
+        if sep and key in _HEARTBEAT_FIELDS:
+            try:
+                fields[key] = int(value)
+            except ValueError:
+                _log.warning("run_analysis: malformed heartbeat field %r in line %r", token, text)
+                continue
+    return fields or None
+
+
+async def _drain_stdout(process: asyncio.subprocess.Process) -> bytes:
+    assert process.stdout is not None
+    return await process.stdout.read()
+
+
+async def _watch_stderr(
+    process: asyncio.subprocess.Process, result_id: int, idle_timeout: float
+) -> tuple[str | None, str]:
+    """Reads stderr line-by-line, updating AnalysisResult progress on each
+    HEARTBEAT line and resetting an idle timer on every line received.
+
+    Deliberately resets on *any* stderr line, not just HEARTBEAT ones — any
+    output at all proves the child is alive, and being stricter (heartbeat-only)
+    would only make this fire more eagerly for no real benefit.
+
+    Returns (kill_reason, full_stderr_text) — kill_reason is "idle_timeout"
+    if killed for inactivity, or None on clean EOF (process exited on its own,
+    successfully or not — the caller checks the returncode separately).
+    """
+    assert process.stderr is not None
+    lines: list[bytes] = []
+    while True:
+        try:
+            line = await asyncio.wait_for(process.stderr.readline(), timeout=idle_timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            return "idle_timeout", b"".join(lines).decode(errors="replace")
+
+        if not line:
+            return None, b"".join(lines).decode(errors="replace")
+
+        lines.append(line)
+        heartbeat = _parse_heartbeat(line)
+        if heartbeat is not None:
+            await _set_status(
+                result_id,
+                last_heartbeat_at=datetime.now(timezone.utc),
+                **heartbeat,
+            )
 
 
 async def run_analysis(alert: StockAlert, result_id: int) -> None:
@@ -114,19 +177,30 @@ async def _run_analysis(alert: StockAlert, result_id: int) -> None:
         stderr=asyncio.subprocess.PIPE,
     )
 
+    stdout_task = asyncio.create_task(_drain_stdout(process))
+    stderr_task = asyncio.create_task(
+        _watch_stderr(process, result_id, settings.tradingagents_idle_timeout_seconds)
+    )
+
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(), timeout=_TIMEOUT_SECONDS
+        kill_reason, stderr_text = await asyncio.wait_for(
+            stderr_task, timeout=settings.tradingagents_hard_cap_seconds
         )
     except asyncio.TimeoutError:
         process.kill()
-        await process.wait()
+        kill_reason, stderr_text = "max_runtime_exceeded", ""
+
+    stdout = await stdout_task
+    await process.wait()
+
+    if kill_reason is not None:
         _log.error(
-            "run_analysis: TradingAgents run for %s timed out after %ds",
+            "run_analysis: TradingAgents run for %s killed (%s): %s",
             alert.ticker,
-            _TIMEOUT_SECONDS,
+            kill_reason,
+            stderr_text,
         )
-        await _set_status(result_id, status="failed")
+        await _set_status(result_id, status="failed", error_reason=kill_reason)
         return
 
     if process.returncode != 0:
@@ -134,9 +208,9 @@ async def _run_analysis(alert: StockAlert, result_id: int) -> None:
             "run_analysis: TradingAgents run for %s exited %d: %s",
             alert.ticker,
             process.returncode,
-            stderr.decode(errors="replace"),
+            stderr_text,
         )
-        await _set_status(result_id, status="failed")
+        await _set_status(result_id, status="failed", error_reason="subprocess_error")
         return
 
     try:
@@ -147,7 +221,7 @@ async def _run_analysis(alert: StockAlert, result_id: int) -> None:
             alert.ticker,
             stdout[:500],
         )
-        await _set_status(result_id, status="failed")
+        await _set_status(result_id, status="failed", error_reason="invalid_output")
         return
 
     await _set_status(

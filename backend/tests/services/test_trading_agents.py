@@ -48,10 +48,28 @@ def _session_for(analysis: SimpleNamespace) -> MagicMock:
     return session
 
 
-def _fake_process(stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> MagicMock:
+def _fake_process(
+    *,
+    stderr_lines: list[bytes | BaseException],
+    stdout: bytes = b"",
+    returncode: int = 0,
+) -> MagicMock:
+    """Fake asyncio subprocess.Process — stdout/stderr mocked as separate
+    streams (not communicate()), matching the concurrent stdout-drain /
+    stderr-watch read loop _run_analysis now uses.
+
+    stderr_lines is consumed one call at a time by stderr.readline(); an
+    entry that's an exception instance (e.g. asyncio.TimeoutError()) makes
+    that call raise instead of return — used to simulate an idle timeout
+    without any real waiting, since _watch_stderr's except block reacts to
+    TimeoutError regardless of whether it came from a real timer or not.
+    """
     process = MagicMock()
     process.returncode = returncode
-    process.communicate = AsyncMock(return_value=(stdout, stderr))
+    process.stdout = MagicMock()
+    process.stdout.read = AsyncMock(return_value=stdout)
+    process.stderr = MagicMock()
+    process.stderr.readline = AsyncMock(side_effect=stderr_lines)
     process.kill = MagicMock()
     process.wait = AsyncMock()
     return process
@@ -87,6 +105,23 @@ def test_build_env_always_sets_pythonpath_and_results_dir():
     assert env["TRADINGAGENTS_RESULTS_DIR"] == trading_agents.settings.tradingagents_results_dir
 
 
+# --- _parse_heartbeat --------------------------------------------------------
+
+
+def test_parse_heartbeat_extracts_known_fields_from_logging_formatted_line():
+    line = b"INFO:__main__:HEARTBEAT llm_calls=3 tokens_in=1200 tokens_out=340 tool_calls=1\n"
+    assert trading_agents._parse_heartbeat(line) == {
+        "llm_calls": 3,
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "tool_calls": 1,
+    }
+
+
+def test_parse_heartbeat_returns_none_for_non_heartbeat_line():
+    assert trading_agents._parse_heartbeat(b"INFO:__main__:starting up\n") is None
+
+
 # --- run_analysis --------------------------------------------------------
 
 
@@ -117,7 +152,7 @@ async def test_run_analysis_success_updates_all_fields_and_sends_push():
         "final_trade_decision": "**Rating**: Buy",
         "report_path": "/opt/tradingagents/data/reports/AAPL_20260701",
     }
-    process = _fake_process(json.dumps(payload).encode())
+    process = _fake_process(stderr_lines=[b""], stdout=json.dumps(payload).encode())
 
     with (
         patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
@@ -136,6 +171,7 @@ async def test_run_analysis_success_updates_all_fields_and_sends_push():
     assert analysis.price_target == 123.45
     assert analysis.report_path == "/opt/tradingagents/data/reports/AAPL_20260701"
     assert analysis.completed_at is not None
+    process.kill.assert_not_called()
     send_alert.assert_awaited_once()
     _, kwargs = send_alert.call_args
     assert "AAPL" in kwargs["title"]
@@ -144,11 +180,71 @@ async def test_run_analysis_success_updates_all_fields_and_sends_push():
 
 
 @pytest.mark.asyncio
-async def test_run_analysis_timeout_kills_process_and_sets_failed():
+async def test_run_analysis_heartbeat_updates_progress_fields():
     analysis = SimpleNamespace(status="pending")
     session = _session_for(analysis)
-    process = _fake_process(b"")
-    process.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    payload = {"decision": "Hold"}
+    process = _fake_process(
+        stderr_lines=[
+            b"INFO:__main__:HEARTBEAT llm_calls=1 tokens_in=100 tokens_out=20 tool_calls=0\n",
+            b"",
+        ],
+        stdout=json.dumps(payload).encode(),
+    )
+
+    with (
+        patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.services.trading_agents.os.path.isdir", return_value=True),
+        patch(
+            "app.services.trading_agents.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch("app.services.trading_agents.send_alert", new=AsyncMock()),
+    ):
+        await trading_agents.run_analysis(_alert(), 1)
+
+    assert analysis.llm_calls == 1
+    assert analysis.tokens_in == 100
+    assert analysis.tokens_out == 20
+    assert analysis.tool_calls == 0
+    assert analysis.last_heartbeat_at is not None
+    assert analysis.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_continuous_heartbeats_completes():
+    """Regression guard for the exact bug #17 fixes: a run producing steady
+    heartbeats for longer than the old flat 30-minute timeout must still
+    complete, not get killed just for taking a while."""
+    analysis = SimpleNamespace(status="pending")
+    session = _session_for(analysis)
+    payload = {"decision": "Sell"}
+    heartbeat_line = b"INFO:__main__:HEARTBEAT llm_calls=1 tokens_in=10 tokens_out=5 tool_calls=0\n"
+    process = _fake_process(
+        stderr_lines=[heartbeat_line] * 40 + [b""],
+        stdout=json.dumps(payload).encode(),
+    )
+
+    with (
+        patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.services.trading_agents.os.path.isdir", return_value=True),
+        patch(
+            "app.services.trading_agents.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch("app.services.trading_agents.send_alert", new=AsyncMock()),
+    ):
+        await trading_agents.run_analysis(_alert(), 1)
+
+    process.kill.assert_not_called()
+    assert analysis.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_idle_timeout_kills_process_and_sets_failed():
+    analysis = SimpleNamespace(status="pending")
+    session = _session_for(analysis)
+    process = _fake_process(stderr_lines=[asyncio.TimeoutError()])
 
     with (
         patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
@@ -163,6 +259,35 @@ async def test_run_analysis_timeout_kills_process_and_sets_failed():
     process.kill.assert_called_once()
     process.wait.assert_awaited_once()
     assert analysis.status == "failed"
+    assert analysis.error_reason == "idle_timeout"
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_hard_cap_exceeded_sets_failed():
+    analysis = SimpleNamespace(status="pending")
+    session = _session_for(analysis)
+
+    async def _never_ending_heartbeats(*args, **kwargs):
+        await asyncio.sleep(0.01)
+        return b"INFO:__main__:HEARTBEAT llm_calls=1 tokens_in=0 tokens_out=0 tool_calls=0\n"
+
+    process = _fake_process(stderr_lines=[])
+    process.stderr.readline = AsyncMock(side_effect=_never_ending_heartbeats)
+
+    with (
+        patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.services.trading_agents.os.path.isdir", return_value=True),
+        patch(
+            "app.services.trading_agents.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch.object(trading_agents.settings, "tradingagents_hard_cap_seconds", 0.05),
+    ):
+        await trading_agents.run_analysis(_alert(), 1)
+
+    process.kill.assert_called_once()
+    assert analysis.status == "failed"
+    assert analysis.error_reason == "max_runtime_exceeded"
 
 
 @pytest.mark.asyncio
@@ -190,7 +315,7 @@ async def test_run_analysis_unexpected_exception_sets_failed_not_stuck_running()
 async def test_run_analysis_nonzero_exit_sets_failed():
     analysis = SimpleNamespace(status="pending")
     session = _session_for(analysis)
-    process = _fake_process(b"", b"traceback here", returncode=1)
+    process = _fake_process(stderr_lines=[b"traceback here\n", b""], returncode=1)
 
     with (
         patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
@@ -203,13 +328,14 @@ async def test_run_analysis_nonzero_exit_sets_failed():
         await trading_agents.run_analysis(_alert(), 1)
 
     assert analysis.status == "failed"
+    assert analysis.error_reason == "subprocess_error"
 
 
 @pytest.mark.asyncio
 async def test_run_analysis_bad_json_sets_failed():
     analysis = SimpleNamespace(status="pending")
     session = _session_for(analysis)
-    process = _fake_process(b"not json, some stray log line")
+    process = _fake_process(stderr_lines=[b""], stdout=b"not json, some stray log line")
 
     with (
         patch("app.services.trading_agents.AsyncSessionLocal", return_value=_AsyncCM(session)),
@@ -222,6 +348,7 @@ async def test_run_analysis_bad_json_sets_failed():
         await trading_agents.run_analysis(_alert(), 1)
 
     assert analysis.status == "failed"
+    assert analysis.error_reason == "invalid_output"
 
 
 # --- spawn --------------------------------------------------------

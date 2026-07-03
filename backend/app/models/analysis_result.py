@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, String, func, text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +33,14 @@ class AnalysisResult(Base):
     action: Mapped[str | None] = mapped_column(String, nullable=True)
     price_target: Mapped[float | None] = mapped_column(Float, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    llm_calls: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

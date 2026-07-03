@@ -14,6 +14,12 @@ class AnalysisResultResponse(BaseModel):
     action: str | None
     price_target: float | None
     report_path: str | None
+    llm_calls: int
+    tokens_in: int
+    tokens_out: int
+    tool_calls: int
+    last_heartbeat_at: datetime | None
+    error_reason: str | None
     created_at: datetime
     completed_at: datetime | None
 

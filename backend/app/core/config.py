@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     tradingagents_path: str = "/opt/tradingagents"
     tradingagents_venv_python: str = "/opt/tradingagents/.venv/bin/python"
     tradingagents_results_dir: str = "/opt/tradingagents/data"
+    tradingagents_idle_timeout_seconds: int = 600
+    tradingagents_hard_cap_seconds: int = 7200
 
     # ["../.env", ".env"]: root .env for local dev (run from backend/); Docker injects env vars directly so neither file needs to exist
     model_config = SettingsConfigDict(env_file=["../.env", ".env"], env_file_encoding="utf-8")
