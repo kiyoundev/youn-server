@@ -27,3 +27,5 @@ frontend/out/
 
 # OS
 .DS_Store
+
+frontend/docs/

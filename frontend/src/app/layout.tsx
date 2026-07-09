@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { brittiSans } from "./fonts";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "youn-server",
@@ -12,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={cn("font-sans", brittiSans.variable)}>
       <body className="antialiased">{children}</body>
     </html>
   );
