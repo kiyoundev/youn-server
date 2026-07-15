@@ -14,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn("font-sans", brittiSans.variable)}>
+    <html lang="en" className={cn("dark font-sans", brittiSans.variable)}>
       <body className="antialiased">{children}</body>
     </html>
   );

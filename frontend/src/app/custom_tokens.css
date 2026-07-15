@@ -1,0 +1,23 @@
+@theme inline {
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-error: var(--status-error);
+  --color-status-neutral: var(--status-neutral);
+  --color-storage-available: var(--storage-available);
+  --color-storage-used: var(--storage-used);
+  --color-storage-reserved: var(--storage-reserved);
+}
+
+:root {
+  /* light mode values, unused today but kept for parity */
+}
+
+.dark {
+  --status-success: #2AAF58;
+  --status-warning: #FF8B16;
+  --status-error: #E84837;
+  --status-neutral: #76787C;
+  --storage-available: #D9D9D7;
+  --storage-used: #5A727D;
+  --storage-reserved: #53575A;
+}
