@@ -10,3 +10,9 @@ export const brittiSans = localFont({
   variable: "--font-sans",
   display: "swap",
 });
+
+export const ndot = localFont({
+  src: "./fonts/Ndot77JPExtended.ttf",
+  variable: "--font-ndot",
+  display: "swap",
+});

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 
-type BayStatus = "empty" | "healthy" | "warning" | "error"
+export type BayStatus = "empty" | "healthy" | "warning" | "error"
 
 const dotColor: Record<BayStatus, string> = {
   empty: "var(--status-neutral)",

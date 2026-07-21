@@ -1,4 +1,5 @@
 @theme inline {
+  --animate-dot-pulse: dot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --color-status-success: var(--status-success);
   --color-status-warning: var(--status-warning);
   --color-status-error: var(--status-error);
@@ -6,6 +7,18 @@
   --color-storage-available: var(--storage-available);
   --color-storage-used: var(--storage-used);
   --color-storage-reserved: var(--storage-reserved);
+  --color-uptime-empty: var(--uptime-empty);
+  --color-brand-900: var(--brand-900);
+  --color-brand-800: var(--brand-800);
+  --color-brand-700: var(--brand-700);
+  --color-brand-600: var(--brand-600);
+  --color-brand-500: var(--brand-500);
+  --color-brand-400: var(--brand-400);
+  --color-brand-300: var(--brand-300);
+  --color-brand-200: var(--brand-200);
+  --color-brand-100: var(--brand-100);
+  --color-brand-gold: var(--brand-gold);
+  --color-panel: var(--panel);
 }
 
 :root {
@@ -17,7 +30,25 @@
   --status-warning: #FF8B16;
   --status-error: #E84837;
   --status-neutral: #76787C;
-  --storage-available: #D9D9D7;
-  --storage-used: #5A727D;
+  --storage-available: #EAEDE7;
+  --storage-used: #A3B3C1;
   --storage-reserved: #53575A;
+  --uptime-empty: #E5E5E5;
+  --brand-900: #101920;
+  --brand-800: #53575A;
+  --brand-700: #76787C;
+  --brand-600: #97999B;
+  --brand-500: #B1B3B2;
+  --brand-400: #C8C9C6;
+  --brand-300: #D9D9D7;
+  --brand-200: #EAEDE7;
+  --brand-100: #FFFFFF;
+  --brand-gold: #F6BE00;
+  --panel: #252626;
+}
+
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.7;
+  }
 }

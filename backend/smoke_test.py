@@ -144,7 +144,26 @@ async def run_patchright() -> None:
         await PatchrightScraper.close_browser()
 
 
+async def run_synology() -> None:
+    print("\n--- SynologyClient ---")
+    from app.services.synology import synology_client
+
+    state = await synology_client.get_storage()
+    if state is None:
+        print("  ✗ get_storage() returned None (check .env creds / host reachable / DSM app permission)")
+        return
+    for bay in state.bays:
+        print(f"  bay {bay.label}: {bay.status}")
+    print(
+        f"  available={state.available:.3f}TB used={state.used:.3f}TB reserved={state.reserved:.3f}TB"
+    )
+
+
 async def main() -> None:
+    if "--synology" in sys.argv:
+        await run_synology()
+        return
+
     await run_http()
 
     run_pw = "--patchright" in sys.argv

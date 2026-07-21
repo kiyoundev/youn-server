@@ -22,17 +22,18 @@ function StorageMeter({
   className,
 }: StorageMeterProps) {
   const total = available + used + reserved
+  const totalCells = columns * rows
 
-  const availableCols =
-    total > 0 ? Math.round((available / total) * columns) : columns
-  const usedCols = total > 0 ? Math.round((used / total) * columns) : 0
-  const reservedCols = Math.max(0, columns - availableCols - usedCols)
+  const availableCells =
+    total > 0 ? Math.round((available / total) * totalCells) : totalCells
+  const usedCells = total > 0 ? Math.round((used / total) * totalCells) : 0
+  const reservedCells = Math.max(0, totalCells - availableCells - usedCells)
 
-  const columnColors: string[] = [
-    ...Array(availableCols).fill("var(--storage-available)"),
-    ...Array(usedCols).fill("var(--storage-used)"),
-    ...Array(reservedCols).fill("var(--storage-reserved)"),
-  ].slice(0, columns)
+  const cellColors: string[] = [
+    ...Array(availableCells).fill("var(--storage-available)"),
+    ...Array(usedCells).fill("var(--storage-used)"),
+    ...Array(reservedCells).fill("var(--storage-reserved)"),
+  ].slice(0, totalCells)
 
   const width = columns * PITCH - GAP
   const height = rows * PITCH - GAP
@@ -46,7 +47,7 @@ function StorageMeter({
       className={cn(className)}
       data-slot="storage-meter"
     >
-      {columnColors.map((color, colIndex) =>
+      {Array.from({ length: columns }).map((_, colIndex) =>
         Array.from({ length: rows }).map((_, rowIndex) => (
           <rect
             key={`${colIndex}-${rowIndex}`}
@@ -55,7 +56,7 @@ function StorageMeter({
             width={CELL}
             height={CELL}
             rx="0.5"
-            fill={color}
+            fill={cellColors[colIndex * rows + rowIndex]}
           />
         ))
       )}

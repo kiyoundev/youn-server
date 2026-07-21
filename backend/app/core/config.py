@@ -18,6 +18,14 @@ class Settings(BaseSettings):
 
     finnhub_api_key: str = ""
 
+    synology_host: str = ""
+    synology_port: int = 5001
+    synology_use_https: bool = True
+    synology_user: str = ""
+    synology_password: str = ""
+    # NAS lives on LAN with DSM's default self-signed cert; flip to True if a valid cert is configured
+    synology_verify_ssl: bool = False
+
     anthropic_api_key: str = ""
     tradingagents_path: str = "/opt/tradingagents"
     tradingagents_venv_python: str = "/opt/tradingagents/.venv/bin/python"
