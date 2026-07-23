@@ -23,24 +23,68 @@ def _analysts_to_csv(analysts: list[str] | None) -> str | None:
     return ",".join(analysts) if analysts is not None else None
 
 
-@router.get("/api/stocks", response_model=list[StockAlertResponse])
+@router.get(
+    "/api/stocks",
+    response_model=list[StockAlertResponse],
+    summary="List all stock alerts",
+)
 async def list_stock_alerts(db: AsyncSession = Depends(get_db)) -> list[StockAlert]:
+    """List all tracked stock price alerts.
+
+    Returns:
+        Every `StockAlert` row, active and paused alike.
+    """
     result = await db.execute(select(StockAlert))
     return list(result.scalars().all())
 
 
-@router.get("/api/stocks/{alert_id}", response_model=StockAlertResponse)
+@router.get(
+    "/api/stocks/{alert_id}",
+    response_model=StockAlertResponse,
+    summary="Get a single stock alert",
+)
 async def get_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db)) -> StockAlert:
+    """Fetch one stock alert by ID.
+
+    Args:
+        alert_id: Primary key of the `StockAlert` row.
+
+    Returns:
+        The matching `StockAlert`.
+
+    Raises:
+        HTTPException: 404 if no alert exists with that ID.
+    """
     alert = await db.get(StockAlert, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Stock alert not found")
     return alert
 
 
-@router.post("/api/stocks", response_model=StockAlertResponse, status_code=201)
+@router.post(
+    "/api/stocks",
+    response_model=StockAlertResponse,
+    status_code=201,
+    summary="Create a new stock alert",
+    description="Validates the ticker via Finnhub before saving.",
+)
 async def create_stock_alert(
     body: StockAlertCreate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> StockAlert:
+    """Create a new stock price alert and subscribe it on the live Finnhub feed.
+
+    Args:
+        body: New alert fields — ticker, target price, direction, alert type,
+            optional TradingAgents run config.
+
+    Returns:
+        The newly created `StockAlert`.
+
+    Raises:
+        HTTPException: 400 if the ticker fails Finnhub validation.
+        HTTPException: 409 if an alert with the same ticker/direction/alert_type
+            combination already exists.
+    """
     finnhub: FinnhubClient = request.app.state.finnhub
     if not await finnhub.validate_ticker(body.ticker):
         raise HTTPException(status_code=400, detail="Invalid ticker")
@@ -72,10 +116,41 @@ async def create_stock_alert(
     return alert
 
 
-@router.patch("/api/stocks/{alert_id}", response_model=StockAlertResponse)
+@router.patch(
+    "/api/stocks/{alert_id}",
+    response_model=StockAlertResponse,
+    summary="Update a stock alert",
+    description=(
+        "Partial update — omitted fields are left unchanged. Nullable "
+        "TradingAgents config fields (deep_think_llm, quick_think_llm, "
+        "anthropic_effort, max_debate_rounds, max_risk_discuss_rounds, analysts) "
+        "can be explicitly set back to `null` to revert to the global default."
+    ),
+)
 async def update_stock_alert(
     alert_id: int, body: StockAlertUpdate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> StockAlert:
+    """Update a stock alert's thresholds, run config, or active status.
+
+    Re-subscribes/unsubscribes/updates the live Finnhub feed to match the
+    resulting `active` state.
+
+    Args:
+        alert_id: Primary key of the `StockAlert` row.
+        body: Fields to change; any field omitted from the request body is
+            left untouched.
+
+    Returns:
+        The updated `StockAlert`.
+
+    Raises:
+        HTTPException: 404 if no alert exists with that ID.
+        HTTPException: 422 if the merged direction/alert_type combination is
+            invalid (`stop_loss` requires `direction='below'`; `take_profit`
+            requires `direction='above'`).
+        HTTPException: 409 if the update collides with another alert's
+            ticker/direction/alert_type combination.
+    """
     alert = await db.get(StockAlert, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Stock alert not found")
@@ -142,10 +217,23 @@ async def update_stock_alert(
     return alert
 
 
-@router.delete("/api/stocks/{alert_id}", status_code=204)
+@router.delete(
+    "/api/stocks/{alert_id}",
+    status_code=204,
+    summary="Delete a stock alert",
+    description="Also unsubscribes the ticker from the live Finnhub feed.",
+)
 async def delete_stock_alert(
     alert_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ) -> None:
+    """Delete a stock alert and unsubscribe it from the live feed.
+
+    Args:
+        alert_id: Primary key of the `StockAlert` row.
+
+    Raises:
+        HTTPException: 404 if no alert exists with that ID.
+    """
     alert = await db.get(StockAlert, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Stock alert not found")
@@ -158,9 +246,31 @@ async def delete_stock_alert(
 
 
 @router.post(
-    "/api/stocks/{alert_id}/analyze", response_model=AnalysisResultResponse, status_code=201
+    "/api/stocks/{alert_id}/analyze",
+    response_model=AnalysisResultResponse,
+    status_code=201,
+    summary="Manually trigger a TradingAgents analysis",
+    description=(
+        "Ignores the alert's own `run_analysis` flag and always runs. "
+        "Spawns the TradingAgents subprocess as a background task and returns "
+        "immediately with `status='pending'` — poll "
+        "`GET /api/stocks/{alert_id}/analysis` for progress/results."
+    ),
 )
 async def analyze_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db)) -> AnalysisResult:
+    """Manually trigger a TradingAgents analysis run for a stock alert.
+
+    Args:
+        alert_id: Primary key of the `StockAlert` row.
+
+    Returns:
+        The newly created `AnalysisResult`, with `status='pending'`.
+
+    Raises:
+        HTTPException: 404 if no alert exists with that ID.
+        HTTPException: 409 if an analysis for this ticker is already
+            `pending` or `running`.
+    """
     alert = await db.get(StockAlert, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Stock alert not found")
@@ -195,10 +305,26 @@ async def analyze_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db))
     return analysis
 
 
-@router.get("/api/stocks/{alert_id}/analysis", response_model=list[AnalysisResultResponse])
+@router.get(
+    "/api/stocks/{alert_id}/analysis",
+    response_model=list[AnalysisResultResponse],
+    summary="List TradingAgents analysis results for a stock alert",
+)
 async def list_analysis_results(
     alert_id: int, limit: int = Query(10, ge=1, le=100), db: AsyncSession = Depends(get_db)
 ) -> list[AnalysisResult]:
+    """List past TradingAgents analysis runs for a stock alert, most recent first.
+
+    Args:
+        alert_id: Primary key of the `StockAlert` row.
+        limit: Max results to return (1-100, default 10).
+
+    Returns:
+        `AnalysisResult` rows for this alert's ticker, newest first.
+
+    Raises:
+        HTTPException: 404 if no alert exists with that ID.
+    """
     alert = await db.get(StockAlert, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Stock alert not found")

@@ -72,7 +72,7 @@ function PortfolioLineChart({
               className="w-[150px]"
               nameKey="value"
               labelFormatter={(value) =>
-                new Date(value).toLocaleDateString("en-US", {
+                new Date(value as string).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
                   year: "numeric",

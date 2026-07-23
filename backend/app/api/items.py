@@ -24,22 +24,72 @@ def _derive_retailer(hostname: str) -> str:
     return hostname.replace(".", "_")
 
 
-@router.get("/api/items", response_model=list[WatchItemResponse])
+@router.get(
+    "/api/items",
+    response_model=list[WatchItemResponse],
+    summary="List all wishlist items",
+    description="Returns every `WatchItem` row, active and paused alike.",
+)
 async def list_items(db: AsyncSession = Depends(get_db)) -> list[WatchItem]:
+    """List all tracked wishlist items.
+
+    Returns:
+        Every `WatchItem` row in the database, regardless of `active` status.
+    """
     result = await db.execute(select(WatchItem))
     return list(result.scalars().all())
 
 
-@router.get("/api/items/{item_id}", response_model=WatchItemResponse)
+@router.get(
+    "/api/items/{item_id}",
+    response_model=WatchItemResponse,
+    summary="Get a single wishlist item",
+)
 async def get_item(item_id: int, db: AsyncSession = Depends(get_db)) -> WatchItem:
+    """Fetch one wishlist item by ID.
+
+    Args:
+        item_id: Primary key of the `WatchItem` row.
+
+    Returns:
+        The matching `WatchItem`.
+
+    Raises:
+        HTTPException: 404 if no item exists with that ID.
+    """
     item = await db.get(WatchItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return item
 
 
-@router.post("/api/items", response_model=WatchItemResponse, status_code=201)
+@router.post(
+    "/api/items",
+    response_model=WatchItemResponse,
+    status_code=201,
+    summary="Add a new wishlist item",
+    description=(
+        "Derives `retailer` from the URL's hostname and probes the URL through "
+        "the scraper extraction hierarchy to auto-detect `scraper_type`, unless "
+        "an explicit `scraper_type` is provided in the body."
+    ),
+)
 async def create_item(body: WatchItemCreate, db: AsyncSession = Depends(get_db)) -> WatchItem:
+    """Create a new wishlist item, auto-detecting its scraper type.
+
+    Args:
+        body: New item fields — `name`, `url`, `target_price`, optional
+            `scraper_type` override.
+
+    Returns:
+        The newly created `WatchItem`.
+
+    Raises:
+        HTTPException: 409 if an item with the same URL already exists.
+        HTTPException: 400 if the URL couldn't be scraped by any known method
+            (only when `scraper_type` isn't explicitly provided and the host
+            isn't a pre-registered retailer).
+    """
     existing = await db.execute(select(WatchItem.id).where(WatchItem.url == body.url))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="An item with this URL already exists")
@@ -75,10 +125,27 @@ async def create_item(body: WatchItemCreate, db: AsyncSession = Depends(get_db))
     return item
 
 
-@router.patch("/api/items/{item_id}", response_model=WatchItemResponse)
+@router.patch(
+    "/api/items/{item_id}",
+    response_model=WatchItemResponse,
+    summary="Update a wishlist item",
+    description="Partial update — omitted fields are left unchanged.",
+)
 async def update_item(
     item_id: int, body: WatchItemUpdate, db: AsyncSession = Depends(get_db)
 ) -> WatchItem:
+    """Update name, target price, and/or active status for a wishlist item.
+
+    Args:
+        item_id: Primary key of the `WatchItem` row.
+        body: Fields to change; any field left as `None` is left untouched.
+
+    Returns:
+        The updated `WatchItem`.
+
+    Raises:
+        HTTPException: 404 if no item exists with that ID.
+    """
     item = await db.get(WatchItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -94,8 +161,21 @@ async def update_item(
     return item
 
 
-@router.delete("/api/items/{item_id}", status_code=204)
+@router.delete(
+    "/api/items/{item_id}",
+    status_code=204,
+    summary="Delete a wishlist item",
+    description="Cascades to delete all associated `PriceHistory` rows.",
+)
 async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)) -> None:
+    """Delete a wishlist item and its price history.
+
+    Args:
+        item_id: Primary key of the `WatchItem` row.
+
+    Raises:
+        HTTPException: 404 if no item exists with that ID.
+    """
     item = await db.get(WatchItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -103,10 +183,26 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)) -> None:
     await db.commit()
 
 
-@router.get("/api/items/{item_id}/history", response_model=list[PriceHistoryResponse])
+@router.get(
+    "/api/items/{item_id}/history",
+    response_model=list[PriceHistoryResponse],
+    summary="Get price history for a wishlist item",
+)
 async def get_item_history(
     item_id: int, days: int = Query(30, ge=1, le=365), db: AsyncSession = Depends(get_db)
 ) -> list[PriceHistory]:
+    """Fetch recorded price points for a wishlist item within a lookback window.
+
+    Args:
+        item_id: Primary key of the `WatchItem` row.
+        days: Lookback window in days (1-365, default 30).
+
+    Returns:
+        `PriceHistory` rows within the window, oldest first.
+
+    Raises:
+        HTTPException: 404 if no item exists with that ID.
+    """
     item = await db.get(WatchItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
