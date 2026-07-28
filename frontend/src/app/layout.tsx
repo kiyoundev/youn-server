@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { brittiSans, ndot } from "./fonts";
 import { cn } from "@/lib/utils";
+import Nav from "@/components/nav";
 
 export const metadata: Metadata = {
   title: "youn-server",
@@ -18,7 +19,10 @@ export default function RootLayout({
       lang="en"
       className={cn("dark font-sans", brittiSans.variable, ndot.variable)}
     >
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <Nav />
+        {children}
+      </body>
     </html>
   );
 }

@@ -17,6 +17,7 @@ from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.scheduler.jobs import poll_prices
 from app.services.stocks import FinnhubClient
+from app.services.synology import synology_client
 
 _log = logging.getLogger(__name__)
 _TZ = ZoneInfo("America/Toronto")
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(dispatch_task, return_exceptions=True)
     scheduler.shutdown(wait=False)
     await finnhub.stop()
+    await synology_client.close()
 
 
 app = FastAPI(title="youn-server", lifespan=lifespan)

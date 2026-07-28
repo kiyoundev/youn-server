@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -9,6 +10,7 @@ _log = logging.getLogger(__name__)
 
 _BAY_COUNT = 2  # DS216+
 _DSM_SESSION_NAME = "webui"
+_DSM_SESSION_INVALID_CODES = {106, 119}  # 106 = session timeout, 119 = invalid session
 
 _DISK_STATUS_MAP = {
     "normal": "healthy",
@@ -42,7 +44,15 @@ class StorageState:
     reserved: float  # TB
 
 
+class _SessionExpired(Exception):
+    """Raised internally when DSM reports the cached sid is no longer valid."""
+
+
 class SynologyClient:
+    def __init__(self) -> None:
+        self._sid: str | None = None
+        self._lock = asyncio.Lock()
+
     @property
     def _enabled(self) -> bool:
         return bool(
@@ -60,13 +70,29 @@ class SynologyClient:
             return None
 
         async with httpx.AsyncClient(timeout=10, verify=settings.synology_verify_ssl) as client:
-            sid = await self._login(client)
+            sid = await self._get_sid(client)
             if not sid:
                 return None
             try:
                 return await self._fetch_storage(client, sid)
-            finally:
-                await self._logout(client, sid)
+            except _SessionExpired:
+                sid = await self._get_sid(client, force_refresh=True)
+                if not sid:
+                    return None
+                try:
+                    return await self._fetch_storage(client, sid)
+                except _SessionExpired:
+                    _log.warning("Synology session invalid immediately after re-login")
+                    return None
+
+    async def _get_sid(
+        self, client: httpx.AsyncClient, force_refresh: bool = False
+    ) -> str | None:
+        async with self._lock:
+            if self._sid and not force_refresh:
+                return self._sid
+            self._sid = await self._login(client)
+            return self._sid
 
     async def _login(self, client: httpx.AsyncClient) -> str | None:
         try:
@@ -107,6 +133,15 @@ class SynologyClient:
         except Exception:
             _log.warning("Synology logout failed", exc_info=True)
 
+    async def close(self) -> None:
+        """Log out the cached DSM session, if one is held. Call on app shutdown."""
+        async with self._lock:
+            if not self._sid:
+                return
+            async with httpx.AsyncClient(timeout=10, verify=settings.synology_verify_ssl) as client:
+                await self._logout(client, self._sid)
+                self._sid = None
+
     async def _fetch_storage(self, client: httpx.AsyncClient, sid: str) -> StorageState | None:
         try:
             resp = await client.get(
@@ -121,9 +156,14 @@ class SynologyClient:
             resp.raise_for_status()
             data = resp.json()
             if not data.get("success"):
+                error_code = (data.get("error") or {}).get("code")
+                if error_code in _DSM_SESSION_INVALID_CODES:
+                    raise _SessionExpired
                 _log.warning("Synology storage query failed: %s", data.get("error"))
                 return None
             return self._parse_storage(data["data"])
+        except _SessionExpired:
+            raise
         except Exception:
             _log.warning("Synology storage query request failed", exc_info=True)
             return None

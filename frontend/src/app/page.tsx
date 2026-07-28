@@ -24,14 +24,10 @@ interface StorageData {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function Home() {
-  const { data, error, isLoading } = useSWR<StorageData>(
-    "/api/proxy/system/storage",
-    fetcher,
-    { refreshInterval: 30000 },
-  );
+  const { data, error, isLoading } = useSWR<StorageData>("/api/proxy/system/storage", fetcher, { refreshInterval: 30000 });
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4">
+    <main className="flex min-h-screen flex-col items-center gap-4">
       {isLoading && <p>Loading...</p>}
       {error && <p>Failed to load storage data</p>}
       {data && (
@@ -40,49 +36,17 @@ export default function Home() {
           <div className="flex flex-col gap-5 w-full">
             <DateTile className="flex-1" />
             <div className="flex gap-5 w-full">
-              <CpuTile
-                percent={50}
-                tempC={64}
-                className="min-w-[152px] flex-1 h-[165px]"
-              />
-              <MemoryTile
-                percent={75}
-                totalGb={8}
-                className="min-w-[152px] flex-1 h-[165px]"
-              />
+              <CpuTile percent={50} tempC={64} className="min-w-[152px] flex-1 h-[165px]" />
+              <MemoryTile percent={75} totalGb={8} className="min-w-[152px] flex-1 h-[165px]" />
             </div>
-            <StorageTile
-              bays={data.bays}
-              available={data.available}
-              used={data.used}
-              reserved={data.reserved}
-              className="w-full"
-            />
+            <StorageTile bays={data.bays} available={data.available} used={data.used} reserved={data.reserved} className="w-full" />
             <div className="flex gap-5 w-full">
-              <DockerTile
-                name="Frontend"
-                status="running"
-                port={3000}
-                className="min-w-[167px] w-[176px] h-[191.5px]"
-              />
-              <DockerTile
-                name="Backend"
-                status="running"
-                port={8000}
-                className="min-w-[167px] w-[176px] h-[191.5px]"
-              />
+              <DockerTile name="Frontend" status="running" port={3000} className="min-w-[167px] w-[176px] h-[191.5px]" />
+              <DockerTile name="Backend" status="running" port={8000} className="min-w-[167px] w-[176px] h-[191.5px]" />
             </div>
             <div className="flex gap-5 w-full">
-              <GitUpdateTile
-                name="TradingAgents"
-                commitsBehind={3}
-                className="min-w-[167px] w-[176px] h-[191.5px]"
-              />
-              <GitUpdateTile
-                name="Server"
-                commitsBehind={0}
-                className="min-w-[167px] w-[176px] h-[191.5px]"
-              />
+              <GitUpdateTile name="TradingAgents" commitsBehind={3} className="min-w-[167px] w-[176px] h-[191.5px]" />
+              <GitUpdateTile name="Server" commitsBehind={0} className="min-w-[167px] w-[176px] h-[191.5px]" />
             </div>
             <div className="flex gap-5 w-full">
               <UptimeTile uptimeSeconds={223456} className="min-w-[167px] w-[176px] h-full" />
