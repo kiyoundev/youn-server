@@ -33,7 +33,7 @@ const Nav = () => {
   const searchResults = useMemo(() => mockTickerDirectory.filter((entry) => !trackedTickers.includes(entry.symbol)), [trackedTickers]);
 
   const handleSelect = (ticker: string) => {
-    router.push(`/market/${ticker}`);
+    router.push(`/market/${encodeURIComponent(ticker)}`);
     setQuery("");
     setOpen(false);
     setExpanded(false);

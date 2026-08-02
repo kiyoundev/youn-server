@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Plus } from "lucide-react";
 import { PortfolioLineChart } from "@/components/ui/portfolio-line-chart";
 import { AllocationDonutChart } from "@/components/ui/allocation-donut-chart";
@@ -11,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext, type CarouselApi } from "@/components/ui/carousel";
 import { holdingsData, stockWatchlistData } from "@/lib/mock-portfolio";
+import { mockMarketDetails } from "@/lib/mock-market";
 
 const allocationData = [
   { category: "Stocks", value: 60, thickness: 25 },
@@ -21,75 +23,13 @@ const allocationData = [
 
 const currentValueChangePercent: number = 2.5;
 
-type PopularAssetCategory = "Stock" | "ETF" | "Index";
+// Curated tickers featured on this page — full company/market data lives in
+// mock-market.ts (single source of truth, also used by /market/[ticker]).
+const POPULAR_ASSET_TICKERS: (keyof typeof mockMarketDetails)[] = ["AAPL", "NVDA", "SPY", "QQQ", "^GSPC"];
 
-type PopularAsset = {
-  ticker: string;
-  name: string;
-  category: PopularAssetCategory;
-  logoColor: string;
-  price: number;
-  changePercent: number;
-  changeAmount: number;
-  volume?: string;
-  marketCap?: string;
-};
-
-const popularAssetsData: PopularAsset[] = [
-  {
-    ticker: "AAPL",
-    name: "Apple",
-    category: "Stock",
-    logoColor: "#A2AAAD",
-    price: 258.34,
-    changePercent: 1.82,
-    changeAmount: 4.62,
-    volume: "58.2M",
-    marketCap: "$3.9T",
-  },
-  {
-    ticker: "NVDA",
-    name: "NVIDIA",
-    category: "Stock",
-    logoColor: "#76B900",
-    price: 178.92,
-    changePercent: -0.94,
-    changeAmount: -1.69,
-    volume: "142.7M",
-    marketCap: "$4.4T",
-  },
-  {
-    ticker: "SPY",
-    name: "S&P 500",
-    category: "ETF",
-    logoColor: "#1E3A8A",
-    price: 612.47,
-    changePercent: 0.41,
-    changeAmount: 2.51,
-    volume: "71.4M",
-    marketCap: "$610.8B",
-  },
-  {
-    ticker: "QQQ",
-    name: "Nasdaq 100",
-    category: "ETF",
-    logoColor: "#111827",
-    price: 521.83,
-    changePercent: 0.68,
-    changeAmount: 3.54,
-    volume: "38.9M",
-    marketCap: "$340.2B",
-  },
-  {
-    ticker: "^GSPC",
-    name: "S&P 500",
-    category: "Index",
-    logoColor: "#7C3AED",
-    price: 6187.23,
-    changePercent: 0.41,
-    changeAmount: 25.36,
-  },
-];
+function fmtCompact(value: number) {
+  return value.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 });
+}
 
 type DateRange = "1D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "ALL";
 
@@ -311,48 +251,53 @@ export default function PortfolioPage() {
             }}
           >
             <CarouselContent className="-ml-4 mt-2">
-              {popularAssetsData.map((asset) => {
-                const isChangeUp = asset.changePercent > 0;
+              {POPULAR_ASSET_TICKERS.map((ticker) => {
+                const asset = mockMarketDetails[ticker];
+                const changeAmount = asset.currentPrice - asset.open;
+                const changePercent = asset.open !== 0 ? (changeAmount / asset.open) * 100 : 0;
+                const isChangeUp = changePercent > 0;
                 const changeColor = isChangeUp ? "var(--status-success)" : "var(--status-error)";
                 return (
-                  <CarouselItem key={asset.ticker} className="basis-[350px]">
+                  <CarouselItem key={ticker} className="basis-[350px]">
                     <Card className="p-3 bg-muted/50 ring-inset">
                       <div className="flex items-stretch gap-2">
                         <div
                           className="h-[50px] w-[50px] rounded flex items-center justify-center text-white font-medium"
                           style={{ backgroundColor: asset.logoColor }}
                         >
-                          {asset.ticker.replace("^", "").slice(0, 1)}
+                          {ticker.replace("^", "").slice(0, 1)}
                         </div>
                         <div className="flex flex-col flex-1 justify-between p-1">
                           <div className="flex items-center gap-2">
                             <Label className="h-5 items-center text-[14px] font-normal">{asset.name}</Label>
                             <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              {asset.category}
+                              {asset.assetCategory}
                             </Badge>
                           </div>
                           <div className="flex h-4 items-stretch gap-1.5">
-                            {asset.marketCap && <Label className="items-center text-[12px] font-normal text-brand-500">{asset.marketCap} Cap</Label>}
-                            {asset.marketCap && asset.volume && <Separator orientation="vertical" />}
-                            {asset.volume && <Label className="items-center text-[12px] font-normal text-brand-500">Vol {asset.volume}</Label>}
+                            {asset.marketCap > 0 && (
+                              <Label className="items-center text-[12px] font-normal text-brand-500">{fmtCompact(asset.marketCap)} Cap</Label>
+                            )}
+                            {asset.marketCap > 0 && asset.volume > 0 && <Separator orientation="vertical" />}
+                            {asset.volume > 0 && <Label className="items-center text-[12px] font-normal text-brand-500">Vol {fmtCompact(asset.volume)}</Label>}
                           </div>
                         </div>
                         <div className="flex flex-col justify-center">
                           <Label className="h-5 items-center whitespace-nowrap text-[14px] font-normal">
-                            {asset.price.toLocaleString("en-US", {
+                            {asset.currentPrice.toLocaleString("en-US", {
                               style: "currency",
-                              currency: "USD",
+                              currency: asset.currency,
                               currencyDisplay: "code",
                             })}
                           </Label>
                           <Label className="h-4 items-center whitespace-nowrap text-[12px] font-normal" style={{ color: changeColor }}>
                             {isChangeUp ? "+" : ""}
-                            {asset.changePercent.toFixed(2)}% ({isChangeUp ? "+" : ""}
-                            {asset.changeAmount.toFixed(2)})
+                            {changePercent.toFixed(2)}% ({isChangeUp ? "+" : ""}
+                            {changeAmount.toFixed(2)})
                           </Label>
                         </div>
                       </div>
-                      <Button variant="outline" className="border-0">
+                      <Button variant="outline" className="border-0" render={<Link href={`/market/${encodeURIComponent(ticker)}`} />}>
                         View Details
                       </Button>
                     </Card>
@@ -379,7 +324,11 @@ export default function PortfolioPage() {
               const sign = isZero ? "" : isUp ? "+" : "-";
               const changeColor = isZero ? "var(--status-neutral)" : isUp ? "var(--status-success)" : "var(--status-error)";
               return (
-                <div key={position.symbol} className="flex min-h-[60px] items-stretch gap-3 p-3">
+                <Link
+                  key={position.symbol}
+                  href={`/market/${encodeURIComponent(position.symbol)}`}
+                  className="flex min-h-[60px] items-stretch gap-3 p-3"
+                >
                   <div className="h-[30px] w-[30px] self-center rounded bg-white" />
                   <div className="flex flex-col flex-1 justify-between py-1">
                     <Label className="h-5 items-center text-[14px] font-normal">{position.symbol}</Label>
@@ -411,7 +360,7 @@ export default function PortfolioPage() {
                       {Math.abs(changePercent).toFixed(2)}% (${Math.abs(changeDollar).toFixed(2)})
                     </Label>
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>
@@ -433,7 +382,11 @@ export default function PortfolioPage() {
               const sign = isZero ? "" : isUp ? "+" : "-";
               const changeColor = isZero ? "var(--status-neutral)" : isUp ? "var(--status-success)" : "var(--status-error)";
               return (
-                <div key={alert.ticker} className="flex min-h-[68px] items-stretch gap-3 p-3">
+                <Link
+                  key={alert.ticker}
+                  href={`/market/${encodeURIComponent(alert.ticker)}`}
+                  className="flex min-h-[68px] items-stretch gap-3 p-3"
+                >
                   <div className="h-[30px] w-[30px] self-center rounded bg-white" />
                   <div className="flex flex-col flex-1 justify-center py-1">
                     <Label className="h-5 items-center text-[14px] font-normal">{alert.ticker}</Label>
@@ -454,7 +407,7 @@ export default function PortfolioPage() {
                       {Math.abs(changePercent).toFixed(2)}% (${Math.abs(changeDollar).toFixed(2)})
                     </Label>
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>
