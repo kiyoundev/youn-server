@@ -3,7 +3,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.event import Event
-from app.models.watch_item import WatchItem
+from app.models.product import Product
 from app.services.notifications import send_alert
 
 _log = logging.getLogger(__name__)
@@ -28,13 +28,13 @@ async def _format_price_drop(
     event: Event, session: AsyncSession
 ) -> tuple[str, str, str | None, int]:
     payload = event.payload
-    item = await session.get(WatchItem, payload["watch_item_id"])
-    if item is None:
+    product = await session.get(Product, payload["product_id"])
+    if product is None:
         raise ValueError(
-            f"WatchItem {payload['watch_item_id']} not found for event {event.id}"
+            f"Product {payload['product_id']} not found for event {event.id}"
         )
-    title = f"Price Drop: {item.name}"
-    body = f"Now ${payload['price']:.2f} (target ${item.target_price:.2f})"
+    title = f"Price Drop: {product.name}"
+    body = f"Now ${payload['price']:.2f} at {payload['retailer']} (target ${product.target_price:.2f})"
     url: str | None = payload.get("url")
     return title, body, url, _PRIORITY_NORMAL
 

@@ -18,6 +18,6 @@ class PriceHistory(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    watch_item: Mapped["WatchItem"] = relationship(  # noqa: F821
-        "WatchItem", back_populates="price_history"
+    watch_item: Mapped["Listing"] = relationship(  # noqa: F821
+        "Listing", back_populates="price_history"
     )

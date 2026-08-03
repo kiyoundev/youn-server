@@ -30,19 +30,25 @@ async def test_dispatch_price_drop_marks_processed() -> None:
     event = SimpleNamespace(
         id=1,
         type="PRICE_DROP",
-        payload={"watch_item_id": 11, "price": 89.99, "url": "https://example.com/item"},
+        payload={
+            "product_id": 11,
+            "listing_id": 22,
+            "retailer": "amazon_ca",
+            "price": 89.99,
+            "url": "https://example.com/item",
+        },
         status="pending",
         processed_at=None,
     )
-    item = SimpleNamespace(id=11, name="Shoes", target_price=100.0)
+    product = SimpleNamespace(id=11, name="Shoes", target_price=100.0)
 
     notify_session = MagicMock()
 
     async def _notify_get(model, row_id):
         if model.__name__ == "Event":
             return event
-        if model.__name__ == "WatchItem":
-            return item
+        if model.__name__ == "Product":
+            return product
         return None
 
     notify_session.get = AsyncMock(side_effect=_notify_get)
@@ -64,7 +70,7 @@ async def test_dispatch_price_drop_marks_processed() -> None:
 
     send_alert.assert_awaited_once_with(
         "Price Drop: Shoes",
-        "Now $89.99 (target $100.00)",
+        "Now $89.99 at amazon_ca (target $100.00)",
         "https://example.com/item",
         0,
     )
@@ -143,11 +149,17 @@ async def test_dispatch_stock_threshold_creates_analysis_result_and_marks_proces
 
 
 @pytest.mark.asyncio
-async def test_dispatch_missing_watch_item_marks_failed() -> None:
+async def test_dispatch_missing_product_marks_failed() -> None:
     event = SimpleNamespace(
         id=3,
         type="PRICE_DROP",
-        payload={"watch_item_id": 999, "price": 70.0, "url": "https://example.com/missing"},
+        payload={
+            "product_id": 999,
+            "listing_id": 1,
+            "retailer": "amazon_ca",
+            "price": 70.0,
+            "url": "https://example.com/missing",
+        },
         status="pending",
         processed_at=None,
     )
@@ -157,7 +169,7 @@ async def test_dispatch_missing_watch_item_marks_failed() -> None:
     async def _get(model, row_id):
         if model.__name__ == "Event":
             return event
-        if model.__name__ == "WatchItem":
+        if model.__name__ == "Product":
             return None
         return None
 

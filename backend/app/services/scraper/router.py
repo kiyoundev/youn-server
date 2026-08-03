@@ -31,7 +31,7 @@ async def detect_scraper_type(url: str) -> str | None:
 
     Called once at item creation (POST /api/items) for domains not in
     RETAILER_MAP and with no explicit scraper_type override — the result is
-    then cached on WatchItem so later polls skip straight to the right method.
+    then cached on Listing so later polls skip straight to the right method.
     """
     result = await HTTPScraper().get_price(url)
     if result.status != "error":

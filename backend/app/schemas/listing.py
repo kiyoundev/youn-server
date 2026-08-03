@@ -4,28 +4,25 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-class WatchItemCreate(BaseModel):
-    name: str
+class ListingCreate(BaseModel):
     url: str
-    target_price: float
+    retailer: str | None = None
     scraper_type: Literal["patchright"] | None = None
 
 
-class WatchItemUpdate(BaseModel):
-    name: str | None = None
-    target_price: float | None = None
+class ListingUpdate(BaseModel):
     active: bool | None = None
 
 
-class WatchItemResponse(BaseModel):
+class ListingResponse(BaseModel):
     id: int
-    name: str
-    url: str
     retailer: str
-    target_price: float
+    url: str
     last_price: float | None
-    alerted_at: datetime | None
+    last_scrape_status: Literal["ok", "oos", "error"] | None
     active: bool
+    last_checked: datetime | None
+    product_id: int
     created_at: datetime
 
     model_config = {"from_attributes": True}

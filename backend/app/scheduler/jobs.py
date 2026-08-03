@@ -7,7 +7,8 @@ from sqlalchemy import select
 from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.models.price_history import PriceHistory
-from app.models.watch_item import WatchItem
+from app.models.product import Product
+from app.models.watch_item import Listing
 from app.services.scraper.router import RetailerRouter
 from app.services.stocks import FinnhubClient
 
@@ -28,7 +29,7 @@ async def poll_prices(queue: asyncio.Queue) -> None:
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                select(WatchItem.id).where(WatchItem.active == True)  # noqa: E712
+                select(Listing.id).where(Listing.active == True)  # noqa: E712
             )
             item_ids: list[int] = result.scalars().all()
 
@@ -65,45 +66,77 @@ async def poll_stocks(finnhub: FinnhubClient) -> None:
 
 async def _process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
     async with AsyncSessionLocal() as session:
-        item = await session.get(WatchItem, item_id)
-        if not item or not item.active:
+        listing = await session.get(Listing, item_id)
+        if not listing or not listing.active:
             return
 
-        scrape = await router.get_price(item.url, scraper_type=item.scraper_type)
+        scrape = await router.get_price(listing.url, scraper_type=listing.scraper_type)
 
         if scrape.status == "oos":
-            _log.info("item %d (%s) out of stock", item.id, item.name)
+            _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
+            listing.last_scrape_status = "oos"
+            await session.commit()
             return
 
         if scrape.status == "error":
-            _log.warning("scraper error for item %d (%s)", item.id, item.name)
+            _log.warning("scraper error for listing %d (%s)", listing.id, listing.retailer)
+            listing.last_scrape_status = "error"
+            await session.commit()
             return
 
         if scrape.price is None:
-            _log.warning("scraper returned ok with None price for item %d (%s), skipping", item.id, item.name)
+            _log.warning(
+                "scraper returned ok with None price for listing %d (%s), skipping",
+                listing.id, listing.retailer,
+            )
             return
 
         now = datetime.now(timezone.utc)
-        session.add(PriceHistory(watch_item_id=item.id, price=scrape.price))
-        item.last_price = scrape.price
+        session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
+        listing.last_price = scrape.price
+        listing.last_scrape_status = "ok"
 
-        if scrape.price <= item.target_price and item.alerted_at is None:
+        product = await session.get(Product, listing.product_id)
+
+        active_listings_result = await session.execute(
+            select(Listing).where(Listing.product_id == product.id, Listing.active == True)  # noqa: E712
+        )
+        active_listings = list(active_listings_result.scalars().all())
+        # Only listings confirmed available ("ok") are eligible — an "oos"
+        # listing's last_price is frozen at whatever it was before it
+        # disappeared, and letting that stale price win the comparison would
+        # make it permanently block future alerts (it can never be beaten,
+        # so alerted_at would never clear even after it recovers elsewhere).
+        # The just-scraped `listing` is always "ok" here, so this is never empty.
+        available_listings = [
+            l for l in active_listings if l.last_price is not None and l.last_scrape_status == "ok"
+        ]
+        winning = min(available_listings, key=lambda l: l.last_price)
+        cheapest = winning.last_price
+
+        if cheapest <= product.target_price and product.alerted_at is None:
             event = Event(
                 type="PRICE_DROP",
-                payload={"watch_item_id": item.id, "price": scrape.price, "url": item.url},
+                payload={
+                    "product_id": product.id,
+                    "listing_id": winning.id,
+                    "retailer": winning.retailer,
+                    "price": cheapest,
+                    "url": winning.url,
+                },
                 status="pending",
             )
             session.add(event)
-            item.alerted_at = now
+            product.alerted_at = now
             await session.commit()
             await queue.put(event.id)
             _log.info(
-                "PRICE_DROP: item %d (%s) @ %.2f (target %.2f)",
-                item.id, item.name, scrape.price, item.target_price,
+                "PRICE_DROP: product %d (%s) @ %.2f (target %.2f) via %s",
+                product.id, product.name, cheapest, product.target_price, winning.retailer,
             )
-        elif scrape.price > item.target_price and item.alerted_at is not None:
-            item.alerted_at = None
+        elif cheapest > product.target_price and product.alerted_at is not None:
+            product.alerted_at = None
             await session.commit()
-            _log.info("item %d (%s) re-armed (price recovered)", item.id, item.name)
+            _log.info("product %d (%s) re-armed (price recovered)", product.id, product.name)
         else:
             await session.commit()

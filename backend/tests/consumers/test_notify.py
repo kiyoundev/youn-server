@@ -65,9 +65,37 @@ async def test_format_price_drop_uses_normal_priority():
     session.get = _get
     event = SimpleNamespace(
         id=5,
-        payload={"watch_item_id": 11, "price": 89.99, "url": "https://example.com/item"},
+        payload={
+            "product_id": 11,
+            "listing_id": 22,
+            "retailer": "amazon_ca",
+            "price": 89.99,
+            "url": "https://example.com/item",
+        },
     )
 
     title, body, url, priority = await notify._format_price_drop(event, session)
 
+    assert title == "Price Drop: Shoes"
+    assert "amazon_ca" in body
+    assert "89.99" in body
+    assert "100.00" in body
+    assert url == "https://example.com/item"
     assert priority == notify._PRIORITY_NORMAL
+
+
+@pytest.mark.asyncio
+async def test_format_price_drop_raises_when_product_not_found():
+    session = SimpleNamespace()
+
+    async def _get(model, row_id):
+        return None
+
+    session.get = _get
+    event = SimpleNamespace(
+        id=5,
+        payload={"product_id": 11, "listing_id": 22, "retailer": "amazon_ca", "price": 89.99},
+    )
+
+    with pytest.raises(ValueError, match="Product 11 not found"):
+        await notify._format_price_drop(event, session)
