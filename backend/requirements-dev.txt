@@ -2,3 +2,4 @@
 pytest>=8.2,<9.0
 pytest-asyncio>=0.23,<0.24
 respx>=0.21,<0.22
+paracelsus>=0.15,<0.16
