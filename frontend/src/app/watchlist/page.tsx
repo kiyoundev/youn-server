@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ExternalLink, MoreVertical, Plus, Search, Pencil, Trash2, X } from "lucide-react";
+import { ExternalLink, MoreVertical, Plus, Search, Pencil, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
+import { useNavSlot } from "@/components/nav-slot";
 
 type WatchStatus = "watching" | "triggered" | "paused" | "failed";
 
@@ -200,6 +204,10 @@ const formatLastChecked = (iso: string) => {
   return `${Math.round(diffHours / 24)}d ago`;
 };
 
+function fmtValue(value: number) {
+  return `$${Math.round(value).toLocaleString("en-US")}`;
+}
+
 const emptyNewItem = { name: "", targetPrice: "", urls: "" };
 
 // Well-formed AND http(s)-only — rejects javascript:/data: schemes before a
@@ -250,12 +258,26 @@ function sheetEditReducer(state: SheetEditState, action: SheetEditAction): Sheet
 }
 
 export default function WatchlistPage() {
+  const navSlotEl = useNavSlot();
   const [search, setSearch] = useState("");
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [chartReady, setChartReady] = useState(false);
   const [editState, dispatchEdit] = useReducer(sheetEditReducer, { type: "none" });
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [newItem, setNewItem] = useState(emptyNewItem);
+
+  const handleExpandSearch = () => {
+    setSearchExpanded(true);
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  };
+
+  const handleSearchBlur = () => {
+    setTimeout(() => {
+      if (!search) setSearchExpanded(false);
+    }, 150);
+  };
 
   const resetNewItemForm = () => setNewItem(emptyNewItem);
 
@@ -270,10 +292,7 @@ export default function WatchlistPage() {
     .filter(Boolean);
 
   const canSubmitNewItem =
-    newItem.name.trim() !== "" &&
-    Number(newItem.targetPrice) > 0 &&
-    newItemUrlLines.length > 0 &&
-    newItemUrlLines.every(isValidUrl);
+    newItem.name.trim() !== "" && Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
 
   useEffect(() => {
     if (openId === null) {
@@ -293,33 +312,95 @@ export default function WatchlistPage() {
     .filter((product) => product.name.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
+  const totalBestPrice = products.reduce((sum, product) => sum + bestPrice(product), 0);
+
+  const triggeredCount = products.filter((product) => product.status === "triggered").length;
+  const watchingCount = products.filter((product) => product.status === "watching").length;
+  const failedCount = products.filter((product) => product.status === "failed").length;
+
   return (
-    <main className="p-5">
-      <h1 className="text-2xl font-normal">Watchlist</h1>
-      <div className="my-4 flex items-center justify-between gap-4">
-        <div className="relative max-w-xs flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" size={16} strokeWidth={1.5} />
-          <Input placeholder="Search..." className="pr-8 pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
-          {search && (
+    <>
+      {navSlotEl &&
+        createPortal(
+          <>
+            <div
+              className={cn(
+                "flex h-8 items-center overflow-hidden rounded-lg border transition-[width,background-color,border-color] duration-300 ease-in-out",
+                searchExpanded ? "w-[220px] border-input/30 bg-input/30" : "w-8 border-transparent bg-transparent",
+              )}
+            >
+              <button
+                type="button"
+                aria-label="Open watchlist search"
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted"
+                onClick={handleExpandSearch}
+                tabIndex={searchExpanded ? -1 : 0}
+              >
+                <Search className="size-4 shrink-0 opacity-50" />
+              </button>
+              <input
+                ref={searchInputRef}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setSearchExpanded(true)}
+                onBlur={handleSearchBlur}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearch("");
+                    setSearchExpanded(false);
+                    searchInputRef.current?.blur();
+                  }
+                }}
+                placeholder="Search watchlist..."
+                aria-label="Search watchlist"
+                className={cn(
+                  "h-full min-w-0 bg-transparent text-sm outline-hidden transition-opacity duration-200 disabled:cursor-not-allowed disabled:opacity-50",
+                  searchExpanded ? "w-full pr-2 opacity-100 delay-100" : "w-0 opacity-0",
+                )}
+              />
+            </div>
             <button
               type="button"
-              aria-label="Clear search"
-              onClick={() => setSearch("")}
-              className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+              aria-label="New item"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted"
+              onClick={() => setIsAddDialogOpen(true)}
             >
-              <X size={14} strokeWidth={1.5} />
+              <Plus className="size-4 shrink-0 opacity-50" />
             </button>
-          )}
+          </>,
+          navSlotEl,
+        )}
+      <main className="p-5 gap-10 flex flex-col">
+        {/* Overview Left Section */}
+        <div className="flex justify-between">
+          <div className="flex items-baseline gap-2">
+            <Label className="font-ndot text-[40px] font-normal block">{fmtValue(totalBestPrice)}</Label>
+            <Label className="font-ndot text-[20px] font-normal block">Total</Label>
+          </div>
+          <div className="flex gap-20 pr-20">
+            <div className="flex flex-col gap-1">
+              <Label className="text-md font-ndot">{products.length}</Label>
+              <Label className="text-muted-foreground">Items</Label>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-md font-ndot">{triggeredCount}</Label>
+              <Label className="text-muted-foreground">Triggered</Label>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-md font-ndot">{watchingCount}</Label>
+              <Label className="text-muted-foreground">Watching</Label>
+            </div>
+            {failedCount > 0 && (
+              <div className="flex flex-col gap-1">
+                <Label className="text-md font-ndot" style={{ color: "var(--status-error)" }}>
+                  {failedCount}
+                </Label>
+                <Label className="text-muted-foreground">Failed</Label>
+              </div>
+            )}
+          </div>
         </div>
-        {/* Add new item dialog */}
-        <Dialog
-          open={isAddDialogOpen}
-          onOpenChange={(open) => (open ? setIsAddDialogOpen(true) : closeAddDialog())}
-        >
-          <DialogTrigger render={<Button />}>
-            <Plus size={16} strokeWidth={1.5} />
-            New Item
-          </DialogTrigger>
+        <Dialog open={isAddDialogOpen} onOpenChange={(open) => (open ? setIsAddDialogOpen(true) : closeAddDialog())}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add Item</DialogTitle>
@@ -327,11 +408,7 @@ export default function WatchlistPage() {
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="new-item-name">Item Name</Label>
-                <Input
-                  id="new-item-name"
-                  value={newItem.name}
-                  onChange={(e) => setNewItem((prev) => ({ ...prev, name: e.target.value }))}
-                />
+                <Input id="new-item-name" value={newItem.name} onChange={(e) => setNewItem((prev) => ({ ...prev, name: e.target.value }))} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="new-item-target-price">Target Price</Label>
@@ -375,243 +452,240 @@ export default function WatchlistPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Retailer</TableHead>
-            <TableHead>Best Price</TableHead>
-            <TableHead>Target Price</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Last Checked</TableHead>
-            <TableHead>Price History</TableHead>
-            <TableHead className="w-10" />
-          </TableRow>
-        </TableHeader>
-        <TableBody className="[&_td]:py-4">
-          {filtered.map((product) => {
-            const status = STATUS_BADGE[product.status];
-            return (
-              <Sheet key={product.id} open={openId === product.id} onOpenChange={(open) => setOpenId(open ? product.id : null)}>
-                <SheetTrigger render={<TableRow className="cursor-pointer" />}>
-                  <TableCell className="font-medium">{product.name}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      {product.listings.map((listing) => (
-                        <Badge key={listing.id} variant="outline">
-                          {listing.retailer}
-                        </Badge>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell>${bestPrice(product).toFixed(2)}</TableCell>
-                  <TableCell>${product.targetPrice.toFixed(2)}</TableCell>
-                  <TableCell>
-                    <Badge variant={status.variant}>{status.label}</Badge>
-                  </TableCell>
-                  <TableCell>{formatLastChecked(stalestCheckedAt(product))}</TableCell>
-                  <TableCell>
-                    <PriceSparkline data={productPriceHistory(product)} width={80} height={32} />
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button variant="ghost" size="icon" aria-label="Item actions">
-                            <MoreVertical size={16} strokeWidth={1.25} />
-                          </Button>
-                        }
-                      />
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setOpenId(product.id)}>Edit</DropdownMenuItem>
-                        <DropdownMenuItem variant="destructive" onClick={() => console.log("delete", product.id)}>
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </SheetTrigger>
-
-                {/* side panel content */}
-                <SheetContent side="right">
-                  <SheetHeader>
-                    <div className="flex items-center gap-2 pr-10">
-                      {editState.type === "name" ? (
-                        <div className="min-w-0 flex-1">
-                          <SheetTitle className="sr-only">{product.name}</SheetTitle>
-                          <Input
-                            autoFocus
-                            value={editState.draft}
-                            onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
-                            onBlur={() => dispatchEdit({ type: "cancel" })}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                console.log("save name", product.id, editState.draft);
-                                dispatchEdit({ type: "cancel" });
-                              }
-                              if (e.key === "Escape") dispatchEdit({ type: "cancel" });
-                            }}
-                            className="h-7 font-heading text-base font-medium md:text-base"
-                          />
+        <Card className="w-full px-4">
+          <Table>
+            <TableHeader className="[&_th]:h-auto [&_th]:px-2 [&_th]:pt-0 [&_th]:pb-4">
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Name</TableHead>
+                <TableHead>Retailer</TableHead>
+                <TableHead>Best Price</TableHead>
+                <TableHead>Target Price</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last Checked</TableHead>
+                <TableHead>Price History</TableHead>
+                <TableHead className="w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody className="[&_td]:py-4 [&_tr:last-child_td]:pb-0">
+              {filtered.map((product) => {
+                const status = STATUS_BADGE[product.status];
+                return (
+                  <Sheet key={product.id} open={openId === product.id} onOpenChange={(open) => setOpenId(open ? product.id : null)}>
+                    <SheetTrigger render={<TableRow className="cursor-pointer" />}>
+                      <TableCell className="font-medium">{product.name}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          {product.listings.map((listing) => (
+                            <Badge key={listing.id} variant="outline">
+                              {listing.retailer}
+                            </Badge>
+                          ))}
                         </div>
-                      ) : (
-                        <SheetTitle>{product.name}</SheetTitle>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Edit item"
-                        onClick={() => dispatchEdit({ type: "editName", name: product.name })}
-                      >
-                        <Pencil size={16} strokeWidth={1.5} />
-                      </Button>
-                    </div>
-                  </SheetHeader>
-                  <div className="flex flex-col gap-4 px-4">
-                    <div style={{ height: 200 }}>
-                      {chartReady && <ProductPriceChart listings={product.listings} targetPrice={product.targetPrice} />}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Target Price</span>
-                      {editState.type === "targetPrice" ? (
-                        <Input
-                          autoFocus
-                          type="number"
-                          step="0.01"
-                          value={editState.draft}
-                          onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
-                          onBlur={() => dispatchEdit({ type: "cancel" })}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              console.log("save target price", product.id, editState.draft);
-                              dispatchEdit({ type: "cancel" });
+                      </TableCell>
+                      <TableCell>${bestPrice(product).toFixed(2)}</TableCell>
+                      <TableCell>${product.targetPrice.toFixed(2)}</TableCell>
+                      <TableCell>
+                        <Badge variant={status.variant}>{status.label}</Badge>
+                      </TableCell>
+                      <TableCell>{formatLastChecked(stalestCheckedAt(product))}</TableCell>
+                      <TableCell>
+                        <PriceSparkline data={productPriceHistory(product)} width={80} height={32} />
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button variant="ghost" size="icon" aria-label="Item actions">
+                                <MoreVertical size={16} strokeWidth={1.25} />
+                              </Button>
                             }
-                            if (e.key === "Escape") dispatchEdit({ type: "cancel" });
-                          }}
-                          className="h-7 w-24 text-right [appearance:textfield] md:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        />
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <span>${product.targetPrice.toFixed(2)}</span>
+                          />
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setOpenId(product.id)}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem variant="destructive" onClick={() => console.log("delete", product.id)}>
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </SheetTrigger>
+
+                    {/* side panel content */}
+                    <SheetContent side="right">
+                      <SheetHeader>
+                        <div className="flex items-center gap-2 pr-10">
+                          {editState.type === "name" ? (
+                            <div className="min-w-0 flex-1">
+                              <SheetTitle className="sr-only">{product.name}</SheetTitle>
+                              <Input
+                                autoFocus
+                                value={editState.draft}
+                                onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
+                                onBlur={() => dispatchEdit({ type: "cancel" })}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    console.log("save name", product.id, editState.draft);
+                                    dispatchEdit({ type: "cancel" });
+                                  }
+                                  if (e.key === "Escape") dispatchEdit({ type: "cancel" });
+                                }}
+                                className="h-7 font-heading text-base font-medium md:text-base"
+                              />
+                            </div>
+                          ) : (
+                            <SheetTitle>{product.name}</SheetTitle>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            className="text-muted-foreground"
-                            aria-label="Edit target price"
-                            onClick={() => dispatchEdit({ type: "editTargetPrice", targetPrice: product.targetPrice })}
+                            aria-label="Edit item"
+                            onClick={() => dispatchEdit({ type: "editName", name: product.name })}
                           >
-                            <Pencil className="size-3.5" strokeWidth={1.5} />
+                            <Pencil size={16} strokeWidth={1.5} />
                           </Button>
                         </div>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Status</span>
-                      <Badge variant={status.variant}>{status.label}</Badge>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm text-muted-foreground">Retailers</span>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="Add retailer"
-                          onClick={() => dispatchEdit({ type: "addListing" })}
-                        >
-                          <Plus size={16} strokeWidth={1.5} />
-                        </Button>
-                      </div>
-                      {product.listings.map((listing) =>
-                        editState.type === "listing" && editState.id === listing.id ? (
-                          <div key={listing.id} className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
+                      </SheetHeader>
+                      <div className="flex flex-col gap-4 px-4">
+                        <div style={{ height: 200 }}>
+                          {chartReady && <ProductPriceChart listings={product.listings} targetPrice={product.targetPrice} />}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-muted-foreground">Target Price</span>
+                          {editState.type === "targetPrice" ? (
                             <Input
                               autoFocus
-                              type="url"
-                              placeholder="https://retailer.com/product"
+                              type="number"
+                              step="0.01"
                               value={editState.draft}
                               onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
                               onBlur={() => dispatchEdit({ type: "cancel" })}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter" && isValidUrl(editState.draft)) {
-                                  console.log("save listing url", product.id, listing.id, editState.draft);
+                                if (e.key === "Enter") {
+                                  console.log("save target price", product.id, editState.draft);
                                   dispatchEdit({ type: "cancel" });
                                 }
                                 if (e.key === "Escape") dispatchEdit({ type: "cancel" });
                               }}
-                              className="h-7 flex-1 md:text-sm"
+                              className="h-7 w-24 text-right [appearance:textfield] md:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             />
-                          </div>
-                        ) : (
-                          <div key={listing.id} className="flex items-center justify-between rounded-lg border border-border py-2 px-3">
-                            <div className="flex items-center gap-2">
-                              <span>{listing.retailer}</span>
-                              <a
-                                href={listing.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label={`Open ${listing.retailer} listing`}
-                                className="-mr-1 inline-flex items-center justify-center rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <span>${product.targetPrice.toFixed(2)}</span>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-muted-foreground"
+                                aria-label="Edit target price"
+                                onClick={() => dispatchEdit({ type: "editTargetPrice", targetPrice: product.targetPrice })}
                               >
-                                <ExternalLink size={14} strokeWidth={1.5} />
-                              </a>
+                                <Pencil className="size-3.5" strokeWidth={1.5} />
+                              </Button>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span>${listing.price.toFixed(2)}</span>
-                              <div className="flex items-center">
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  className="text-muted-foreground"
-                                  aria-label={`Edit ${listing.retailer} URL`}
-                                  onClick={() => dispatchEdit({ type: "editListing", id: listing.id, url: listing.url })}
-                                >
-                                  <Pencil className="size-3.5" strokeWidth={1.5} />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  className="text-muted-foreground"
-                                  aria-label={`Remove ${listing.retailer}`}
-                                  disabled={product.listings.length <= 1}
-                                  onClick={() => console.log("remove listing", product.id, listing.id)}
-                                >
-                                  <Trash2 className="size-3.5" strokeWidth={1.5} />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ),
-                      )}
-
-                      {editState.type === "addingListing" && (
-                        <div className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
-                          <Input
-                            autoFocus
-                            type="url"
-                            placeholder="https://retailer.com/product"
-                            value={editState.draft}
-                            onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
-                            onBlur={() => dispatchEdit({ type: "cancel" })}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && isValidUrl(editState.draft)) {
-                                console.log("add listing", product.id, editState.draft);
-                                dispatchEdit({ type: "cancel" });
-                              }
-                              if (e.key === "Escape") dispatchEdit({ type: "cancel" });
-                            }}
-                            className="h-7 flex-1 md:text-sm"
-                          />
+                          )}
                         </div>
-                      )}
-                    </div>
-                  </div>
-                </SheetContent>
-              </Sheet>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </main>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-muted-foreground">Status</span>
+                          <Badge variant={status.variant}>{status.label}</Badge>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm text-muted-foreground">Retailers</span>
+                            <Button variant="ghost" size="icon-sm" aria-label="Add retailer" onClick={() => dispatchEdit({ type: "addListing" })}>
+                              <Plus size={16} strokeWidth={1.5} />
+                            </Button>
+                          </div>
+                          {product.listings.map((listing) =>
+                            editState.type === "listing" && editState.id === listing.id ? (
+                              <div key={listing.id} className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
+                                <Input
+                                  autoFocus
+                                  type="url"
+                                  placeholder="https://retailer.com/product"
+                                  value={editState.draft}
+                                  onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
+                                  onBlur={() => dispatchEdit({ type: "cancel" })}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" && isValidUrl(editState.draft)) {
+                                      console.log("save listing url", product.id, listing.id, editState.draft);
+                                      dispatchEdit({ type: "cancel" });
+                                    }
+                                    if (e.key === "Escape") dispatchEdit({ type: "cancel" });
+                                  }}
+                                  className="h-7 flex-1 md:text-sm"
+                                />
+                              </div>
+                            ) : (
+                              <div key={listing.id} className="flex items-center justify-between rounded-lg border border-border py-2 px-3">
+                                <div className="flex items-center gap-2">
+                                  <span>{listing.retailer}</span>
+                                  <a
+                                    href={listing.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label={`Open ${listing.retailer} listing`}
+                                    className="-mr-1 inline-flex items-center justify-center rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                                  >
+                                    <ExternalLink size={14} strokeWidth={1.5} />
+                                  </a>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span>${listing.price.toFixed(2)}</span>
+                                  <div className="flex items-center">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="text-muted-foreground"
+                                      aria-label={`Edit ${listing.retailer} URL`}
+                                      onClick={() => dispatchEdit({ type: "editListing", id: listing.id, url: listing.url })}
+                                    >
+                                      <Pencil className="size-3.5" strokeWidth={1.5} />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="text-muted-foreground"
+                                      aria-label={`Remove ${listing.retailer}`}
+                                      disabled={product.listings.length <= 1}
+                                      onClick={() => console.log("remove listing", product.id, listing.id)}
+                                    >
+                                      <Trash2 className="size-3.5" strokeWidth={1.5} />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ),
+                          )}
+
+                          {editState.type === "addingListing" && (
+                            <div className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
+                              <Input
+                                autoFocus
+                                type="url"
+                                placeholder="https://retailer.com/product"
+                                value={editState.draft}
+                                onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
+                                onBlur={() => dispatchEdit({ type: "cancel" })}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && isValidUrl(editState.draft)) {
+                                    console.log("add listing", product.id, editState.draft);
+                                    dispatchEdit({ type: "cancel" });
+                                  }
+                                  if (e.key === "Escape") dispatchEdit({ type: "cancel" });
+                                }}
+                                className="h-7 flex-1 md:text-sm"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </SheetContent>
+                  </Sheet>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
+      </main>
+    </>
   );
 }

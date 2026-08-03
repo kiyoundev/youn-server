@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Plus } from "lucide-react";
-import { PortfolioLineChart } from "@/components/ui/portfolio-line-chart";
+import { PortfolioLineChart, type PortfolioChartPoint } from "@/components/ui/portfolio-line-chart";
 import { AllocationDonutChart } from "@/components/ui/allocation-donut-chart";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -21,11 +21,13 @@ const allocationData = [
   { category: "Cash", value: 8 },
 ];
 
-const currentValueChangePercent: number = 2.5;
+function fmtValue(value: number) {
+  return `$${Math.round(value).toLocaleString("en-US")}`;
+}
 
 // Curated tickers featured on this page — full company/market data lives in
 // mock-market.ts (single source of truth, also used by /market/[ticker]).
-const POPULAR_ASSET_TICKERS: (keyof typeof mockMarketDetails)[] = ["AAPL", "NVDA", "SPY", "QQQ", "^GSPC"];
+const POPULAR_ASSET_TICKERS: (keyof typeof mockMarketDetails)[] = ["AAPL", "NVDA", "SPY", "QQQ"];
 
 function fmtCompact(value: number) {
   return value.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 });
@@ -139,9 +141,19 @@ export default function PortfolioPage() {
   const [popularAssetsApi, setPopularAssetsApi] = useState<CarouselApi>();
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
+  const [hoveredPoint, setHoveredPoint] = useState<PortfolioChartPoint | null>(null);
 
-  const isChangeZero = currentValueChangePercent === 0;
-  const isChangeUp = currentValueChangePercent > 0;
+  const totalInvested = holdingsData.reduce((sum, p) => sum + p.shares * p.avgPrice, 0);
+
+  const rangeData = chartDataByRange[selectedRange];
+  const firstPoint = rangeData[0]?.value ?? 0;
+  const lastPoint = rangeData[rangeData.length - 1]?.value ?? 0;
+  const displayedValue = hoveredPoint?.value ?? lastPoint;
+  const changeDollar = displayedValue - firstPoint;
+  const changePercent = firstPoint !== 0 ? (changeDollar / firstPoint) * 100 : 0;
+
+  const isChangeZero = changeDollar === 0;
+  const isChangeUp = changeDollar > 0;
   const changeSign = isChangeZero ? "" : isChangeUp ? "+" : "-";
   const changeColor = isChangeZero ? "var(--status-neutral)" : isChangeUp ? "var(--status-success)" : "var(--status-error)";
 
@@ -182,12 +194,12 @@ export default function PortfolioPage() {
         {/* Overview Left Section */}
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-4">
-            <Label className="font-ndot text-[40px] font-normal block">$150,000</Label>
+            <Label className="font-ndot text-[40px] font-normal block">{fmtValue(displayedValue)}</Label>
             <div className="flex gap-2">
               <Label className="text-muted-foreground">Current Value</Label>
               <Label className="font-ndot" style={{ color: changeColor }}>
                 {changeSign}
-                {Math.abs(currentValueChangePercent).toFixed(2)}%
+                {Math.abs(changePercent).toFixed(2)}%
               </Label>
             </div>
           </div>
@@ -216,7 +228,7 @@ export default function PortfolioPage() {
         </div>
         {/* Overview Right Section */}
         <div className="flex-1">
-          <PortfolioLineChart data={chartDataByRange[selectedRange]} />
+          <PortfolioLineChart key={selectedRange} data={rangeData} investedAmount={totalInvested} onHoverChange={setHoveredPoint} />
           <div className="flex justify-end gap-1">
             {DATE_RANGES.map((range) => (
               <Button
@@ -279,7 +291,9 @@ export default function PortfolioPage() {
                               <Label className="items-center text-[12px] font-normal text-brand-500">{fmtCompact(asset.marketCap)} Cap</Label>
                             )}
                             {asset.marketCap > 0 && asset.volume > 0 && <Separator orientation="vertical" />}
-                            {asset.volume > 0 && <Label className="items-center text-[12px] font-normal text-brand-500">Vol {fmtCompact(asset.volume)}</Label>}
+                            {asset.volume > 0 && (
+                              <Label className="items-center text-[12px] font-normal text-brand-500">Vol {fmtCompact(asset.volume)}</Label>
+                            )}
                           </div>
                         </div>
                         <div className="flex flex-col justify-center">
@@ -382,11 +396,7 @@ export default function PortfolioPage() {
               const sign = isZero ? "" : isUp ? "+" : "-";
               const changeColor = isZero ? "var(--status-neutral)" : isUp ? "var(--status-success)" : "var(--status-error)";
               return (
-                <Link
-                  key={alert.ticker}
-                  href={`/market/${encodeURIComponent(alert.ticker)}`}
-                  className="flex min-h-[68px] items-stretch gap-3 p-3"
-                >
+                <Link key={alert.ticker} href={`/market/${encodeURIComponent(alert.ticker)}`} className="flex min-h-[68px] items-stretch gap-3 p-3">
                   <div className="h-[30px] w-[30px] self-center rounded bg-white" />
                   <div className="flex flex-col flex-1 justify-center py-1">
                     <Label className="h-5 items-center text-[14px] font-normal">{alert.ticker}</Label>

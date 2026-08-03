@@ -3,6 +3,7 @@ import "./globals.css";
 import { brittiSans, ndot } from "./fonts";
 import { cn } from "@/lib/utils";
 import Nav from "@/components/nav";
+import { NavSlotProvider } from "@/components/nav-slot";
 
 export const metadata: Metadata = {
   title: "youn-server",
@@ -20,8 +21,10 @@ export default function RootLayout({
       className={cn("dark font-sans", brittiSans.variable, ndot.variable)}
     >
       <body className="antialiased">
-        <Nav />
-        {children}
+        <NavSlotProvider>
+          <Nav />
+          {children}
+        </NavSlotProvider>
       </body>
     </html>
   );
