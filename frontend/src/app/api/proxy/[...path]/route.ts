@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server"
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000"
 
+// Next.js 14 GET route handlers default to cacheable unless told otherwise —
+// the internal fetch's `cache: "no-store"` below isn't reliably sufficient
+// on its own across 14.x to keep the route itself out of the Full Route
+// Cache. Without this, the first-ever request could get frozen and served
+// forever after, regardless of what the backend actually returns later.
+export const dynamic = "force-dynamic"
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }

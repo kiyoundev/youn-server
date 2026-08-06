@@ -10,6 +10,7 @@ from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
 from app.services.scraper.router import RetailerRouter
+from app.services.sse import broadcast
 from app.services.stocks import FinnhubClient
 
 _log = logging.getLogger(__name__)
@@ -140,3 +141,10 @@ async def _process_item(item_id: int, router: RetailerRouter, queue: asyncio.Que
             _log.info("product %d (%s) re-armed (price recovered)", product.id, product.name)
         else:
             await session.commit()
+
+        # Unconditional — fires on every successful scrape regardless of price
+        # change, as a sibling to the alert-only Event/queue write above, not
+        # a consumer of it. Placed after all three commit branches (not right
+        # after the PriceHistory insert) so the broadcast never fires ahead of
+        # the transaction that's supposed to have already persisted it.
+        broadcast({"product_id": product.id, "listing_id": listing.id})

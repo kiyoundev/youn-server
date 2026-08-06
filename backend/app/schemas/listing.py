@@ -1,13 +1,17 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.schemas.validators import validate_http_url
 
 
 class ListingCreate(BaseModel):
     url: str
     retailer: str | None = None
     scraper_type: Literal["patchright"] | None = None
+
+    _validate_url = field_validator("url")(validate_http_url)
 
 
 class ListingUpdate(BaseModel):

@@ -13,6 +13,7 @@ import DockerTile from "@/components/tiles/docker-tile";
 import ServicesTile from "@/components/tiles/services-tile";
 import WatchlistTile from "@/components/tiles/watchlist-tile";
 import DateTile from "@/components/tiles/date-tile";
+import { LoadingScreen } from "@/components/ui/loading-screen";
 
 interface StorageData {
   bays: { label: string; status: BayStatus }[];
@@ -28,7 +29,7 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center gap-4">
-      {isLoading && <p>Loading...</p>}
+      {isLoading && <LoadingScreen page="Home" />}
       {error && <p>Failed to load storage data</p>}
       {data && (
         <div className="grid grid-cols-[clamp(354px,25vw,372px)_1fr] gap-5 p-5 w-full">

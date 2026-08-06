@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app.scheduler import jobs
 from app.services.scraper.result import ScraperResult
 
@@ -210,9 +209,7 @@ async def test_process_item_ignores_inactive_sibling_listing_when_recomputing_ch
     """A paused sibling listing with a stale, very low last_price must not
     drag the recomputed minimum below what active listings actually offer."""
     scraped = _listing(item_id=20, product_id=1, retailer="amazon_ca")
-    paused_sibling = _listing(
-        item_id=21, product_id=1, retailer="bestbuy_ca", active=False, last_price=1.0
-    )
+    paused_sibling = _listing(item_id=21, product_id=1, retailer="bestbuy_ca", active=False, last_price=1.0)
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
     session = MagicMock()
@@ -243,8 +240,12 @@ async def test_process_item_excludes_oos_listing_stale_price_from_cheapest() -> 
     open) an alert for a product that isn't actually purchasable there."""
     scraped = _listing(item_id=40, product_id=1, retailer="amazon_ca")
     oos_sibling = _listing(
-        item_id=41, product_id=1, retailer="bestbuy_ca", active=True,
-        last_price=50.0, last_scrape_status="oos",
+        item_id=41,
+        product_id=1,
+        retailer="bestbuy_ca",
+        active=True,
+        last_price=50.0,
+        last_scrape_status="oos",
     )
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
@@ -275,8 +276,12 @@ async def test_process_item_recovery_not_blocked_by_stale_oos_sibling() -> None:
     alerted = dt.datetime.now(dt.timezone.utc)
     scraped = _listing(item_id=50, product_id=1, retailer="amazon_ca")
     oos_sibling = _listing(
-        item_id=51, product_id=1, retailer="bestbuy_ca", active=True,
-        last_price=50.0, last_scrape_status="oos",
+        item_id=51,
+        product_id=1,
+        retailer="bestbuy_ca",
+        active=True,
+        last_price=50.0,
+        last_scrape_status="oos",
     )
     product = _product(product_id=1, target_price=100.0, alerted_at=alerted)
 
@@ -308,9 +313,7 @@ async def test_process_item_unrelated_active_listing_does_not_incorrectly_rearm(
     alerted_at, since the product is still a deal via BestBuy."""
     alerted = dt.datetime.now(dt.timezone.utc)
     amazon = _listing(item_id=30, product_id=1, retailer="amazon_ca", last_price=398.0)
-    bestbuy = _listing(
-        item_id=31, product_id=1, retailer="bestbuy_ca", last_price=340.0, last_scrape_status="ok"
-    )
+    bestbuy = _listing(item_id=31, product_id=1, retailer="bestbuy_ca", last_price=340.0, last_scrape_status="ok")
     product = _product(product_id=1, target_price=350.0, alerted_at=alerted)
 
     session = MagicMock()
@@ -374,6 +377,124 @@ async def test_process_item_skips_ok_status_with_none_price() -> None:
     session.add.assert_not_called()
     session.commit.assert_not_awaited()
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_process_item_broadcasts_after_successful_scrape() -> None:
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(side_effect=[listing, product])
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_active_listings_result([listing]))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=120.0, status="ok"))
+
+    queue = asyncio.Queue()
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._process_item(7, router, queue)
+
+    broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})
+
+
+@pytest.mark.asyncio
+async def test_process_item_broadcast_uses_scraped_listing_not_cheapest_winner() -> None:
+    """Regression: the broadcast must carry the listing that was actually
+    scraped (item 7), not `winning` (the alert Event's cheapest-listing
+    field) — those differ whenever a sibling retailer is cheaper."""
+    scraped = _listing(item_id=7, product_id=1, retailer="amazon_ca")
+    cheaper_sibling = _listing(item_id=8, product_id=1, retailer="bestbuy_ca", last_price=50.0, last_scrape_status="ok")
+    product = _product(product_id=1, target_price=200.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(side_effect=[scraped, product])
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_active_listings_result([scraped, cheaper_sibling]))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=180.0, status="ok"))
+
+    queue = asyncio.Queue()
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._process_item(7, router, queue)
+
+    broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})  # not 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["oos", "error"])
+async def test_process_item_does_not_broadcast_on_oos_or_error(status: str) -> None:
+    listing = _listing(item_id=10)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status=status))
+
+    queue = asyncio.Queue()
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._process_item(10, router, queue)
+
+    broadcast_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_item_does_not_broadcast_when_ok_status_has_none_price() -> None:
+    listing = _listing(item_id=10)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status="ok"))
+
+    queue = asyncio.Queue()
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._process_item(10, router, queue)
+
+    broadcast_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_item_does_not_broadcast_for_an_inactive_listing() -> None:
+    listing = _listing(item_id=10, active=False)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+
+    router = MagicMock()
+    router.get_price = AsyncMock()
+
+    queue = asyncio.Queue()
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._process_item(10, router, queue)
+
+    router.get_price.assert_not_called()
+    broadcast_mock.assert_not_called()
 
 
 def _finnhub_mock(tickers: list[str], prices: dict[str, float | None]) -> MagicMock:
