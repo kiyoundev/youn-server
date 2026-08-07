@@ -15,7 +15,7 @@ from app.schemas.listing import ListingCreate, ListingResponse, ListingUpdate
 from app.schemas.price_history import PriceHistoryResponse
 from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
 from app.services.product_status import compute_last_checked, compute_status
-from app.services.scraper.router import RETAILER_MAP, detect_scraper_type
+from app.services.scraper.router import RETAILER_DISPLAY_NAMES, RETAILER_MAP, detect_scraper_type
 
 router = APIRouter()
 
@@ -25,7 +25,7 @@ def _hostname_of(url: str) -> str:
 
 
 def _derive_retailer(hostname: str) -> str:
-    return hostname.replace(".", "_")
+    return RETAILER_DISPLAY_NAMES.get(hostname, hostname.replace(".", "_"))
 
 
 async def _resolve_retailer_and_scraper_type(

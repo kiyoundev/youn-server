@@ -152,13 +152,7 @@ function sheetEditReducer(state: SheetEditState, action: SheetEditAction): Sheet
 // a product's listing count varies, so each listing gets its own instance
 // of this rather than looping the hook directly) and report the bucketed
 // result up to the row that mounted it.
-function ListingHistoryFetcher({
-  listing,
-  onData,
-}: {
-  listing: Listing;
-  onData: (listingId: number, points: HistoryPoint[]) => void;
-}) {
+function ListingHistoryFetcher({ listing, onData }: { listing: Listing; onData: (listingId: number, points: HistoryPoint[]) => void }) {
   const { data } = useListingHistory(listing.product_id, listing.id);
 
   useEffect(() => {
@@ -272,20 +266,13 @@ function ProductRow({
               ) : (
                 <SheetTitle>{product.name}</SheetTitle>
               )}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Edit item"
-                onClick={() => dispatchEdit({ type: "editName", name: product.name })}
-              >
+              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => dispatchEdit({ type: "editName", name: product.name })}>
                 <Pencil size={16} strokeWidth={1.5} />
               </Button>
             </div>
           </SheetHeader>
           <div className="flex flex-col gap-4 px-4">
-            <div style={{ height: 200 }}>
-              {chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} />}
-            </div>
+            <div style={{ height: 200 }}>{chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} />}</div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Target Price</span>
               {editState.type === "targetPrice" ? (
@@ -593,12 +580,12 @@ export default function WatchlistPage() {
           </Badge>
         )}
         {/* Overview Left Section */}
-        <div className="flex justify-between">
+        <div className="flex items-center justify-between">
           <div className="flex items-baseline gap-2">
             <Label className="font-ndot text-[40px] font-normal block">{fmtValue(totalBestPrice)}</Label>
             <Label className="font-ndot text-[20px] font-normal block">Total</Label>
           </div>
-          <div className="flex gap-20 pr-20">
+          <div className="flex items-baseline gap-20 pr-20">
             <div className="flex flex-col gap-1">
               <Label className="text-md font-ndot">{products.length}</Label>
               <Label className="text-muted-foreground">Items</Label>

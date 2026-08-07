@@ -149,7 +149,7 @@ async def test_create_item_known_domain_skips_probe() -> None:
 
     detect.assert_not_awaited()
     assert result.name == "Watch"
-    assert result.listings[0].retailer == "amazon_ca"
+    assert result.listings[0].retailer == "Amazon"
     db.commit.assert_awaited_once()
 
 

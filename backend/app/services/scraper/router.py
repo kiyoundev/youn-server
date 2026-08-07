@@ -9,6 +9,14 @@ RETAILER_MAP: dict[str, type[BaseScraper]] = {
     "amazon.ca": AmazonCAScraper,
 }
 
+# Friendly display names for hostnames with dedicated scraper support above —
+# checked first by _derive_retailer() so these don't fall through to the
+# generic hostname.replace(".", "_") derivation ("amazon.ca" -> "amazon_ca").
+# Hostnames not registered here (or in RETAILER_MAP) keep that generic form.
+RETAILER_DISPLAY_NAMES: dict[str, str] = {
+    "amazon.ca": "Amazon",
+}
+
 
 class RetailerRouter:
     async def get_price(self, url: str, scraper_type: str | None = None) -> ScraperResult:
