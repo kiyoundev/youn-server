@@ -1,0 +1,40 @@
+# Temporary local Postgres for dev when the Synology NAS isn't reachable
+# (e.g. off the home LAN, before Tailscale is set up).
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up -d
+#
+# Point DATABASE_URL at it (see .env.example):
+#   postgresql+asyncpg://youn:change_me@localhost:5433/youn_server
+#
+# Then run migrations from backend/:
+#   uv run alembic upgrade head
+#
+# This is standalone on purpose — it does NOT extend docker-compose.yml, so
+# it never accidentally ships to the NAS/RPi deploy. If you also want the
+# backend/frontend running in Docker locally, add this file alongside the
+# main one instead of merging them:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# (the db becomes reachable from other services as host "db", port 5432)
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: youn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: youn_server
+    ports:
+      # host 5433 to match the port the Synology Postgres package uses,
+      # so DATABASE_URL only needs its host swapped when you switch back
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U youn -d youn_server"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
