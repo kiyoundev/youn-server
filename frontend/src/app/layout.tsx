@@ -4,6 +4,7 @@ import { brittiSans, ndot } from "./fonts";
 import { cn } from "@/lib/utils";
 import Nav from "@/components/nav";
 import { NavSlotProvider } from "@/components/nav-slot";
+import { Toaster } from "@/components/ui/toast";
 
 export const metadata: Metadata = {
   title: "youn-server",
@@ -25,6 +26,7 @@ export default function RootLayout({
           <Nav />
           {children}
         </NavSlotProvider>
+        <Toaster />
       </body>
     </html>
   );

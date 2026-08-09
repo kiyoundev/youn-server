@@ -38,6 +38,7 @@ function DropdownMenuContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        collisionBoundary={typeof document !== "undefined" ? document.body : undefined}
       >
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"

@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -15,38 +16,25 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 import { cn } from "@/lib/utils";
 import { useNavSlot } from "@/components/nav-slot";
 import { useListingHistory, bucketByLocalDay, listingHistoryKey } from "@/lib/hooks/use-listing-history";
 import { subscribeToListingEvents, type ConnectionStatus } from "@/lib/sse-leader";
-
-type WatchStatus = "watching" | "triggered" | "paused" | "failed";
-
-// Matches backend/app/schemas — GET /api/items response shape (schema.md).
-interface Listing {
-  id: number;
-  retailer: string;
-  url: string;
-  last_price: number | null;
-  last_scrape_status: "ok" | "oos" | "error" | null;
-  active: boolean;
-  last_checked: string | null;
-  product_id: number;
-  created_at: string;
-}
-
-interface Product {
-  id: number;
-  name: string;
-  target_price: number;
-  alerted_at: string | null;
-  status: WatchStatus;
-  last_checked: string | null;
-  listings: Listing[];
-  created_at: string;
-}
+import {
+  createProduct,
+  createListing,
+  updateProduct,
+  updateListing,
+  deleteListing,
+  deleteProduct,
+  ApiError,
+  type Product,
+  type Listing,
+  type WatchStatus,
+} from "@/lib/api/items";
+import { toast } from "@/lib/toast";
 
 // null when every listing's last_price is null (e.g. every retailer OOS/errored) —
 // callers render a "—" fallback rather than treating this as 0.
@@ -181,10 +169,24 @@ function ProductRow({
   // open), so history is already warm by the time this row's sheet opens —
   // the only way to reach it is through this row, so it's already mounted.
   const [historyByListing, setHistoryByListing] = useState<Record<number, HistoryPoint[]>>({});
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const handleHistoryData = useCallback((listingId: number, points: HistoryPoint[]) => {
     setHistoryByListing((prev) => ({ ...prev, [listingId]: points }));
   }, []);
+
+  const handleDeleteProduct = async () => {
+    try {
+      await deleteProduct(product.id);
+      await mutate("/api/proxy/items");
+      if (openId === product.id) setOpenId(null);
+      toast.success("Item deleted");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.detail : "Failed to delete item");
+    } finally {
+      setIsDeleteDialogOpen(false);
+    }
+  };
 
   const status = STATUS_BADGE[product.status];
   const best = bestPrice(product);
@@ -202,7 +204,7 @@ function ProductRow({
         <ListingHistoryFetcher key={listing.id} listing={listing} onData={handleHistoryData} />
       ))}
       <Sheet open={openId === product.id} onOpenChange={(open) => setOpenId(open ? product.id : null)}>
-        <SheetTrigger render={<TableRow className="cursor-pointer" />}>
+        <TableRow className="cursor-pointer" onClick={() => setOpenId(product.id)}>
           <TableCell className="font-medium">{product.name}</TableCell>
           <TableCell>
             <div className="flex gap-1">
@@ -233,13 +235,13 @@ function ProductRow({
               />
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setOpenId(product.id)}>Edit</DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={() => console.log("delete", product.id)}>
+                <DropdownMenuItem variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
                   Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </TableCell>
-        </SheetTrigger>
+        </TableRow>
 
         {/* side panel content */}
         <SheetContent side="right">
@@ -253,10 +255,18 @@ function ProductRow({
                     value={editState.draft}
                     onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
                     onBlur={() => dispatchEdit({ type: "cancel" })}
-                    onKeyDown={(e) => {
+                    onKeyDown={async (e) => {
                       if (e.key === "Enter") {
-                        console.log("save name", product.id, editState.draft);
+                        const name = editState.draft.trim();
                         dispatchEdit({ type: "cancel" });
+                        if (!name || name === product.name) return;
+                        try {
+                          await updateProduct(product.id, { name });
+                          await mutate("/api/proxy/items");
+                          toast.success("Updated");
+                        } catch (err) {
+                          toast.error(err instanceof ApiError ? err.detail : "Failed to update name");
+                        }
                       }
                       if (e.key === "Escape") dispatchEdit({ type: "cancel" });
                     }}
@@ -283,10 +293,18 @@ function ProductRow({
                   value={editState.draft}
                   onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
                   onBlur={() => dispatchEdit({ type: "cancel" })}
-                  onKeyDown={(e) => {
+                  onKeyDown={async (e) => {
                     if (e.key === "Enter") {
-                      console.log("save target price", product.id, editState.draft);
+                      const target_price = Number(editState.draft);
                       dispatchEdit({ type: "cancel" });
+                      if (!(target_price > 0) || target_price === product.target_price) return;
+                      try {
+                        await updateProduct(product.id, { target_price });
+                        await mutate("/api/proxy/items");
+                        toast.success("Updated");
+                      } catch (err) {
+                        toast.error(err instanceof ApiError ? err.detail : "Failed to update target price");
+                      }
                     }
                     if (e.key === "Escape") dispatchEdit({ type: "cancel" });
                   }}
@@ -309,7 +327,23 @@ function ProductRow({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
-              <Badge variant={status.variant}>{status.label}</Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant={status.variant}>{status.label}</Badge>
+                <Switch
+                  checked={product.status !== "paused"}
+                  aria-label={product.status !== "paused" ? "Pause item" : "Resume item"}
+                  onCheckedChange={async (active) => {
+                    const results = await Promise.allSettled(product.listings.map((l) => updateListing(product.id, l.id, { active })));
+                    await mutate("/api/proxy/items");
+                    const failedCount = results.filter((r) => r.status === "rejected").length;
+                    if (failedCount === 0) {
+                      toast.success(active ? "Resumed" : "Paused");
+                    } else {
+                      toast.error(`${failedCount} of ${results.length} retailer(s) failed to update`, { persist: true });
+                    }
+                  }}
+                />
+              </div>
             </div>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
@@ -328,10 +362,22 @@ function ProductRow({
                       value={editState.draft}
                       onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
                       onBlur={() => dispatchEdit({ type: "cancel" })}
-                      onKeyDown={(e) => {
+                      onKeyDown={async (e) => {
                         if (e.key === "Enter" && isValidUrl(editState.draft)) {
-                          console.log("save listing url", product.id, listing.id, editState.draft);
+                          const url = editState.draft;
                           dispatchEdit({ type: "cancel" });
+                          if (url === listing.url) return;
+                          try {
+                            await updateListing(product.id, listing.id, { url });
+                            await mutate("/api/proxy/items");
+                            toast.success("Updated");
+                          } catch (err) {
+                            if (err instanceof ApiError && err.status === 409) {
+                              toast.error("That URL is already being watched");
+                            } else {
+                              toast.error(err instanceof ApiError ? err.detail : "Failed to update listing");
+                            }
+                          }
                         }
                         if (e.key === "Escape") dispatchEdit({ type: "cancel" });
                       }}
@@ -364,16 +410,25 @@ function ProductRow({
                         >
                           <Pencil className="size-3.5" strokeWidth={1.5} />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-muted-foreground"
-                          aria-label={`Remove ${listing.retailer}`}
-                          disabled={product.listings.length <= 1}
-                          onClick={() => console.log("remove listing", product.id, listing.id)}
-                        >
-                          <Trash2 className="size-3.5" strokeWidth={1.5} />
-                        </Button>
+                        {product.listings.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="text-muted-foreground"
+                            aria-label={`Remove ${listing.retailer}`}
+                            onClick={async () => {
+                              try {
+                                await deleteListing(product.id, listing.id);
+                                await mutate("/api/proxy/items");
+                                toast.success("Retailer removed");
+                              } catch (err) {
+                                toast.error(err instanceof ApiError ? err.detail : "Failed to remove retailer");
+                              }
+                            }}
+                          >
+                            <Trash2 className="size-3.5" strokeWidth={1.5} />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -389,10 +444,17 @@ function ProductRow({
                     value={editState.draft}
                     onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
                     onBlur={() => dispatchEdit({ type: "cancel" })}
-                    onKeyDown={(e) => {
+                    onKeyDown={async (e) => {
                       if (e.key === "Enter" && isValidUrl(editState.draft)) {
-                        console.log("add listing", product.id, editState.draft);
+                        const url = editState.draft;
                         dispatchEdit({ type: "cancel" });
+                        try {
+                          await createListing(product.id, { url });
+                          await mutate("/api/proxy/items");
+                          toast.success("Retailer added");
+                        } catch (err) {
+                          toast.error(err instanceof ApiError ? err.detail : "Failed to add retailer");
+                        }
                       }
                       if (e.key === "Escape") dispatchEdit({ type: "cancel" });
                     }}
@@ -404,6 +466,23 @@ function ProductRow({
           </div>
         </SheetContent>
       </Sheet>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete &quot;{product.name}&quot;?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">This removes all retailer listings and their price history.</p>
+          <DialogFooter>
+            <Button variant="outline" className="w-20" onClick={() => setIsDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" className="w-20" onClick={handleDeleteProduct}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -418,6 +497,7 @@ export default function WatchlistPage() {
   const [editState, dispatchEdit] = useReducer(sheetEditReducer, { type: "none" });
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [newItem, setNewItem] = useState(emptyNewItem);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleExpandSearch = () => {
     setSearchExpanded(true);
@@ -444,6 +524,39 @@ export default function WatchlistPage() {
 
   const canSubmitNewItem =
     newItem.name.trim() !== "" && Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
+
+  // Bulk, single request — backend probes every URL's retailer/scraper_type
+  // concurrently (bounded), so this doesn't need the chained-per-URL or
+  // background-loop handling earlier revisions of this issue built (see
+  // .plan/10.2-wishlist-mutations/implementation.md step 7's design-history
+  // note) — a plain awaited call with a button spinner is enough.
+  const handleAddItem = async () => {
+    if (!canSubmitNewItem || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const { product, failed } = await createProduct({
+        name: newItem.name.trim(),
+        target_price: Number(newItem.targetPrice),
+        urls: newItemUrlLines,
+      });
+      await mutate("/api/proxy/items");
+      closeAddDialog();
+      if (failed.length === 0) {
+        toast.success(`Added "${product.name}"`);
+      } else {
+        const detail = failed.map((f) => `${f.url} (${f.detail})`).join(", ");
+        toast.error(`"${product.name}": ${failed.length} of ${newItemUrlLines.length} URL(s) failed — ${detail}`, { persist: true });
+      }
+    } catch (e) {
+      // Nothing committed server-side in this case (createProduct itself
+      // failed, e.g. 422 on name/target_price) — dialog stays open so the
+      // user can fix and retry inline, unlike a partial-failure above where
+      // the product already exists and closing is correct.
+      toast.error(e instanceof ApiError ? e.detail : "Failed to add item");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (openId === null) {
@@ -613,7 +726,7 @@ export default function WatchlistPage() {
             <DialogHeader>
               <DialogTitle>Add Item</DialogTitle>
             </DialogHeader>
-            <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="new-item-name">Item Name</Label>
                 <Input id="new-item-name" value={newItem.name} onChange={(e) => setNewItem((prev) => ({ ...prev, name: e.target.value }))} />
@@ -629,7 +742,7 @@ export default function WatchlistPage() {
                   className="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="new-item-urls">Retailer URLs</Label>
                 <Textarea
                   id="new-item-urls"
@@ -643,19 +756,8 @@ export default function WatchlistPage() {
               <Button variant="outline" className="w-20" onClick={closeAddDialog}>
                 Cancel
               </Button>
-              <Button
-                className="w-20"
-                disabled={!canSubmitNewItem}
-                onClick={() => {
-                  console.log("add new item", {
-                    name: newItem.name,
-                    targetPrice: Number(newItem.targetPrice),
-                    urls: newItemUrlLines,
-                  });
-                  closeAddDialog();
-                }}
-              >
-                Save
+              <Button className="w-20" disabled={!canSubmitNewItem || isSubmitting} onClick={handleAddItem}>
+                {isSubmitting ? "Saving…" : "Save"}
               </Button>
             </DialogFooter>
           </DialogContent>

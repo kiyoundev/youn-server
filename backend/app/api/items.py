@@ -1,4 +1,7 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,11 +16,35 @@ from app.models.product import Product
 from app.models.watch_item import Listing
 from app.schemas.listing import ListingCreate, ListingResponse, ListingUpdate
 from app.schemas.price_history import PriceHistoryResponse
-from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
+from app.schemas.product import (
+    ListingFailure,
+    ProductCreate,
+    ProductCreateResponse,
+    ProductResponse,
+    ProductUpdate,
+)
 from app.services.product_status import compute_last_checked, compute_status
 from app.services.scraper.router import RETAILER_DISPLAY_NAMES, RETAILER_MAP, detect_scraper_type
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Bounds how many detect_scraper_type probes (each up to a real HTTPScraper
+# request, possibly escalating to a Patchright headless-browser page load)
+# run concurrently in one POST /api/items request. Uncapped gather() would
+# let a large URL paste spawn that many concurrent browser pages at once —
+# fine at this app's realistic 1-3 URLs/add, but worth bounding for a
+# pathological large paste, on a Pi 5 also running every other service in
+# the stack. Doesn't throttle the realistic case at all.
+_PROBE_CONCURRENCY = 3
+
+
+class _ProbeResult(NamedTuple):
+    url: str
+    retailer: str | None = None
+    scraper_type: str | None = None
+    error: str | None = None
 
 
 def _hostname_of(url: str) -> str:
@@ -49,6 +76,28 @@ async def _resolve_retailer_and_scraper_type(
             status_code=400, detail="URL could not be scraped by any available method"
         )
     return resolved_retailer, detected
+
+
+async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
+    """Bulk-create's per-URL worker for asyncio.gather — never raises. One bad
+    URL must not cancel every other in-flight probe in the same batch, so
+    every error is caught and returned as data instead of propagating —
+    both the expected case (HTTPException, e.g. unscrapable URL) and any
+    unexpected one. asyncio.gather() without return_exceptions=True
+    propagates the first raised exception and cancels every other pending
+    task; catching only HTTPException here would mean one unanticipated bug
+    (a real risk in scraper code, which deals with unpredictable external
+    HTML/network conditions) 500s the entire request instead of failing
+    just its own URL, defeating the point of the concurrent-batch design."""
+    async with semaphore:
+        try:
+            retailer, scraper_type = await _resolve_retailer_and_scraper_type(url, None, None)
+            return _ProbeResult(url=url, retailer=retailer, scraper_type=scraper_type)
+        except HTTPException as e:
+            return _ProbeResult(url=url, error=str(e.detail))
+        except Exception:
+            _log.exception("Unexpected error probing %s during bulk create", url)
+            return _ProbeResult(url=url, error="Unexpected error while probing this URL")
 
 
 async def _fetch_last_checked_map(
@@ -142,35 +191,86 @@ async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> Produ
 
 @router.post(
     "/api/items",
-    response_model=ProductResponse,
+    response_model=ProductCreateResponse,
     status_code=201,
     summary="Add a new wishlist product",
     description=(
-        "Creates a new `Product` with its required first `Listing`. Derives "
-        "`retailer` from the URL's hostname and probes the URL through the "
-        "scraper extraction hierarchy to auto-detect `scraper_type`, unless "
-        "an explicit `scraper_type` is provided in the body."
+        "Creates a new `Product` and, in the same request, as many of `urls` "
+        "as succeed — deriving `retailer` from each URL's hostname and "
+        "auto-detecting `scraper_type` via the scraper extraction hierarchy. "
+        "Probes run concurrently (bounded), not one at a time. `urls` may be "
+        "empty (product created with no listings, for callers that add "
+        "listings separately via `POST /api/items/{id}/listings`). A "
+        "duplicate URL (within the request or against an existing listing) "
+        "or an unscrapable URL is reported in `failed`, not raised as an "
+        "error for the whole request — the product and every other "
+        "successful listing are still created."
     ),
 )
-async def create_item(body: ProductCreate, db: AsyncSession = Depends(get_db)) -> ProductResponse:
-    existing = await db.execute(select(Listing.id).where(Listing.url == body.url))
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="An item with this URL already exists")
-
-    retailer, scraper_type = await _resolve_retailer_and_scraper_type(
-        body.url, body.retailer, body.scraper_type
-    )
-
+async def create_item(
+    body: ProductCreate, db: AsyncSession = Depends(get_db)
+) -> ProductCreateResponse:
     product = Product(name=body.name, target_price=body.target_price)
-    product.listings = [Listing(url=body.url, retailer=retailer, scraper_type=scraper_type)]
+    # Materialize the relationship in-memory now, even if it stays empty —
+    # otherwise, when every URL fails validation (or urls=[]) and .append()
+    # below never runs, the very first access to product.listings happens
+    # after commit inside _build_product_response, outside any awaited
+    # context. AsyncSessionLocal uses expire_on_commit=False, so an
+    # already-loaded collection survives commit fine — but a genuinely
+    # never-touched one still triggers SQLAlchemy's first lazy-load on next
+    # access, which can't run synchronously and raises MissingGreenlet.
+    product.listings = []
+    failed: list[ListingFailure] = []
+
+    # In-batch dedup first — two identical URLs pasted into the same request
+    # would otherwise both pass the "not already in the DB" check below and
+    # race each other for the same listing slot.
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for url in body.urls:
+        if url in seen:
+            failed.append(ListingFailure(url=url, detail="Duplicate URL within this request"))
+            continue
+        seen.add(url)
+        candidates.append(url)
+
+    existing_urls: set[str] = set()
+    if candidates:
+        existing = await db.execute(select(Listing.url).where(Listing.url.in_(candidates)))
+        existing_urls = {row[0] for row in existing.all()}
+        for url in candidates:
+            if url in existing_urls:
+                failed.append(ListingFailure(url=url, detail="An item with this URL already exists"))
+
+    to_probe = [url for url in candidates if url not in existing_urls]
+    if to_probe:
+        semaphore = asyncio.Semaphore(_PROBE_CONCURRENCY)
+        results = await asyncio.gather(*(_resolve_one(url, semaphore) for url in to_probe))
+        for result in results:
+            if result.error is not None:
+                failed.append(ListingFailure(url=result.url, detail=result.error))
+            else:
+                product.listings.append(
+                    Listing(url=result.url, retailer=result.retailer, scraper_type=result.scraper_type)
+                )
+
     db.add(product)
     try:
         await db.commit()
     except IntegrityError:
+        # Rare race: a URL passed the existing-URL check above but another
+        # request committed the same URL first, between that check and this
+        # commit. IntegrityError doesn't tell us which row collided, so the
+        # whole create fails here rather than silently guessing which
+        # listing to drop — same 409 shape as every other duplicate case,
+        # just covering the window this route's single existing-URL query
+        # can't close on its own.
         await db.rollback()
-        raise HTTPException(status_code=409, detail="An item with this URL already exists")
+        raise HTTPException(
+            status_code=409, detail="One or more URLs were claimed by another request — try again"
+        )
 
-    return _build_product_response(product, {})
+    return ProductCreateResponse(product=_build_product_response(product, {}), failed=failed)
 
 
 @router.post(
@@ -244,7 +344,15 @@ async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> No
 @router.patch(
     "/api/items/{product_id}/listings/{listing_id}",
     response_model=ListingResponse,
-    summary="Pause or unpause a listing",
+    summary="Update a listing — pause/unpause, and/or change its URL",
+    description=(
+        "Partial update. `active` toggles pause/resume. `url`, when given and "
+        "different from the current value, re-derives `retailer` (unless "
+        "overridden via `retailer`) and re-detects `scraper_type` the same way "
+        "`POST /api/items/{id}/listings` does — a URL change is treated as a "
+        "new page, not just a cosmetic edit. Preserves the listing's `id` and "
+        "price history, unlike delete-and-recreate."
+    ),
 )
 async def update_listing(
     product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)
@@ -254,7 +362,26 @@ async def update_listing(
     if body.active is not None:
         listing.active = body.active
 
-    await db.commit()
+    if body.url is not None and body.url != listing.url:
+        existing = await db.execute(
+            select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id)
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=409, detail="An item with this URL already exists")
+
+        retailer, scraper_type = await _resolve_retailer_and_scraper_type(
+            body.url, body.retailer, None
+        )
+        listing.url = body.url
+        listing.retailer = retailer
+        listing.scraper_type = scraper_type
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="An item with this URL already exists")
+
     last_checked_map = await _fetch_last_checked_map(db, [listing.id])
     return _build_listing_response(listing, last_checked_map)
 

@@ -16,6 +16,14 @@ class ListingCreate(BaseModel):
 
 class ListingUpdate(BaseModel):
     active: bool | None = None
+    # Optional URL edit — preserves the listing's id and price_history rows,
+    # unlike delete+recreate. retailer is an explicit override (same
+    # semantics as ListingCreate.retailer); scraper_type has no override
+    # field here and is always re-detected when url changes (items.py).
+    url: str | None = None
+    retailer: str | None = None
+
+    _validate_url = field_validator("url")(validate_http_url)
 
 
 class ListingResponse(BaseModel):
