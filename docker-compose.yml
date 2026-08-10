@@ -20,3 +20,27 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+
+  # Network-wide DNS ad/tracker blocking (#34). Fully independent of
+  # backend/frontend — shares only this host and compose file.
+  pihole:
+    image: pihole/pihole:2026.05.0
+    restart: unless-stopped
+    environment:
+      TZ: America/Los_Angeles
+      FTLCONF_webserver_api_password: ${PIHOLE_WEBPASSWORD}
+      # Default bridge networking (no --net=host), so DNS must listen on
+      # all interfaces, not just the one Docker sees as "local":
+      FTLCONF_dns_listeningMode: all
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      # 8081 avoids colliding with frontend (3000) / backend (8000)
+      - "8081:80"
+    volumes:
+      - pihole_etc:/etc/pihole
+    # Not using Pi-hole as a DHCP server (Eero handles DHCP), so the
+    # NET_ADMIN capability it's commonly paired with isn't needed here.
+
+volumes:
+  pihole_etc:
