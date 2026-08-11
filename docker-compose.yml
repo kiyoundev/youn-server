@@ -8,6 +8,8 @@ services:
       - "8000:8000"
     volumes:
       - /opt/tradingagents:/opt/tradingagents
+    networks:
+      - app
 
   frontend:
     build: ./frontend
@@ -20,9 +22,12 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+    networks:
+      - app
 
-  # Network-wide DNS ad/tracker blocking (#34). Fully independent of
-  # backend/frontend — shares only this host and compose file.
+  # Network-wide DNS ad/tracker blocking (#34). On its own compose
+  # network — no L2/L3 reachability to backend/frontend, even if
+  # compromised. Shares only this host and compose file.
   pihole:
     image: pihole/pihole:2026.05.0
     restart: unless-stopped
@@ -41,6 +46,12 @@ services:
       - pihole_etc:/etc/pihole
     # Not using Pi-hole as a DHCP server (Eero handles DHCP), so the
     # NET_ADMIN capability it's commonly paired with isn't needed here.
+    networks:
+      - pihole
+
+networks:
+  app:
+  pihole:
 
 volumes:
   pihole_etc:
