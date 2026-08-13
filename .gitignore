@@ -1,5 +1,6 @@
 # Environment
 .env
+.env.bak*
 
 # Database
 data/db.sqlite

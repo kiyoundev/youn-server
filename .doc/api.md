@@ -59,13 +59,15 @@ One `Product` (shared name + target price) can have many `Listing` rows (one per
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/stocks` | List all stock alerts |
-| `GET` | `/api/stocks/{id}` | Get a single stock alert — 404 if not found |
-| `POST` | `/api/stocks` | Add alert — body: `{ ticker, target_price, direction, alert_type?, run_analysis?, deep_think_llm?, quick_think_llm?, anthropic_effort?, max_debate_rounds?, max_risk_discuss_rounds?, analysts? }` |
-| `PATCH` | `/api/stocks/{id}` | Update — body: same optional fields as `POST` — 404 if not found |
-| `DELETE` | `/api/stocks/{id}` | Remove alert — 204 on success, 404 if not found |
-| `POST` | `/api/stocks/{id}/analyze` | Manually trigger TradingAgents for this ticker — 404 if alert not found |
-| `GET` | `/api/stocks/{id}/analysis` | List analysis results — query: `?limit=10` — 404 if alert not found |
+| `GET` | `/api/stockalerts` | List all stock alerts |
+| `GET` | `/api/stockalerts/{id}` | Get a single stock alert — 404 if not found |
+| `POST` | `/api/stockalerts` | Add alert — body: `{ ticker, target_price, direction, alert_type?, run_analysis?, deep_think_llm?, quick_think_llm?, anthropic_effort?, max_debate_rounds?, max_risk_discuss_rounds?, analysts? }` |
+| `PATCH` | `/api/stockalerts/{id}` | Update — body: same optional fields as `POST` — 404 if not found |
+| `DELETE` | `/api/stockalerts/{id}` | Remove alert — 204 on success, 404 if not found |
+| `POST` | `/api/stockalerts/{id}/analyze` | Manually trigger TradingAgents for this ticker — 404 if alert not found |
+| `GET` | `/api/stockalerts/{id}/analysis` | List analysis results — query: `?limit=10` — 404 if alert not found |
+
+**Current consumer:** `/portfolio`'s Watchlist tile reads `GET /api/stockalerts` — but the endpoint itself is generic (all alerts, no section/tile scoping), it's just the only thing calling it today. Config data only (target price, direction, `run_analysis`, etc.) — a separate, richer, ticker-scoped (not alert-scoped) market-data endpoint is planned for the detail page and Popular Assets, not yet built: see `.doc/issues.md` `#19` (`Position`/Holdings), `#30` (`/api/market/trending`, Popular Assets), `#31` (`/api/market/{ticker}/details`, works for any ticker regardless of whether it has an alert).
 
 `direction`: `"above"` or `"below"`. **POST** validates ticker via Finnhub REST on creation — returns 400 if invalid, 409 if an alert for this `(ticker, direction, alert_type)` triple already exists (active or paused). (yfinance is used only for `/history`-style chart data, not validation.)
 
@@ -73,9 +75,9 @@ One `Product` (shared name + target price) can have many `Listing` rows (one per
 
 **TradingAgents per-alert config:** `llm_provider` and `output_language` are global (`TRADINGAGENTS_LLM_PROVIDER` / `TRADINGAGENTS_OUTPUT_LANGUAGE` env vars, same for every alert). `deep_think_llm`, `quick_think_llm`, `anthropic_effort` (`"high" | "medium" | "low"`), `max_debate_rounds`, `max_risk_discuss_rounds`, and `analysts` (subset of `"market" | "social" | "news" | "fundamentals"`) are per-alert — settable via `POST`/`PATCH`. Each is independently nullable; `null` means "inherit the global env default." On `PATCH`, a field must be explicitly included (even as `null`) to change it — an omitted field is left untouched.
 
-**POST /api/stocks/{id}/analyze** is a debug/manual-trigger tool — the real usage path is automatic (threshold crossing + `run_analysis=true`). It runs regardless of threshold or `run_analysis` flag, using `alert.last_price` as `triggered_price` (no live price fetch — `last_price` may be `null` if this alert has never fired, in which case `triggered_price` is stored as `null`). Creates an `AnalysisResult` row with `status: "pending"` and returns it immediately, spawning the TradingAgents run in the background. Returns 409 if an analysis is already running for this ticker.
+**POST /api/stockalerts/{id}/analyze** is a debug/manual-trigger tool — the real usage path is automatic (threshold crossing + `run_analysis=true`). It runs regardless of threshold or `run_analysis` flag, using `alert.last_price` as `triggered_price` (no live price fetch — `last_price` may be `null` if this alert has never fired, in which case `triggered_price` is stored as `null`). Creates an `AnalysisResult` row with `status: "pending"` and returns it immediately, spawning the TradingAgents run in the background. Returns 409 if an analysis is already running for this ticker.
 
-**Live progress while `status: "running"`:** `GET /api/stocks/{id}/analysis` reflects `llm_calls`, `tokens_in`, `tokens_out`, `tool_calls`, and `last_heartbeat_at`, updated as the subprocess emits heartbeat lines — an idle timer (`tradingagents_idle_timeout_seconds`, default 10min) resets on each heartbeat rather than killing the run on a flat total-elapsed timeout. A hard cap (`tradingagents_hard_cap_seconds`, default 2h) applies regardless of heartbeats. On `status: "failed"`, `error_reason` distinguishes `"idle_timeout"` / `"subprocess_error"` / `"invalid_output"` / `"max_runtime_exceeded"`.
+**Live progress while `status: "running"`:** `GET /api/stockalerts/{id}/analysis` reflects `llm_calls`, `tokens_in`, `tokens_out`, `tool_calls`, and `last_heartbeat_at`, updated as the subprocess emits heartbeat lines — an idle timer (`tradingagents_idle_timeout_seconds`, default 10min) resets on each heartbeat rather than killing the run on a flat total-elapsed timeout. A hard cap (`tradingagents_hard_cap_seconds`, default 2h) applies regardless of heartbeats. On `status: "failed"`, `error_reason` distinguishes `"idle_timeout"` / `"subprocess_error"` / `"invalid_output"` / `"max_runtime_exceeded"`.
 
 ### TradingAgents Management
 
@@ -98,7 +100,7 @@ One `Product` (shared name + target price) can have many `Listing` rows (one per
 
 `/api/poll/prices` runs `poll_prices()` — same job as the scheduled 6h cycle. `/api/poll/stocks` is a manual fallback alongside the always-on Finnhub WebSocket stream: it re-checks current prices via Finnhub REST and runs the same threshold logic the WS path uses, in case a price movement was missed during a brief WS disconnect.
 
-Both endpoints fire a background task and return immediately — results are not included in the response (check `GET /api/items`, `/api/items/{id}/history`, or `GET /api/stocks` afterward). Both are guarded by an in-memory "already running" lock (prevents overlapping cycles with each other or the scheduled job) and rate-limited to 1 call per 5 minutes (in-memory timestamp).
+Both endpoints fire a background task and return immediately — results are not included in the response (check `GET /api/items`, `/api/items/{id}/history`, or `GET /api/stockalerts` afterward). Both are guarded by an in-memory "already running" lock (prevents overlapping cycles with each other or the scheduled job) and rate-limited to 1 call per 5 minutes (in-memory timestamp).
 
 - Success: `200` — `{ "status": "queued" }`
 - Rate-limited: `429` — `{ "detail": "Rate limited, try again in Ns" }`

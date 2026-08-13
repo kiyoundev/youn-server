@@ -27,7 +27,7 @@ def _base_kwargs(**overrides) -> dict:
 
 
 def test_analysts_empty_string_from_db_maps_to_none():
-    """POST /api/stocks with analysts=[] stores "" in the DB (CSV join of an
+    """POST /api/stockalerts with analysts=[] stores "" in the DB (CSV join of an
     empty list). Reading it back must not crash — "" means "not set", same as
     None, not a list containing one invalid empty-string entry."""
     response = StockAlertResponse(**_base_kwargs(analysts=""))

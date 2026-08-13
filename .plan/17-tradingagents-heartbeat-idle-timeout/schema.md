@@ -2,10 +2,10 @@
 
 ## API Routes
 
-No route code changes — `GET /api/stocks/{alert_id}/analysis` (`app/api/stocks.py:198`, `list_analysis_results`) already returns `list[AnalysisResultResponse]` built via `from_attributes`. New model columns surface automatically once the schema is updated.
+No route code changes — `GET /api/stockalerts/{alert_id}/analysis` (`app/api/stockalerts.py:198`, `list_analysis_results`) already returns `list[AnalysisResultResponse]` built via `from_attributes`. New model columns surface automatically once the schema is updated.
 
-### `GET /api/stocks/{alert_id}/analysis`
-- **Handler:** `app/api/stocks.py:199`
+### `GET /api/stockalerts/{alert_id}/analysis`
+- **Handler:** `app/api/stockalerts.py:199`
 - **Request:** path param `alert_id`
 - **Response (new fields only, additive):**
   ```json

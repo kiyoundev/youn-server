@@ -18,7 +18,7 @@ flowchart TD
     end
 
     subgraph BE["FastAPI Backend — Pi 5"]
-        API["/api/items, /api/stocks"]
+        API["/api/items, /api/stockalerts"]
         SCHED["APScheduler<br/>interval, hours=6"]
         SCRAPE["RetailerRouter<br/>_process_item"]
         BCAST["SSE broadcast<br/>unconditional"]
@@ -242,11 +242,11 @@ Finnhub pushes tick: AAPL $189.45
                                     └── recovered above target + alerted_at set?
                                             → clear alerted_at (re-arm)
 
-User adds NVDA alert via POST /api/stocks
+User adds NVDA alert via POST /api/stockalerts
     └── API route calls FinnhubClient.subscribe("NVDA")
             └── sends {"type": "subscribe", "symbol": "NVDA"} over live connection
 
-User deletes/pauses alert via DELETE or PATCH /api/stocks
+User deletes/pauses alert via DELETE or PATCH /api/stockalerts
     └── API route calls FinnhubClient.unsubscribe("NVDA")
             └── sends {"type": "unsubscribe", "symbol": "NVDA"} over live connection
 
@@ -255,11 +255,13 @@ Connection drops
             └── backoff (1s → 2s → 4s → 8s...) → reconnect → re-subscribe all active tickers
 ```
 
-**Finnhub REST** is used separately for one-off queries — ticker validation on `POST /api/stocks` and manual poll trigger. Independent of the WebSocket connection.
+**Finnhub REST** is used separately for one-off queries — ticker validation on `POST /api/stockalerts` and manual poll trigger. Independent of the WebSocket connection.
 
 **yfinance** is used only for dashboard price history charts (`Ticker.history()`). Never on the real-time path.
 
 > **Design decision — WS subscription is `StockAlert`-only, never extended to `Position`/Holdings (revised 2026-08-10, `#19`).** `#19`'s original design (2026-08-02) had every `Position` call `FinnhubClient.subscribe()` on creation, refcounted against `StockAlert` so a ticker held by both wouldn't get unsubscribed prematurely. Reversed: the websocket is one connection shared across the whole app, capped at ~50 symbols — not scoped per-holding. A portfolio of ordinary size (20-30+ positions) risked exhausting that budget on its own, and unlike an alert (explicit, user-managed, stays small) a holding is rarely removed once bought — the subscribed count would only ratchet upward over time, with no natural release valve, eventually starving the feature the cap actually needs to protect (alerting must work even when nobody has the app open; just displaying a held position's price only needs to be fresh while that page is open). REST `get_price()` + the frontend's existing SWR poll already serves "keep this price reasonably fresh while I'm looking at it," and that exact path is needed regardless for Popular Assets and ad-hoc ticker search (never holdings, never alertable ahead of time) — so un-alerted Holdings positions reuse that same path rather than getting a second, parallel subscription mechanism. Net effect: a ticker is WS-subscribed if and only if it has an active `StockAlert`, independent of which page/tile displays it (Watchlist, Holdings, or otherwise) — see `#37`'s scope note in `.doc/issues.md` for how this bounds that issue's SSE relay too.
+
+> **Correction (2026-08-12) — subscription is real, but there's no live price cache behind it.** This callout previously implied WS-subscribed tickers have a continuously-updated in-memory price available to read. Checked against `stocks.py`: `FinnhubClient`'s per-ticker cache (`_AlertState`) stores only alert config (target price, direction, `alerted_at`) — no price field. The only persisted price, `StockAlert.last_price`, is written solely at the instant a threshold *crosses* (`stocks.py:222`, inside `_fire_event`) — never on a plain tick, never on recovery. So the subscription itself is real and correctly `StockAlert`-only, but "the ticker has live pricing available" does not follow from "the ticker is WS-subscribed" — those are two different claims, and only the first is currently true. A genuine live per-tick price cache is unbuilt, separate future work. See `.doc/issues.md` `#19`'s "Correction" note for the full trace.
 
 ## TradingAgents Update & Run Flow
 

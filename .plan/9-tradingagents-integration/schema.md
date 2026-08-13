@@ -2,8 +2,8 @@
 
 ## API Routes
 
-### `POST /api/stocks` (modified)
-- **Handler:** `app/api/stocks.py::create_stock_alert`
+### `POST /api/stockalerts` (modified)
+- **Handler:** `app/api/stockalerts.py::create_stock_alert`
 - **Request:** existing `{ ticker, target_price, direction, run_analysis? }` + new optional fields:
   ```
   deep_think_llm?: string
@@ -16,19 +16,19 @@
 - **Response:** `StockAlertResponse` with the same new fields, `analysts` returned as a list (stored as CSV internally).
 - **Error cases:** unchanged (400 invalid ticker, 409 duplicate ticker+direction).
 
-### `PATCH /api/stocks/{alert_id}` (modified)
-- **Handler:** `app/api/stocks.py::update_stock_alert`
+### `PATCH /api/stockalerts/{alert_id}` (modified)
+- **Handler:** `app/api/stockalerts.py::update_stock_alert`
 - **Request:** existing fields + the same 6 new optional fields as `POST`, each independently settable back to `null` to revert to the global default.
 - **Response:** `StockAlertResponse`.
 - **Error cases:** unchanged (404, 409).
 
-### `POST /api/stocks/{alert_id}/analyze` (modified)
-- **Handler:** `app/api/stocks.py::analyze_stock_alert`
+### `POST /api/stockalerts/{alert_id}/analyze` (modified)
+- **Handler:** `app/api/stockalerts.py::analyze_stock_alert`
 - **Change:** after creating the `AnalysisResult(status="pending")` row and committing (so `.id` exists), spawns `trading_agents.run_analysis(alert, analysis.id)` as a background `asyncio.Task` before returning.
 - **Response:** unchanged shape (`AnalysisResultResponse`, `status="pending"`), still returns immediately — status transitions happen out-of-band.
 - **Error cases:** unchanged (404 alert not found, 409 already running for this ticker).
 
-### `GET /api/stocks/{alert_id}/analysis` (unchanged)
+### `GET /api/stockalerts/{alert_id}/analysis` (unchanged)
 - No contract changes; `AnalysisResultResponse.stop_loss` is removed (see below).
 
 ### `GET /api/analysis/tradingagents/version` (new)

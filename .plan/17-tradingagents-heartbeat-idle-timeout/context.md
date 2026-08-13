@@ -23,7 +23,7 @@ Replace #9's flat 30-minute total-runtime timeout with an idle-timeout driven by
 - `run_tradingagents.py` calls `TradingAgentsGraph(selected_analysts=analysts, config=DEFAULT_CONFIG)` with no callbacks. `logging.basicConfig(stream=sys.stderr, level=logging.INFO)` is already set up (default format `%(levelname)s:%(name)s:%(message)s`).
 - `trading_agents.py::_run_analysis()` spawns the subprocess and calls `asyncio.wait_for(process.communicate(), timeout=_TIMEOUT_SECONDS)` — a flat 30-minute (`_TIMEOUT_SECONDS = 30 * 60`) module constant, blocks until exit or timeout with zero visibility in between.
 - `AnalysisResult` has `id, stock_alert_id, event_id, ticker, triggered_price, result, status, action, price_target, report_path, created_at, completed_at` — no progress or failure-reason fields. Partial unique index on `(ticker) WHERE status IN ('pending','running')` — a stuck row blocks future analyses for that ticker.
-- `AnalysisResultResponse` (Pydantic schema) mirrors the model 1:1; `GET /api/stocks/{id}/analysis` (`app/api/stocks.py:198`) returns it directly — no route code changes needed once the model/schema gain new fields.
+- `AnalysisResultResponse` (Pydantic schema) mirrors the model 1:1; `GET /api/stockalerts/{id}/analysis` (`app/api/stockalerts.py:198`) returns it directly — no route code changes needed once the model/schema gain new fields.
 - `Settings` (`app/core/config.py`) holds deployment paths (`tradingagents_path`, `tradingagents_venv_python`, `tradingagents_results_dir`) but no timeout/idle-timeout knobs.
 - Existing tests (`test_trading_agents.py`) mock `process.communicate()` as a single `AsyncMock` — this pattern breaks once `communicate()` is no longer called.
 
@@ -48,7 +48,7 @@ Replace #9's flat 30-minute total-runtime timeout with an idle-timeout driven by
 
 ### Dependencies
 - **`langchain_core.callbacks.BaseCallbackHandler`** — already a transitive dependency via the TradingAgents library (used by `trading_agents/graph/trading_graph.py` and upstream's own `cli/stats_handler.py`); no new package needed.
-- **`app/api/stocks.py::list_analysis_results`** — unaffected; returns `AnalysisResultResponse` directly, new fields flow through automatically.
+- **`app/api/stockalerts.py::list_analysis_results`** — unaffected; returns `AnalysisResultResponse` directly, new fields flow through automatically.
 - **`app/consumers/analysis.py::handle`** — unaffected; only creates the initial `pending` row and calls `spawn(run_analysis(...))`.
 
 ### Breaking Changes

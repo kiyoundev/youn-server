@@ -16,7 +16,7 @@ Existing backend test files, for reference:
 | `tests/test_stocks.py` | `services/stocks.py` (`FinnhubClient`) |
 | `tests/api/test_items_routes.py` | `GET/POST/PATCH/DELETE /api/items` |
 | `tests/api/test_poll_routes.py` | `POST /api/poll/prices`, `/api/poll/stocks` |
-| `tests/api/test_stocks_routes.py` | `/api/stocks/*` alert routes |
+| `tests/api/test_stocks_routes.py` | `/api/stockalerts/*` alert routes |
 | `tests/api/test_analysis_routes.py` | `/api/analysis/tradingagents/*` |
 | `tests/services/test_trading_agents.py` | `services/trading_agents.py` subprocess/heartbeat logic |
 | `tests/scraper/*`, `tests/scheduler/*`, `tests/consumers/*`, `tests/schemas/*` | scraper routing, scheduled jobs, event dispatcher, Pydantic schema validation |

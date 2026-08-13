@@ -42,14 +42,16 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ✅ Done | #8 | FastAPI Routes + Auth | feat / AFK | ~4h | #2, #3, #4, #5, #7 |
 | ✅ Done | #9 | TradingAgents Integration | feat / AFK | ~5h | #7, #8 |
 | ✅ Done | #24 | Wishlist Product/Listing Model (Multi-Retailer Grouping) | feat / AFK | ~6h | #8 |
-| 🔀 Merged | #10.1 | ~~Wishlist Page (Read-Only)~~ | feat / AFK | ~2h | #8, #24 |
+| ✅ Done | #10.1 | ~~Wishlist Page (Read-Only)~~ | feat / AFK | ~2h | #8, #24 |
 | ✅ Partially Done (Testing Skipped) | #10.2 | Wishlist Mutations (Add/Edit/Pause/Delete) | feat / AFK | ~2h | #36 |
-| 🔀 Merged | #10.3 | ~~Price History Chart~~ | feat / AFK | ~1.5h | #10.1 |
-| ⬜ Open | #10.4 | Stocks Page (Read + Mutations) | feat / AFK | ~2h | #36 |
+| ✅ Done | #10.3 | ~~Price History Chart~~ | feat / AFK | ~1.5h | #10.1 |
+| ✅ Done | #10.4 | Stock Alert Alarm (Market Detail Sheet) | feat / AFK | ~2h | #36 |
 | ✅ Done | #10.5 | Navigation | feat / AFK | ~0.5h | #10.1, #10.4 |
+| ⬜ Open | #10.6 | Ticker Watchlist (Star, Persisted) | feat / AFK | ~2h | #10.4 |
 | ⬜ Open | #11 | Analysis Results UI | feat / AFK | ~3h | #9, #10.1–#10.5 |
 | ~~❌ Removed~~ | ~~#12~~ | ~~iOS SwiftUI Token Registration App~~ | ~~feat / HITL~~ | ~~#8~~ | ~~Replaced by Pushover~~ |
 | ⬜ Open | #13 | Pi Deployment + Tailscale | ops / HITL | ~3h | #8, #10.1–#10.5 |
+| ⬜ Open | #13.1 | Tailscale Subnet Routing (NAS Postgres Reachability) | ops / HITL | ~0.75h | None |
 | ⬜ Open | #14 | Integration Tests | test / AFK | ~4h | #3, #4, #5, #7, #8 |
 | ⬜ Open | #15 | Headless Chromium Bot Detection on Pi | ops / AFK | ~2h | #3, #13 |
 | ⬜ Open | #16 | Tailscale MagicDNS (Human-Readable Hostnames) | ops / HITL | ~0.5h | #13 |
@@ -73,7 +75,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ⬜ Open | #37 | Stocks/Portfolio Page — Live Updates via SSE (Finnhub Tick Broadcast) | feat / AFK | ~4h | #36, #10.4 |
 | ⬜ Open | #38 | Earnings Calendar (Portfolio Page + Ticker Detail Page) | feat / AFK | ~3h | #19, #31 |
 
-**Total estimated:** ~100h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar)*
+**Total estimated:** ~102.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi)*
 
 ---
 
@@ -91,13 +93,15 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | 8 | **#24** | Wishlist Product/Listing model (multi-retailer grouping) | ~6h | #8 |
 | 9 | **#36** | Wishlist page (real data + live price history via SSE) — merges former #10.1, #10.3 | ~6h | #8, #24 |
 | 10 | **#10.2** | Wishlist mutations (add/edit/pause/delete) | ~2h | #36 |
-| 12 | **#10.4** | Stocks page (read + mutations) | ~2h | #36 |
+| 12 | **#10.4** | Stock alert alarm (market detail sheet) | ~2h | #36 |
 | 12.5 | **#37** | Stocks/portfolio live updates via SSE (Finnhub tick broadcast) | ~4h | #36, #10.4 |
 | 14.5 | **#38** | Earnings calendar (portfolio page + ticker detail page) | ~3h | #19, #31 |
 | 13 | **#10.5** | Navigation | ~0.5h | #10.1, #10.4 |
+| 13.5 | **#10.6** | Ticker watchlist (star, persisted) | ~2h | #10.4 |
 | 14 | **#9** | TradingAgents integration | ~5h | #7, #8 |
 | 15 | **#11** | Analysis results UI | ~3h | #9, #10.1–#10.5 |
 | 16 | **#13** | Pi deployment + Tailscale | ~3h | #10.1–#10.5 |
+| 16.5 | **#13.1** | Tailscale subnet routing (NAS Postgres reachability) | ~0.75h | — |
 | 17 | **#16** | Tailscale MagicDNS (human-readable hostnames) | ~0.5h | #13 |
 | 18 | **#17** | TradingAgents progress heartbeat + idle timeout | ~2h | #9 |
 | 19 | **#18** | DB connection resilience | ~1.5h | #6, #7 |
@@ -169,8 +173,9 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 #8, #24
   └── #36 — Wishlist Page (Real Data + Live Price History via SSE)   [merges former #10.1, #10.3]
         ├── #10.2 — Wishlist Mutations (Add/Edit/Pause/Delete)
-        └── #10.4 — Stocks Page (Read + Mutations)
+        └── #10.4 — Stock Alert Alarm (Market Detail Sheet)
               ├── #10.5 — Navigation   [also needs #36]
+              ├── #10.6 — Ticker Watchlist (Star, Persisted)
               └── #37 — Stocks/Portfolio Live Updates via SSE   [also needs #36]
 
 #10.1–#10.5
@@ -476,7 +481,14 @@ Build the complete scraping layer: abstract base class, two concrete scraper imp
 
 ### Note
 
-`#19` (2026-08-02) extends `subscribe()`/`unsubscribe()` to also cover `Position` tickers, not just `StockAlert` — see `#19` for the shared-subscription accounting this requires (a ticker referenced by both must not be unsubscribed while either still needs it).
+`#19` (2026-08-02) extends `subscribe()`/`unsubscribe()` to also cover `Position` tickers, not just `StockAlert` — see `#19` for the shared-subscription accounting this requires (a ticker referenced by both must not be unsubscribed while either still needs it). Superseded by `#19`'s 2026-08-10 revision — `Position` no longer subscribes at all; see that issue.
+
+**Extension (2026-08-12) — live per-tick price cache, not yet built.** Today, `_check_threshold` (`stocks.py:178`) only persists a price at the instant a threshold *crosses* (`_fire_event` writes `StockAlert.last_price`, `stocks.py:222`) — every other tick is checked and discarded, so `last_price` is stale between crossings, not a live price (full trace: `#19`'s "Correction" note, `architecture.md`'s matching callout). Proposed fix, scoped to this issue since it's `_check_threshold`'s own code:
+
+- Add an in-memory `{ticker: price}` dict on `FinnhubClient` (same shape/pattern as `_cache`, `stocks.py:37`), overwritten — not appended to — on every tick for every WS-subscribed ticker, regardless of whether it crosses. One dict slot per ticker; update cost is flat (a single key overwrite) no matter how many ticks/sec a ticker gets, so tick volume alone isn't a reason to avoid this.
+- **No DB write added.** `StockAlert.last_price`'s existing crossing-only semantics stay untouched (still correct for audit/notification history) — the new live value lives purely in memory, read directly by `GET /api/stockalerts`/`GET /api/positions` at request time instead of falling back to the stale DB column.
+- Does **not** on its own fix `#37`'s broadcast — that stream still needs its own throttling regardless of how fresh the underlying cache is (`#37`'s existing scope note, `issues.md:1018`); this only makes the *value being read* live, a separate concern from *how often it's pushed to the frontend*.
+- Unblocks: `#19`'s `GET /api/positions` enrichment (would read this cache instead of the stale DB column for alert-backed tickers), and gives `#37` something genuinely live to broadcast once that issue adds its own throttle.
 
 ---
 
@@ -666,13 +678,13 @@ All API routes, shared API key auth, CORS, and rate limiting on manual poll trig
 
 **Routers:**
 - `api/items.py`: GET, POST, PATCH, DELETE `/api/items`, GET `/api/items/{id}/history?days=30`
-- `api/stocks.py`: GET, POST, PATCH, DELETE `/api/stocks`
+- `api/stock_alerts.py`: GET, POST, PATCH, DELETE `/api/stockalerts`
 - `api/poll.py`: POST `/api/poll/prices`, POST `/api/poll/stocks` — rate-limited to 1 call per 5 minutes each (in-memory timestamp)
 - `api/health.py`: GET `/api/health` → `{ status: "ok" }` — no auth
 
 **Details:**
 - POST `/api/items` derives `retailer` from URL domain and probes URL via extraction hierarchy to set `WatchItem.scraper_type` (stored for poll-time use); optional `scraper_type` field in request body overrides auto-detection
-- POST `/api/stocks` validates ticker via `validate_ticker()` before saving — returns 400 if invalid
+- POST `/api/stockalerts` validates ticker via `validate_ticker()` before saving — returns 400 if invalid
 - CORS origins from `CORS_ORIGINS` env var (comma-separated)
 - No subscriptions routes — Pushover uses static env vars, no per-device registration needed
 
@@ -683,7 +695,7 @@ All API routes, shared API key auth, CORS, and rate limiting on manual poll trig
 - [x] `POST /api/items` with `amazon.ca` URL sets `retailer = "amazon_ca"` automatically
 - [x] `POST /api/items` with a Shopify URL sets `scraper_type = null` (detected at create-time via extraction hierarchy; stored on `WatchItem`, not exposed in the API response — see `.doc/api.md`)
 - [x] `POST /api/items` with explicit `scraper_type = "patchright"` in body stores that value, skipping auto-detection
-- [x] `POST /api/stocks` with `ticker = "INVALID_XYZ"` returns 400
+- [x] `POST /api/stockalerts` with `ticker = "INVALID_XYZ"` returns 400
 - [x] `POST /api/poll/prices` called twice within 5 minutes — second call rejected
 - [x] DELETE `/api/items/{id}` cascades and removes all `PriceHistory` rows
 - [x] CORS allows requests from origin in `CORS_ORIGINS` env var
@@ -716,12 +728,12 @@ Wire TradingAgents subprocess into `AnalysisConsumer` and expose manual trigger 
   - Spawn `run_analysis()` as async task
   - On completion: call `send_alert()` with analysis summary as follow-up push
 
-**`POST /api/stocks/{id}/analyze`:**
+**`POST /api/stockalerts/{id}/analyze`:**
 - Manual trigger — ignores `run_analysis` flag, always runs
 - Returns 409 if `AnalysisResult` with `status IN ("pending", "running")` already exists for this ticker
 - Creates `AnalysisResult { status: "pending" }` and returns immediately
 
-**`GET /api/stocks/{id}/analysis`:**
+**`GET /api/stockalerts/{id}/analysis`:**
 - Returns list of `AnalysisResult` for this stock alert, ordered by `created_at` desc
 - Query param: `?limit=10` (default 10)
 
@@ -742,9 +754,9 @@ Wire TradingAgents subprocess into `AnalysisConsumer` and expose manual trigger 
 
 ### Acceptance criteria
 
-- [x] `POST /api/stocks/{id}/analyze` returns 202 immediately; `AnalysisResult.status` transitions `pending → running → done`
-- [x] `POST /api/stocks/{id}/analyze` returns 409 if analysis already running
-- [x] `GET /api/stocks/{id}/analysis` returns completed results with non-null `result` JSON
+- [x] `POST /api/stockalerts/{id}/analyze` returns 202 immediately; `AnalysisResult.status` transitions `pending → running → done`
+- [x] `POST /api/stockalerts/{id}/analyze` returns 409 if analysis already running
+- [x] `GET /api/stockalerts/{id}/analysis` returns completed results with non-null `result` JSON
 - [x] `AnalysisConsumer` creates and runs analysis when `run_analysis = True` on a `STOCK_THRESHOLD` event
 - [x] `AnalysisConsumer` skips silently when `run_analysis = False`
 - [x] Follow-up Pushover push sent on analysis completion (separate from the immediate threshold alert fired in #7)
@@ -767,7 +779,7 @@ Replace #9's flat 30-minute total-runtime timeout with an idle-timeout driven by
 
 - **`backend/scripts/run_tradingagents.py`**: custom LangChain callback handler (same shape as upstream's `cli/stats_handler.py::StatsCallbackHandler`), passed via `TradingAgentsGraph(..., callbacks=[handler])`. On `on_llm_start` / `on_chat_model_start` / `on_tool_start`, prints one heartbeat line to **stderr** (e.g. `HEARTBEAT llm_calls=N tokens_in=X tokens_out=Y`) — stdout stays reserved for the single final JSON line, must not be polluted.
 - **`backend/app/services/trading_agents.py::run_analysis()`**: stop using `asyncio.wait_for(process.communicate(), timeout=...)` (blocks until exit, no visibility until the end). Instead, read `process.stderr` incrementally (`asyncio.StreamReader.readline()` loop) while the process runs. Each heartbeat line resets an **idle timer**; kill the process only after N minutes with *no* heartbeat, not after a fixed total elapsed time regardless of activity.
-- **`AnalysisResult`**: new fields for live progress (`llm_calls`, `tokens_in`, `tokens_out`, `last_heartbeat_at` — plain columns or a `progress` JSON blob) updated on each heartbeat, so `GET /api/stocks/{id}/analysis` shows real activity while `status="running"` instead of a flat, undifferentiated "running".
+- **`AnalysisResult`**: new fields for live progress (`llm_calls`, `tokens_in`, `tokens_out`, `last_heartbeat_at` — plain columns or a `progress` JSON blob) updated on each heartbeat, so `GET /api/stockalerts/{id}/analysis` shows real activity while `status="running"` instead of a flat, undifferentiated "running".
 - **`AnalysisResult`**: new `error_reason` field (`"idle_timeout"` / `"subprocess_error"` / `"invalid_output"`) so failures are distinguishable via the API instead of a bare `status="failed"` with no detail (currently only visible in server logs).
 
 ### Why (context)
@@ -987,21 +999,37 @@ No hard cap needed on concurrent backend SSE connections at this app's scale (si
 
 ---
 
-## [ ] Issue #10.4 — Stocks Page (Read + Mutations)
+## [x] Issue #10.4 — Stock Alert Alarm (Market Detail Sheet)
 
 **Type:** feat / AFK
-**Estimate:** ~2h
+**Estimate:** ~2h *(revised 2026-08-12 — see rewrite note below)*
 **Blocked by:** #36 (was #10.1, merged into #36)
+
+> **Rewritten 2026-08-12 — the text below replaced a stale ticket description.**
+> Original text assumed a new `/stocks` route (full table, ticker/last price/
+> target/direction/`run_analysis`/status/actions, add form) needed building
+> from scratch. Wrong on inspection during planning (`.plan/10.4-stock-alerts/context.md`):
+> no such route was ever meant to exist — `/portfolio` already had a compact
+> Watchlist tile and `/market/[ticker]` already had a detail page, both shipped
+> ahead of this issue. Further corrected mid-implementation: the Watchlist
+> tile itself split out into `#10.6` once it became clear it must never
+> display `StockAlert` data (config, not market data) and that tile
+> membership is the star icon's job, not alert existence. This issue's real
+> scope, as actually built: `/market/[ticker]`'s alarm-icon button + two-
+> section sheet only (revised again 2026-08-12 from an originally-planned
+> `Dialog` container — see `implementation.md`'s Step 3 note). Full history:
+> `.plan/10.4-stock-alerts/_index.md`.
 
 ### What to build
 
-`/stocks` page — table of `StockAlert`s against the already-built backend (`stocks.py`'s CRUD routes). Columns: ticker, last price, target price, direction, `run_analysis` toggle, status badge, actions (edit, pause/resume, delete); add stock form. SWR polling, 30-second refresh. Combines read + mutations in one slice (unlike #10.1/#10.2's split) since the pattern is already proven by that pair — lower risk to do both at once for the second resource.
+New alarm-icon button on `/market/[ticker]` (next to the existing star, `#10.6`'s unrelated bookmark toggle), reflecting this ticker's `StockAlert`(s) via a binary fill state (outline = no alerts, filled = any alert exists, active or paused — simplified 2026-08-13, no muted/accent states). `onClick` is constant (always opens the sheet), not a toggle of the same state driving the fill — different interaction shape from the star icon beside it. Click opens a `Sheet` (`side="right"`, same container `watchlist/page.tsx` uses for its product detail panel — not a `Dialog`, see `implementation.md`'s Step 3 note for why) with two independent sections — "Alert when price rises above" / "falls below" — both always showing the same full field set (price, active, `run_analysis`), draft-only until a single sheet-level `Save`/`Cancel` (revised 2026-08-13, supersedes an earlier immediate-commit-per-field design — see `implementation.md`'s Step 3 note; `Save` batches each dirty section into one request, zero requests before it's clicked). Delete stays immediate and separate, its own confirm `Dialog`, not part of the draft. Against the already-built backend (`app/api/stock_alerts.py`'s CRUD routes). No table page, no standalone route — this is entirely a detail-page component. Full spec: `.plan/10.4-stock-alerts/schema.md`, `implementation.md`.
 
 ### Acceptance criteria
 
-- [ ] `/stocks` displays all `StockAlert`s; `run_analysis` toggle updates via PATCH
-- [ ] Add/edit/pause/delete actions all update the table without full page reload
-- [ ] Table auto-refreshes every 30 seconds
+- [x] Alarm-icon fill state on `/market/[ticker]` is outline when no alerts exist for that ticker, filled when any exist (active or paused) — clicking always opens the sheet regardless of fill state
+- [x] Sheet's two sections are draft-only (price/active/`run_analysis` edits produce zero requests) until a single `Save`/`Cancel` pair — `Save` batches each dirty section into one `create`/`update` call, `Cancel` reverts with no request; delete stays immediate and separate via its own nested confirm `Dialog`
+- [x] A create request for a direction that already exists for that ticker surfaces the backend's 409 as a toast, not a crash
+- [x] `X-API-Key` never appears in browser network tab (generic proxy, unchanged)
 
 ---
 
@@ -1046,6 +1074,53 @@ Nav bar making `/wishlist` and `/stocks` reachable. `/` itself is superseded by 
 ### Acceptance criteria
 
 - [x] `/wishlist` and `/stocks` both reachable via nav from `/` (renamed to `/watchlist` and `/portfolio`)
+
+---
+
+## [ ] Issue #10.6 — Ticker Watchlist (Star, Persisted)
+
+**Type:** feat / AFK
+**Estimate:** ~2h
+**Blocked by:** #10.4
+
+### Why (context)
+
+Surfaced correcting `#10.4` mid-implementation (2026-08-12): `/portfolio`'s Watchlist tile was being built to read `GET /api/stockalerts`, display alert config fields (`target_price`-relative "change%"), and treat "has an active `StockAlert`" as watchlist membership. Wrong on all three counts — confirmed with the user: `/portfolio` should display **market data only** (ticker, type, current price, real % change; shares + purchase month for Holdings), never anything from the `StockAlert` response. Alert config (target price, direction, `run_analysis`) belongs exclusively on `/market/[ticker]`'s alarm-icon sheet — a separate concern from "which tickers am I tracking."
+
+The actual watchlist-membership mechanism already exists in the UI, unwired: the star icon on `/market/[ticker]` (`page.tsx:75,138-143`) — `context.md`'s original `#10.4` planning explicitly scoped it out ("a separate, unrelated concept, not `StockAlert`-backed... stays untouched by this issue"), correctly identifying it as unrelated to alerts, but incorrectly leaving it as decorative local `useState` with no persistence. This issue makes it real: starring a ticker is what populates the Watchlist tile, full stop — no relationship to whether that ticker also happens to have a `StockAlert` or a `Position`.
+
+Reachable identically from all four entry points already established in `#31` (Popular Assets, Holdings, Watchlist, nav search) — same ticker, same star state, regardless of which section you arrived from.
+
+**Naming disambiguation:** "watchlist" is already an overloaded word in this codebase — `/watchlist` (the page) is `#36`'s wishlist `Product`/`Listing` tracker, completely unrelated to stocks. This issue's `/api/watchlist` route and `StarredTicker` model are a third, adjacent use of the word, specifically for `/portfolio`'s Watchlist *tile*. Not a new collision — the tile was already informally called "Watchlist" before this issue; this just gives that name a real backend. Do not confuse `/api/watchlist` with `/api/items` (backs the actual `/watchlist` page).
+
+### What to build
+
+**`StarredTicker` model** (new): `id`, `ticker` (unique), `created_at`. Deliberately minimal — no relationship to `StockAlert` or `Position`, no shared subscription/refcount logic (unlike `#19`'s original mistake with `Position`, this has no Finnhub WS involvement at all — starring a ticker never subscribes anything).
+
+**`app/api/watchlist.py`:**
+- `GET /api/watchlist` — list all starred tickers: `[{ id, ticker, created_at }]`
+- `POST /api/watchlist` — star a ticker — body `{ ticker }` — validates via Finnhub REST (`validate_ticker()`, same pattern as `POST /api/stockalerts`/`POST /api/positions`) — 400 if invalid, 409 if already starred
+- `DELETE /api/watchlist/{id}` — unstar — 204, 404 if not found
+
+**`/market/[ticker]` star icon** — replace the local `useState`/mock-seed (`page.tsx:75`) with `useSWR("/api/proxy/watchlist", fetcher)`, same shared-list-plus-client-filter pattern `#10.4` uses for alerts. Click handler calls `starTicker()`/`unstarTicker()`, then `mutate("/api/proxy/watchlist")` — same mutation convention as every other write in this app.
+
+**`/portfolio`'s Watchlist tile** — reads `GET /api/proxy/watchlist` for the ticker list (membership only — `id`, `ticker`, nothing else renders from this response), then sources every row's price/% change/type from **one** batch call — `GET /api/market/quotes?tickers=AAPL,TSLA,...` (new route, `app/api/market.py` — same file `#30`/`#31` will add) — not `StockAlert.last_price`, and not N separate per-ticker requests. Internally loops the starred tickers through `get_price()` (extended to also capture Finnhub's `dp` field — percent change, already in the REST `/quote` response, currently discarded, only `c` is kept), concurrent + semaphore-bounded (same pattern as `POST /api/items`'s bulk URL probing, `api.md:52`), so the per-ticker TTL cache (`#19`) still applies underneath a single frontend round-trip. Response: `{ quotes: [{ticker, price, change_pct, asset_type}], failed: [{ticker, detail}] }` — `asset_type` (`"stock" | "etf"`) reuses `#30`'s existing field/values (`issues.md`'s `#30` section), **not** a new classification scheme; `name` deliberately omitted — not needed for this row, avoids an extra Finnhub `/stock/profile2` call per ticker that `#30`/`#31` already pay for elsewhere. Response otherwise mirrors `POST /api/items`'s existing partial-failure shape, one bad ticker doesn't fail the whole batch. Category badge is now **real** (`asset_type`), replacing `#10.4`'s hardcoded `"Stock"` — first genuine per-ticker type distinction on this tile (a starred ETF now correctly reads "ETF", not "Stock").
+
+**Supersedes `#10.4`'s Step 2, bullet 2** (`implementation.md`, `stockWatchlistData.map(...)` → `stocks.map(...)`) — that swap should not happen as originally written. See `#10.4`'s own doc for the corrected pointer.
+
+### Acceptance criteria
+
+- [ ] `POST /api/watchlist` stars a ticker, validates via Finnhub REST, 409 on duplicate
+- [ ] `DELETE /api/watchlist/{id}` unstars — 204, 404 if not found
+- [ ] `GET /api/watchlist` returns all starred tickers
+- [ ] Star icon on `/market/[ticker]` persists across reload (reads real data, not local state) — same fill/muted visual treatment already built, now backend-driven
+- [ ] Starring a ticker from any of the four entry points (`#31`) reflects identically regardless of which section it was starred from
+- [ ] `/portfolio`'s Watchlist tile lists exactly the starred tickers, no more, no fewer — un-starring a ticker removes its row without reload
+- [ ] Watchlist tile row displays ticker, **real** category badge (`asset_type` — Stock/ETF, not hardcoded), current price, and **real** % change (Finnhub `dp`) — confirmed not sourced from any `StockAlert` field
+- [ ] `GET /api/market/quotes?tickers=...` returns all requested tickers in one call — confirmed via network tab, not N separate requests for N starred tickers
+- [ ] A ticker that fails lookup (invalid/unreachable) appears in `failed`, not silently dropped, and doesn't block the rest of the batch
+- [ ] A ticker with an active `StockAlert` but not starred does **not** appear in the Watchlist tile; a starred ticker with no `StockAlert` at all appears normally
+- [ ] `X-API-Key` never appears in Network tab for any `/api/proxy/watchlist*` request
 
 ---
 
@@ -1099,17 +1174,21 @@ Portfolio insights page — holdings, invested amount, current value, unrealized
 **`Position` model** (new): `id`, `ticker`, `shares: float`, `avg_cost: float` (average price paid per share), `notes: str | None`, `created_at`, `updated_at`. One row per ticker (aggregate position, not per-lot) — updated in place when the user buys or trims.
 
 **`app/api/positions.py`:**
-- `GET /api/positions` — list all positions, each enriched at read-time with `current_price`: for a ticker with an active `StockAlert`, read from `FinnhubClient`'s in-memory websocket-fed cache (fresh, no per-request REST call); for a ticker with no alert, `current_price` comes from a REST `get_price()` call instead — see "Live price source," below. Also computes `market_value = shares * current_price`, `unrealized_gain = (current_price - avg_cost) * shares`, `unrealized_gain_pct`
-- `POST /api/positions` — add position — body `{ ticker, shares, avg_cost, notes? }`, validates ticker via Finnhub REST same as `POST /api/stocks`. Does **not** call `FinnhubClient.subscribe()` — adding a position never touches the websocket subscription list, see below
+- `GET /api/positions` — list all positions, each enriched at read-time with `current_price`: for a ticker with an active `StockAlert`, read `StockAlert.last_price` (see correction under "Live price source" below — this is **not** a live/current price despite the field name, only as fresh as the alert's last threshold crossing); for a ticker with no alert, `current_price` comes from a REST `get_price()` call instead. Also computes `market_value = shares * current_price`, `unrealized_gain = (current_price - avg_cost) * shares`, `unrealized_gain_pct`
+- `POST /api/positions` — add position — body `{ ticker, shares, avg_cost, notes? }`, validates ticker via Finnhub REST same as `POST /api/stockalerts`. Does **not** call `FinnhubClient.subscribe()` — adding a position never touches the websocket subscription list, see below
 - `PATCH /api/positions/{id}` — update shares/avg_cost/notes
 - `DELETE /api/positions/{id}` — remove (e.g. fully sold). No `FinnhubClient.unsubscribe()` call — there's nothing to unsubscribe, since `Position` never subscribes in the first place
 - `GET /api/portfolio/summary` — aggregate `total_invested`, `total_market_value`, `total_unrealized_gain`, `total_unrealized_gain_pct` across all positions, same per-ticker price-source split as above
 
-**Live price source (revised 2026-08-10 — supersedes the 2026-08-02 decision to auto-subscribe every `Position`):** `FinnhubClient`'s websocket subscription list stays **exclusively `StockAlert`-driven** — a `Position` never calls `subscribe()`/`unsubscribe()` on its own, regardless of how many positions exist. A ticker only gets a live-updating cache entry if it also has an active `StockAlert`; `GET /api/positions`/`GET /api/portfolio/summary` read that cache for such tickers, and fall back to a per-ticker REST `get_price()` call for any position with no alert on it.
+**Live price source (revised 2026-08-10 — supersedes the 2026-08-02 decision to auto-subscribe every `Position`; corrected 2026-08-12 — see below):** `FinnhubClient`'s websocket subscription list stays **exclusively `StockAlert`-driven** — a `Position` never calls `subscribe()`/`unsubscribe()` on its own, regardless of how many positions exist. `GET /api/positions`/`GET /api/portfolio/summary` read `StockAlert.last_price` for a ticker with an active alert, and fall back to a per-ticker REST `get_price()` call for any position with no alert on it.
+
+**Correction (2026-08-12) — no live in-memory price cache actually exists.** Earlier revisions of this note (and `.doc/architecture.md`'s callout) described alert-backed tickers as reading from "`FinnhubClient`'s in-memory websocket-fed cache." Checked against the actual code (`stocks.py`): `_AlertState` (the only thing `FinnhubClient._cache` stores) has no price field at all, and `StockAlert.last_price` is written in exactly one place — inside `_fire_event`, which only runs at the instant a threshold *crosses* (`_check_threshold:192`). A tick that moves the price without crossing never touches it; recovery (`_clear_alerted_at`) doesn't touch it either. So `last_price` is **not** a live/current price — it's "the price the last time this alert fired," `null` if it's never fired, and stale indefinitely between crossings despite Finnhub actively streaming ticks for that ticker the whole time. `GET /api/positions`' enrichment for an alert-backed ticker inherits this same staleness — it is correctly described as "avoids a redundant REST call," not as "gets a fresh live price." Building an actual live per-tick cache (closer to the original 2026-08-02 design's `{ticker: {price, updated_at}}` proposal) is a real, separate piece of work against already-shipped `#4` code, not something this issue does.
 
 Rationale: the websocket is one connection shared across the whole app, capped at ~50 symbols (corroborated across multiple sources, not confirmed against Finnhub's own primary docs) — not scoped per-holding. A portfolio of normal size (20-30+ positions is unremarkable) risked exhausting that budget on its own under the original design, and unlike an alert (explicit, user-managed, naturally stays small) a holding is rarely removed once bought — the subscribed count would only ratchet upward over time with no natural release valve. A held-but-un-alerted position only needs *display-fresh* pricing (matters while a page is open); it doesn't need *alert-grade* pricing (must fire even when nobody's looking) — REST `get_price()` + the frontend's existing SWR poll already covers that without spending a scarce, effectively-permanent resource on it. Full reasoning: `.doc/architecture.md` → "Finnhub WebSocket Flow" callout.
 
 Frontend still does plain REST + SWR polling against `GET /api/positions` — same convention as `#10.1`/`#10.4`/`#30`, unaffected by this revision either way (a websocket/SSE channel to the browser was never proposed for Positions, before or after).
+
+**Backend caching (added 2026-08-12):** `get_price()` (`stocks.py:237`) gets a short in-memory TTL cache (`{ticker: (price, fetched_at)}`, ~10-15s), added once — not per-caller. Doesn't reduce staleness (the poll interval already governs that); it collapses redundant Finnhub REST calls when the same un-alerted ticker gets requested from more than one place at nearly the same moment — e.g. two browser tabs polling `GET /api/positions` at slightly different alignment, or a ticker that's both an un-alerted `Position` here and independently shown on `#31`'s `/market/{ticker}/details` page in another tab. `#30`'s `GET /api/market/trending` already does an equivalent server-side shared cache (`issues.md`'s `#30` section) — this extends the same principle to `get_price()`, the other REST call path.
 
 Shared-subscription accounting between `Position` and `StockAlert` (refcounting, etc.) is no longer applicable — `Position` never subscribes, so there's nothing to refcount. Simpler than the original design specifically because of this revision.
 
@@ -1132,7 +1211,8 @@ Decided: manual entry for now. No new external dependency, no credential-securit
 
 - [ ] `POST /api/positions` creates a position, validates ticker via Finnhub REST — does **not** subscribe it on `FinnhubClient`
 - [ ] Adding/removing/updating a `Position` never calls `FinnhubClient.subscribe()`/`unsubscribe()` — the websocket subscription list is affected only by `StockAlert` CRUD (`#4`), unchanged by this issue
-- [ ] `GET /api/positions` reads `current_price` from `FinnhubClient`'s websocket-fed cache only for a ticker with an active `StockAlert`; for a position with no alert, `current_price` comes from a REST `get_price()` call instead
+- [ ] `GET /api/positions` reads `current_price` from `StockAlert.last_price` for a ticker with an active alert (accepting that field's known staleness — see "Correction," above), and from a REST `get_price()` call for a position with no alert
+- [ ] `get_price()` results are cached in-memory for ~10-15s — confirmed via two near-simultaneous requests for the same un-alerted ticker producing only one Finnhub REST call
 - [ ] `PATCH /api/positions/{id}` updates shares/avg_cost/notes
 - [ ] `GET /api/portfolio/summary` returns correct aggregate totals using the same per-ticker price-source split (cache for alerted tickers, REST for the rest)
 - [ ] `/portfolio` page displays holdings table (with real per-ticker logos, placeholder fallback on load error) + summary card
@@ -1221,7 +1301,44 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 - [ ] Email alert received at configured Gmail address
 - [ ] PostgreSQL on NAS reachable from Pi after `docker compose restart` (verify via `GET /api/health`)
 - [ ] `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` succeeds
-- [ ] `POST /api/stocks/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
+- [ ] `POST /api/stockalerts/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
+
+---
+
+## [ ] Issue #13.1 — Tailscale Subnet Routing (NAS Postgres Reachability)
+
+**Type:** ops / HITL
+**Estimate:** ~0.75h
+**Blocked by:** None — Tailscale already installed/joined on Pi and dev Mac per `#13`'s provisioning note
+**HITL reason:** Requires Pi SSH access, Synology DSM access, and a one-time click in the Tailscale admin console.
+
+### What to build
+
+Off the home LAN, `DATABASE_URL` (`<nas-ip>:5433`, the NAS) isn't
+reachable even with Tailscale joined, since Tailscale only makes the Pi
+itself reachable — not other devices on the Pi's LAN. Configure the Pi as a
+Tailscale subnet router advertising just the NAS host (`<nas-ip>/32`, not
+the full `/24` — least-privilege: a compromised tailnet device should only
+gain a path to the Postgres port, not the whole home LAN), and tighten the
+NAS's `pg_hba.conf` from `0.0.0.0/0` to `<lan-subnet>/24` (closing the TODO left
+open since `#1.5`), relying on Tailscale's default SNAT behavior so
+Postgres sees the connection as coming from the Pi's LAN IP.
+
+See `.plan/13.1-tailscale-subnet-routing/` for the full step-by-step runbook
+(IP forwarding persistence, route advertisement + admin console approval,
+Mac-side accept-routes check, `pg_hba.conf` edit, and on-LAN regression
+testing).
+
+### Acceptance criteria
+
+- [ ] Pi advertises route `<nas-ip>/32` via Tailscale, persisted across reboots (`tailscale set --advertise-routes=...`, not just `up`)
+- [ ] Route approved in Tailscale admin console
+- [ ] `net.ipv4.ip_forward=1` set persistently on the Pi (`/etc/sysctl.d/`, survives `sudo reboot`)
+- [ ] Dev Mac has "Accept subnet routes" enabled and can reach `<nas-ip>:5433` while off the home LAN
+- [ ] `backend/.venv/bin/uvicorn app.main:app --reload` starts cleanly off-LAN with `DATABASE_URL` unchanged
+- [ ] NAS `pg_hba.conf` tightened to `<lan-subnet>/24` for the `youn_server` database; PostgreSQL package restarted
+- [ ] Existing on-LAN Postgres access (from the Pi, from a Mac on the LAN) still works after the `pg_hba.conf` change
+- [ ] Route and IP forwarding both survive a `sudo reboot` of the Pi
 
 ---
 
@@ -1273,8 +1390,8 @@ Test suite covering all deep modules through their public interfaces. No mocking
 - FastAPI test client with test DB (SQLite in-memory or dedicated test Postgres)
 - Assert 401 on missing `X-API-Key` for all protected routes
 - Assert 200 on `GET /api/health` with no auth
-- Assert `POST /api/stocks` with invalid ticker returns 400
-- Assert `POST /api/stocks` with duplicate ticker returns 409 or upserts cleanly
+- Assert `POST /api/stockalerts` with invalid ticker returns 400
+- Assert `POST /api/stockalerts` with duplicate ticker returns 409 or upserts cleanly
 
 ### Acceptance criteria
 
@@ -1606,7 +1723,7 @@ Hourly is only offered on the `1M` preset — Yahoo's intraday data window caps 
 
 ### Why (context)
 
-`get_price_history()` already exists (#4) but is currently unreachable from any API route — nothing wires it to the frontend. The user wants historical charts on individual portfolio holdings; since `Position` is ticker-based (not alert-based), the new route is scoped by ticker directly rather than nested under `/api/stocks/{alert_id}/...`, keeping it reusable for any ticker regardless of whether it also has a `StockAlert` or `Position` row.
+`get_price_history()` already exists (#4) but is currently unreachable from any API route — nothing wires it to the frontend. The user wants historical charts on individual portfolio holdings; since `Position` is ticker-based (not alert-based), the new route is scoped by ticker directly rather than nested under `/api/stockalerts/{alert_id}/...`, keeping it reusable for any ticker regardless of whether it also has a `StockAlert` or `Position` row.
 
 Preset buttons (not independent interval+range controls) were chosen specifically to make invalid combinations structurally impossible — mirrors the same design principle used elsewhere in this project (matching known data-source constraints instead of exposing footguns in the UI).
 
@@ -1729,6 +1846,8 @@ Layout confirmed against a real Wealthsimple reference screenshot (SOFI, 2026-07
 - Single yfinance `Ticker(ticker).info` call sources sections 4–7 in one shot (bid, ask, open, dayHigh/Low, volume, averageVolume, fiftyTwoWeekHigh/Low, exchange, marketCap, sharesOutstanding, trailingPE, dividendYield, dividendRate, exDividendDate, longBusinessSummary) — none of this is available on Finnhub's free tier (bid/ask/52-week/financials/dividends are Finnhub premium-only), so unlike #30's split, this endpoint is yfinance-only. Same instability caveat already documented for yfinance elsewhere applies here too.
 - Company name/logo stays on the existing Finnhub `/stock/profile2` call (already planned in #30) for the header, rather than duplicating via yfinance, to avoid two sources for the same fact.
 
+**Backend caching (added 2026-08-12):** `get_market_details()` gets its own short in-memory TTL cache (`{ticker: (details, fetched_at)}`, separate dict from `#19`'s `get_price()` cache — different call, different shape), TTL maybe 30-60s rather than `get_price()`'s 10-15s, since these fields (bid/ask/52-week/financials) don't move tick-to-tick the way a live price does. Matters more here than for `get_price()`: the underlying `Ticker(ticker).info` call is `#30`'s own words "the slow multi-request scrape" (`issues.md`'s `#30` section, "Known cost asymmetry") — the heaviest single call in this app's price-data surface, worth protecting from duplicate hits (multiple tabs on the same ticker's detail page, or a ticker landed on via more than one of the four navigation entry points in close succession) more than any of the cheaper REST calls.
+
 **`GET /api/market/{ticker}/details`** (new route): returns the bundled dict above.
 
 ### Scope notes (things that don't map cleanly)
@@ -1761,7 +1880,8 @@ A separate chart component (rather than extending #23's `StockHistoryChart` with
 - [x] Popular Assets' "View Details", each Holdings row, and each Watchlist row all navigate to `/market/{ticker}`
 - [x] `Nav`'s ticker search validates the entered ticker via `validate_ticker` before navigating; shows an error rather than navigating on an invalid symbol (currently navigates unconditionally)
 - [ ] `MarketDetailChart` presets (`1D`–`10Y`) fetch and render correctly, independent of #23's `StockHistoryChart`
-- [ ] "Notify me" creates a `StockAlert` for the viewed ticker via `POST /api/stocks`, `run_analysis` toggle included
+- [ ] "Notify me" creates a `StockAlert` for the viewed ticker via `POST /api/stockalerts`, `run_analysis` toggle included
+- [ ] `get_market_details()` results are cached in-memory (~30-60s) — confirmed via two near-simultaneous requests for the same ticker producing only one `Ticker(ticker).info` call
 - [ ] "Run TradingAgents" works on any ticker regardless of alert/holding/watchlist status, via `#35`'s `POST /api/analysis/{ticker}`
 - [ ] "View recent analysis report" is hidden when no `AnalysisResult` exists for the ticker; once one exists, shows the most recent result's status/JSON viewer, with older runs for the same ticker still reachable in the same section
 - [ ] News section renders headline/image/source/summary/link per article via Finnhub `/company-news`, fetched once on page load (works for both stocks and ETFs)
@@ -1771,7 +1891,7 @@ A separate chart component (rather than extending #23's `StockHistoryChart` with
 - **Logo**: not part of `get_market_details()` — yfinance has no logo field at all (confirmed live). Header logo renders the same static Finnhub URL as `#19`/`#30` (`<img src=".../stock_logo/{ticker}.png">`, unauthenticated, no backend call), with the existing colored-placeholder fallback for ETFs/misses.
 - **Live price while viewing**: REST fetch on page load + normal poll cadence (same convention as `#10.1`/`#10.4`/`#30`), not websocket. Considered temporarily subscribing the viewed ticker on `FinnhubClient`'s websocket for the duration of the page view; backed off — adds subscribe/unsubscribe lifecycle complexity tied to page mount/unmount, and competes with `#19`'s `Position`/`StockAlert` tickers for the free tier's shared ~50-symbol cap, for a "reading about a stock" use case that doesn't need sub-second freshness. If the viewed ticker happens to already be a `Position`/`StockAlert` ticker (already subscribed for other reasons), it incidentally benefits from the live cache too — a side effect, not something designed around.
 - **"Notify me" / "Run TradingAgents" buttons (added 2026-08-02):** header gets two new actions, both enabled for any ticker regardless of whether it's a current holding/watchlist item:
-  - **"Notify me"** — opens an inline quick-create form (target price, direction, `run_analysis` toggle) and calls the existing `POST /api/stocks` (`#8`), no new backend needed. If `run_analysis` is enabled, the already-built automatic path (`#7`/`#9`) takes over from there on threshold crossing — no page-level wiring beyond creating the alert.
+  - **"Notify me"** — opens an inline quick-create form (target price, direction, `run_analysis` toggle) and calls the existing `POST /api/stockalerts` (`#8`), no new backend needed. If `run_analysis` is enabled, the already-built automatic path (`#7`/`#9`) takes over from there on threshold crossing — no page-level wiring beyond creating the alert.
   - **"Run TradingAgents"** — always enabled, any ticker, no alert required. Calls `#35`'s `POST /api/analysis/{ticker}`, not `#9`'s alert-scoped route (which structurally can't run without a `StockAlert` id).
   - **"View recent analysis report" (refined 2026-08-02):** conditionally rendered — hidden entirely if `GET /api/analysis/{ticker}` (`#35`) returns zero results for this ticker, so pages for never-analyzed tickers don't show an empty section. Once at least one result exists, surfaces the most recent one prominently: status badge if `pending`/`running` (nothing to view yet, matches `#11`'s pattern), collapsible JSON viewer if `done`. Older runs for the same ticker (if any) stay accessible within this same section — `GET /api/analysis/{ticker}` already returns full per-ticker history in one call, no separate request or link out to `#11`'s global page needed.
 - **News section (added 2026-08-02):** new panel — headline, image, source, summary, link, per article — sourced from Finnhub `/company-news` (`FinnhubClient`), the same call `#30` already plans per ticker in its blended list. Confirmed live-tested working for both stocks and ETFs (`#30` planning session: 245 articles for AAPL, 115 for SPY, same shape/quality either way) — not a new endpoint to validate, just a new consumer of one already confirmed to work. Fetched once on page load alongside `get_market_details()`, not polled — news doesn't change fast enough to need `#30`'s 30s cadence, consistent with how the rest of this page's yfinance-sourced panels already work (fetch-once, no refresh loop).
@@ -2068,11 +2188,11 @@ Full implementation log: `.plan/34-pihole-dns-ad-blocking/`
 
 ### What to build
 
-`#9`'s manual trigger (`POST /api/stocks/{id}/analyze`) requires a `StockAlert` row's own database id — structurally can't run on a ticker that has no alert. This adds an **additive** ticker-keyed path alongside it, not a replacement, so `#9`'s already-shipped routes stay untouched.
+`#9`'s manual trigger (`POST /api/stockalerts/{id}/analyze`) requires a `StockAlert` row's own database id — structurally can't run on a ticker that has no alert. This adds an **additive** ticker-keyed path alongside it, not a replacement, so `#9`'s already-shipped routes stay untouched.
 
 - **Migration**: `AnalysisResult.stock_alert_id` becomes nullable (populated when created via an alert — automatic threshold-crossing or otherwise; null when triggered ad-hoc by ticker). Add `AnalysisResult.ticker: str` (`NOT NULL`, always populated regardless of path) — new Alembic migration, following the existing numbered-revision convention.
-- **`POST /api/analysis/{ticker}`** (new route): manual trigger, no `StockAlert` required. Returns 409 if an `AnalysisResult` with `status IN ("pending", "running")` already exists for this ticker — same guard `#9`'s route already has, just correctly ticker-scoped now instead of implicitly relying on alert-id uniqueness. Creates `AnalysisResult { ticker, stock_alert_id: null, status: "pending" }`, spawns `run_analysis()` (reused from `#9`, unchanged), returns 202 immediately — same behavior/shape as `POST /api/stocks/{id}/analyze`, just keyed by ticker instead of alert id.
-- **`GET /api/analysis/{ticker}`** (new route): all `AnalysisResult` rows for a ticker, `ORDER BY created_at DESC`, regardless of whether `stock_alert_id` is null or set. Supersedes `GET /api/stocks/{id}/analysis` for any new UI work, since that older route can't represent a ticker that never had an alert.
+- **`POST /api/analysis/{ticker}`** (new route): manual trigger, no `StockAlert` required. Returns 409 if an `AnalysisResult` with `status IN ("pending", "running")` already exists for this ticker — same guard `#9`'s route already has, just correctly ticker-scoped now instead of implicitly relying on alert-id uniqueness. Creates `AnalysisResult { ticker, stock_alert_id: null, status: "pending" }`, spawns `run_analysis()` (reused from `#9`, unchanged), returns 202 immediately — same behavior/shape as `POST /api/stockalerts/{id}/analyze`, just keyed by ticker instead of alert id.
+- **`GET /api/analysis/{ticker}`** (new route): all `AnalysisResult` rows for a ticker, `ORDER BY created_at DESC`, regardless of whether `stock_alert_id` is null or set. Supersedes `GET /api/stockalerts/{id}/analysis` for any new UI work, since that older route can't represent a ticker that never had an alert.
 - **`GET /api/analysis`** (new route, no ticker filter): all `AnalysisResult` rows across every ticker, `ORDER BY created_at DESC` — feeds `#11`'s global history view (see below).
 
 ### Why (context)
@@ -2086,7 +2206,7 @@ Surfaced while placing a "Run TradingAgents" button on `#31`'s ticker detail pag
 - [ ] `POST /api/analysis/{ticker}` returns 409 if already pending/running for that ticker
 - [ ] `GET /api/analysis/{ticker}` returns all results for a ticker regardless of `stock_alert_id`
 - [ ] `GET /api/analysis` returns all results across all tickers, unfiltered
-- [ ] Existing `#9` routes (`/api/stocks/{id}/analyze`, `/api/stocks/{id}/analysis`) continue working unmodified
+- [ ] Existing `#9` routes (`/api/stockalerts/{id}/analyze`, `/api/stockalerts/{id}/analysis`) continue working unmodified
 
 ---
 

@@ -5,44 +5,44 @@ already-built and already-tested routes.
 
 ## API Routes (existing, unchanged)
 
-### `GET /api/stocks`
-- **Handler:** `backend/app/api/stocks.py:31`
+### `GET /api/stockalerts`
+- **Handler:** `backend/app/api/stockalerts.py:31`
 - **Response:** `StockAlertResponse[]` — every alert, active and paused alike
-- Consumed via `/api/proxy/stocks` (generic catch-all proxy, no change)
+- Consumed via `/api/proxy/stockalerts` (generic catch-all proxy, no change)
 - Used by both `/portfolio` (all rows) and `/market/[ticker]` (client-side
   filtered to `alert.ticker === ticker`) — **same SWR key both places**, so
-  `mutate("/api/proxy/stocks")` after any mutation refreshes both.
+  `mutate("/api/proxy/stockalerts")` after any mutation refreshes both.
 
-### `POST /api/stocks`
-- **Handler:** `backend/app/api/stocks.py:71`
+### `POST /api/stockalerts`
+- **Handler:** `backend/app/api/stockalerts.py:71`
 - **Request:** `{ ticker, target_price, direction, run_analysis? }` — `alert_type`
   omitted, server defaults to `"buy_signal"` (never exposed in this UI)
 - **Error cases:** `400` invalid ticker (Finnhub validation failed) → toast;
   `409` an alert already exists for this ticker+direction+buy_signal → toast
-  (see `challenges.md` — the two-section dialog design should make this rare
+  (see `challenges.md` — the two-section sheet design should make this rare
   but not impossible under a race)
 
-### `PATCH /api/stocks/{alert_id}`
-- **Handler:** `backend/app/api/stocks.py:130`
+### `PATCH /api/stockalerts/{alert_id}`
+- **Handler:** `backend/app/api/stockalerts.py:130`
 - **Request:** partial — only `target_price`, `active`, `run_analysis` are
   ever sent by this UI (see "Footgun" below for why the payload type must
   not carry more than that)
 - **Error cases:** `404`, `409` (collision with another alert on update),
   `422` (direction/alert_type mismatch — unreachable from this UI since
-  `alert_type` is never sent and `direction` is fixed per dialog section)
+  `alert_type` is never sent and `direction` is fixed per sheet section)
 
-### `DELETE /api/stocks/{alert_id}`
-- **Handler:** `backend/app/api/stocks.py:226`
+### `DELETE /api/stockalerts/{alert_id}`
+- **Handler:** `backend/app/api/stockalerts.py:226`
 - 204 No Content, unsubscribes from Finnhub feed server-side automatically
 
 ### Out of scope, deliberately unused by this issue
-- `POST /api/stocks/{alert_id}/analyze` — manual TradingAgents trigger,
+- `POST /api/stockalerts/{alert_id}/analyze` — manual TradingAgents trigger,
   deferred to `#11`
-- `GET /api/stocks/{alert_id}/analysis` — deferred to `#11`
+- `GET /api/stockalerts/{alert_id}/analysis` — deferred to `#11`
 
 ## TypeScript Interfaces
 
-New file: `frontend/src/lib/api/stocks.ts`, mirroring `lib/api/items.ts`'s
+New file: `frontend/src/lib/api/stock-alerts.ts`, mirroring `lib/api/items.ts`'s
 shape (`request<T>()` helper, `ApiError` class, one function per mutation).
 
 ```typescript
@@ -106,5 +106,5 @@ as seen from the frontend is **at most one alert per (ticker, direction)** —
 confirmed with the user as the intended shape, not a simplification of a
 richer backend reality: exactly two possible alerts per ticker, "above" and
 "below", each independently created/edited/paused/deleted. The two-section
-dialog (`challenges.md`) models this directly rather than picking one alert
+sheet (`challenges.md`) models this directly rather than picking one alert
 out of an unbounded list.

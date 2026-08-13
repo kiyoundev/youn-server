@@ -33,4 +33,4 @@
 1. Revert the feature branch; `analysis.py`/`stocks.py` stub behavior (pending-only, never progresses) is simple enough to restore from git history.
 2. `alembic downgrade -1` if the migration (new `StockAlert` columns + dropped `stop_loss`) causes problems in a deployed DB.
 3. Remove the `/opt/tradingagents` volume mount from `docker-compose.yml` and restart if the host venv turns out to be ABI-incompatible inside the container — this fully disables the feature without touching code, since `run_analysis()` already treats a missing path as a handled failure, not a crash.
-4. Verify `GET /api/health` and `GET /api/stocks` still respond correctly post-rollback.
+4. Verify `GET /api/health` and `GET /api/stockalerts` still respond correctly post-rollback.

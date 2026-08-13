@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import { POLL_INTERVAL_MS } from "@/lib/polling";
 import StorageTile from "@/components/tiles/storage-tile";
 import type { BayStatus } from "@/components/ui/bay";
 import UptimeTile from "@/components/tiles/uptime-tile";
@@ -25,7 +26,7 @@ interface StorageData {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function Home() {
-  const { data, error, isLoading } = useSWR<StorageData>("/api/proxy/system/storage", fetcher, { refreshInterval: 30000 });
+  const { data, error, isLoading } = useSWR<StorageData>("/api/proxy/system/storage", fetcher, { refreshInterval: POLL_INTERVAL_MS });
 
   return (
     <main className="flex min-h-screen flex-col items-center gap-4">

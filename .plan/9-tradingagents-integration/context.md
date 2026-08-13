@@ -11,7 +11,7 @@ Original acceptance criteria carry over unchanged except where noted in "Target 
 ### Current State
 
 - `app/consumers/analysis.py` — stub. On `STOCK_THRESHOLD` with `run_analysis=true`, creates an `AnalysisResult(status="pending")` and stops. Nothing ever moves it past `pending`.
-- `app/api/stocks.py::analyze_stock_alert` — same stub behavior via the manual-trigger route. Creates the pending row, returns it, nothing runs.
+- `app/api/stockalerts.py::analyze_stock_alert` — same stub behavior via the manual-trigger route. Creates the pending row, returns it, nothing runs.
 - `app/models/analysis_result.py` — has `action`, `price_target`, `stop_loss` columns, none ever populated.
 - `app/models/stock_alert.py` — has `run_analysis: bool` only; no way to configure how an analysis run behaves per ticker.
 - No `services/trading_agents.py`, no `app/api/analysis.py`, no TradingAgents clone or venv on the host yet.
@@ -32,7 +32,7 @@ The issue spec says: *"Spawns `python run.py --ticker {ticker}` via `asyncio.cre
 
 **Execution environment:** the backend container is `linux/arm64` and doesn't have TradingAgents' deps (langgraph, yfinance, questionary, etc.), and `/opt/tradingagents` is a runtime volume mount (not baked into the image), so build-time `pip install` isn't possible. Decision: a host-managed venv at `/opt/tradingagents/.venv` (built once manually on the Pi), mounted in alongside the code. The backend execs that venv's `python` directly rather than the container's own interpreter. `POST /api/analysis/tradingagents/update` re-runs `pip install -r requirements.txt` in that venv right after `git pull`, so it never drifts from what's cloned.
 
-**Config split (per user decision):** `llm_provider` and `output_language` are global, set once via `.env` (`TRADINGAGENTS_LLM_PROVIDER`, `TRADINGAGENTS_OUTPUT_LANGUAGE`) since they're expected to never vary. `deep_think_llm`, `quick_think_llm`, `anthropic_effort`, `max_debate_rounds`, `max_risk_discuss_rounds`, and `analysts` are per-alert — new nullable columns on `StockAlert`, editable via the existing `POST`/`PATCH /api/stocks` routes. Null means "inherit the global env default" — the subprocess env is only overridden per-field when the alert has a non-null value set.
+**Config split (per user decision):** `llm_provider` and `output_language` are global, set once via `.env` (`TRADINGAGENTS_LLM_PROVIDER`, `TRADINGAGENTS_OUTPUT_LANGUAGE`) since they're expected to never vary. `deep_think_llm`, `quick_think_llm`, `anthropic_effort`, `max_debate_rounds`, `max_risk_discuss_rounds`, and `analysts` are per-alert — new nullable columns on `StockAlert`, editable via the existing `POST`/`PATCH /api/stockalerts` routes. Null means "inherit the global env default" — the subprocess env is only overridden per-field when the alert has a non-null value set.
 
 **`AnalysisResult.stop_loss` is dropped** (migration) rather than left permanently null — nothing in TradingAgents' output can ever populate it.
 
@@ -45,7 +45,7 @@ The issue spec says: *"Spawns `python run.py --ticker {ticker}` via `asyncio.cre
 - **`backend/app/services/trading_agents.py`** (new) — `run_analysis()`: spawns the wrapper subprocess, applies 30-min timeout with kill, parses stdout JSON, updates `AnalysisResult`, fires the follow-up push.
 - **`backend/app/api/analysis.py`** (new) — `GET /api/analysis/tradingagents/version`, `POST /api/analysis/tradingagents/update`.
 - **`backend/app/consumers/analysis.py`** — full wiring: flush for `AnalysisResult.id`, spawn `run_analysis()` as a background task.
-- **`backend/app/api/stocks.py`** — `analyze_stock_alert` also spawns `run_analysis()` after creating the pending row.
+- **`backend/app/api/stockalerts.py`** — `analyze_stock_alert` also spawns `run_analysis()` after creating the pending row.
 - **`backend/app/models/stock_alert.py`** — 6 new nullable columns.
 - **`backend/app/models/analysis_result.py`** — drop `stop_loss`, add `report_path`.
 - **`backend/app/schemas/stock_alert.py`**, **`backend/app/schemas/analysis_result.py`** — mirror the model changes.

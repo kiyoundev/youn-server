@@ -36,7 +36,7 @@
 ### 6. Routers
 - [x] `app/api/health.py` — `GET /api/health` → `{"status": "ok"}` (done in step 1)
 - [x] `app/api/items.py` — all 6 routes implemented exactly as planned (list, get-by-id, create with probe/override/RETAILER_MAP logic, update, delete, history)
-- [x] `app/api/stocks.py` — all 7 routes implemented exactly as planned, including `FinnhubClient` cache sync on create/update/delete and debug-only `/analyze`
+- [x] `app/api/stockalerts.py` — all 7 routes implemented exactly as planned, including `FinnhubClient` cache sync on create/update/delete and debug-only `/analyze`
 - [x] `app/api/poll.py` — both routes implemented with independent rate-limit state
 - [x] `app/main.py` — mounted `items`, `stocks`, `poll` with `dependencies=[Depends(verify_api_key)]`; removed old inline poll stub entirely
 - [x] Verified all 19 routes registered correctly (`/api/health` + 6 items + 7 stocks + 2 poll + FastAPI's own docs routes)
@@ -50,13 +50,13 @@
 - [x] Unit test: `POST /api/items` with explicit `scraper_type = "patchright"` → stored as-is, probe skipped
 - [x] Invalid `scraper_type` value → 422 handled automatically by Pydantic `Literal` validation (verified in step 2)
 - [x] Unit test: `POST /api/items` duplicate `url` → 409 via `IntegrityError` catch
-- [x] Unit test: `POST /api/stocks` with invalid ticker (mocked `validate_ticker` → `False`) → 400
-- [x] Unit test: `POST /api/stocks` duplicate `(ticker, direction)` → 409
+- [x] Unit test: `POST /api/stockalerts` with invalid ticker (mocked `validate_ticker` → `False`) → 400
+- [x] Unit test: `POST /api/stockalerts` duplicate `(ticker, direction)` → 409
 - [x] Unit test: `POST /api/poll/prices` / `/api/poll/stocks` called twice within 5 min → second call 429 (independent windows verified)
 - [x] Unit test: `poll_prices()` / `poll_stocks()` skip if lock already held (step 5)
 - [x] Real-DB verification: `DELETE /api/items/{id}` cascades `PriceHistory` rows (2 rows written, both gone after delete)
 - [x] Unit test: CORS preflight allows configured origin (`tests/test_auth_and_cors.py`)
-- [x] Unit test: `POST /api/stocks/{id}/analyze` — 409 if pending `AnalysisResult` exists for ticker; also covered null-`last_price` case
+- [x] Unit test: `POST /api/stockalerts/{id}/analyze` — 409 if pending `AnalysisResult` exists for ticker; also covered null-`last_price` case
 - [x] Real-DB smoke test: create → get → duplicate 409 → delete → 404, full round trip against dev Postgres, verified clean afterward
 
 **Final count: 158 tests passing** (up from 107 at branch start).

@@ -24,7 +24,7 @@ def _analysts_to_csv(analysts: list[str] | None) -> str | None:
 
 
 @router.get(
-    "/api/stocks",
+    "/api/stockalerts",
     response_model=list[StockAlertResponse],
     summary="List all stock alerts",
 )
@@ -39,7 +39,7 @@ async def list_stock_alerts(db: AsyncSession = Depends(get_db)) -> list[StockAle
 
 
 @router.get(
-    "/api/stocks/{alert_id}",
+    "/api/stockalerts/{alert_id}",
     response_model=StockAlertResponse,
     summary="Get a single stock alert",
 )
@@ -62,7 +62,7 @@ async def get_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db)) -> 
 
 
 @router.post(
-    "/api/stocks",
+    "/api/stockalerts",
     response_model=StockAlertResponse,
     status_code=201,
     summary="Create a new stock alert",
@@ -117,7 +117,7 @@ async def create_stock_alert(
 
 
 @router.patch(
-    "/api/stocks/{alert_id}",
+    "/api/stockalerts/{alert_id}",
     response_model=StockAlertResponse,
     summary="Update a stock alert",
     description=(
@@ -218,7 +218,7 @@ async def update_stock_alert(
 
 
 @router.delete(
-    "/api/stocks/{alert_id}",
+    "/api/stockalerts/{alert_id}",
     status_code=204,
     summary="Delete a stock alert",
     description="Also unsubscribes the ticker from the live Finnhub feed.",
@@ -246,7 +246,7 @@ async def delete_stock_alert(
 
 
 @router.post(
-    "/api/stocks/{alert_id}/analyze",
+    "/api/stockalerts/{alert_id}/analyze",
     response_model=AnalysisResultResponse,
     status_code=201,
     summary="Manually trigger a TradingAgents analysis",
@@ -254,7 +254,7 @@ async def delete_stock_alert(
         "Ignores the alert's own `run_analysis` flag and always runs. "
         "Spawns the TradingAgents subprocess as a background task and returns "
         "immediately with `status='pending'` — poll "
-        "`GET /api/stocks/{alert_id}/analysis` for progress/results."
+        "`GET /api/stockalerts/{alert_id}/analysis` for progress/results."
     ),
 )
 async def analyze_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db)) -> AnalysisResult:
@@ -306,7 +306,7 @@ async def analyze_stock_alert(alert_id: int, db: AsyncSession = Depends(get_db))
 
 
 @router.get(
-    "/api/stocks/{alert_id}/analysis",
+    "/api/stockalerts/{alert_id}/analysis",
     response_model=list[AnalysisResultResponse],
     summary="List TradingAgents analysis results for a stock alert",
 )

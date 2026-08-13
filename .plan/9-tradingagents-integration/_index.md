@@ -15,9 +15,9 @@
 
 ## Success Criteria
 <!-- From issue acceptance criteria (.doc/issues.md#L586-643), adjusted for the corrected architecture -->
-- [ ] `POST /api/stocks/{id}/analyze` returns 201 immediately; `AnalysisResult.status` transitions `pending → running → done`
-- [ ] `POST /api/stocks/{id}/analyze` returns 409 if analysis already running for that ticker
-- [ ] `GET /api/stocks/{id}/analysis` returns completed results with non-null `result` JSON and non-null `report_path` pointing at the on-disk markdown report tree
+- [ ] `POST /api/stockalerts/{id}/analyze` returns 201 immediately; `AnalysisResult.status` transitions `pending → running → done`
+- [ ] `POST /api/stockalerts/{id}/analyze` returns 409 if analysis already running for that ticker
+- [ ] `GET /api/stockalerts/{id}/analysis` returns completed results with non-null `result` JSON and non-null `report_path` pointing at the on-disk markdown report tree
 - [ ] `AnalysisConsumer` creates and runs analysis when `run_analysis = true` on a `STOCK_THRESHOLD` event
 - [ ] `AnalysisConsumer` skips silently when `run_analysis = false`
 - [ ] Follow-up Pushover push sent on analysis completion (separate from the immediate threshold alert from #7)
@@ -25,7 +25,7 @@
 - [ ] `/opt/tradingagents` path missing → `status = "failed"` with error logged, no crash
 - [ ] `GET /api/analysis/tradingagents/version` returns correct `behind_count` and `update_available`
 - [ ] `POST /api/analysis/tradingagents/update` runs `git pull` + venv `pip install -r requirements.txt`, returns new commit hash
-- [ ] Per-alert `deep_think_llm` / `quick_think_llm` / `anthropic_effort` / `max_debate_rounds` / `max_risk_discuss_rounds` / `analysts` are settable via `POST`/`PATCH /api/stocks` and honored by the subprocess run
+- [ ] Per-alert `deep_think_llm` / `quick_think_llm` / `anthropic_effort` / `max_debate_rounds` / `max_risk_discuss_rounds` / `analysts` are settable via `POST`/`PATCH /api/stockalerts` and honored by the subprocess run
 - [ ] Null per-alert fields fall back to the global `.env` defaults (or the library's own defaults)
 
 ## Estimated Effort
@@ -56,7 +56,7 @@ How:
   tracked background asyncio.Task, 30-min timeout with kill,
   per-alert env overrides, catch-all exception guard so a stuck
   subprocess can never leave a row wedged at status=running
-- Wire 'consumers/analysis.py' and 'api/stocks.py' analyze route
+- Wire 'consumers/analysis.py' and 'api/stock_alerts.py' analyze route
   to commit the AnalysisResult row before spawning the background
   task, avoiding a cross-connection visibility race under
   Postgres READ COMMITTED isolation

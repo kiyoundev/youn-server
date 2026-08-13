@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     tradingagents_hard_cap_seconds: int = 7200
 
     # ["../.env", ".env"]: root .env for local dev (run from backend/); Docker injects env vars directly so neither file needs to exist
-    model_config = SettingsConfigDict(env_file=["../.env", ".env"], env_file_encoding="utf-8")
+    # extra="ignore": root .env is shared across backend/frontend/pihole — vars meant for other
+    # services (e.g. PIHOLE_WEBPASSWORD) shouldn't fail Settings validation
+    model_config = SettingsConfigDict(env_file=["../.env", ".env"], env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()

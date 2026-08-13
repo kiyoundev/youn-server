@@ -46,31 +46,31 @@ Mounted via `dependencies=[Depends(verify_api_key)]` at `include_router()` time 
 - **Response:** `list[PriceHistoryResponse]`
 - **Error cases:** 404 if item not found
 
-### `GET /api/stocks`
+### `GET /api/stockalerts`
 - **Response:** `list[StockAlertResponse]`
 
-### `GET /api/stocks/{id}`
+### `GET /api/stockalerts/{id}`
 - **Response:** `StockAlertResponse`
 - **Error cases:** 404 if not found
 
-### `POST /api/stocks`
+### `POST /api/stockalerts`
 - **Request:** `StockAlertCreate` — `{ ticker, target_price, direction, run_analysis? }`
 - **Response:** `StockAlertResponse` (201)
 - **Logic:** validate via `FinnhubClient.validate_ticker()` (Finnhub REST only); on success, call `app.state.finnhub.add_alert(alert)` to sync the WS subscription cache
 - **Error cases:** 400 if ticker invalid, 409 if `(ticker, direction)` already exists (any `active` state)
 
-### `PATCH /api/stocks/{id}`
+### `PATCH /api/stockalerts/{id}`
 - **Request:** `StockAlertUpdate` — `{ target_price?, direction?, active?, run_analysis? }`
 - **Response:** `StockAlertResponse`
 - **Logic:** sync `app.state.finnhub` cache — `update_alert()` for field changes; if `active` flips to `false`, call `remove_alert()` (unsubscribe); if it flips to `true`, call `add_alert()` (resubscribe)
 - **Error cases:** 404 if not found
 
-### `DELETE /api/stocks/{id}`
+### `DELETE /api/stockalerts/{id}`
 - **Response:** 204 No Content
 - **Logic:** call `app.state.finnhub.remove_alert(id, ticker)` to unsubscribe
 - **Error cases:** 404 if not found
 
-### `POST /api/stocks/{id}/analyze`
+### `POST /api/stockalerts/{id}/analyze`
 - **Debug/manual-trigger tool** — the real usage path is automatic (threshold crossing + `run_analysis=true`, handled by `consumers/analysis.py`). This route exists to force-run the pipeline without waiting for a real crossing.
 - **Response:** `AnalysisResultResponse` (201)
 - **Logic:**
@@ -79,7 +79,7 @@ Mounted via `dependencies=[Depends(verify_api_key)]` at `include_router()` time 
   3. No live price fetch — use `alert.last_price` directly as `triggered_price` (may be `null` if this alert has never fired)
   4. Create `AnalysisResult(stock_alert_id, ticker, triggered_price=alert.last_price, status="pending")`, return it immediately
 
-### `GET /api/stocks/{id}/analysis?limit=10`
+### `GET /api/stockalerts/{id}/analysis?limit=10`
 - **Response:** `list[AnalysisResultResponse]`, ordered `created_at desc`
 - **Error cases:** 404 if alert not found
 

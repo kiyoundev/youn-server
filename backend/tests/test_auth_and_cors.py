@@ -67,7 +67,7 @@ def test_empty_configured_api_key_rejects_missing_header(monkeypatch) -> None:
 
 
 def test_stocks_route_missing_api_key_returns_401(client: TestClient) -> None:
-    response = client.get("/api/stocks")
+    response = client.get("/api/stockalerts")
     assert response.status_code == 401
 
 

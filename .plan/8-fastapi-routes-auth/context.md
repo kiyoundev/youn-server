@@ -6,7 +6,7 @@ Build all API routes, shared API key auth, CORS, and rate limiting on manual pol
 
 - `core/auth.py` — `verify_api_key` dependency, applied at router-mount time, `GET /api/health` exempt
 - `api/items.py` — GET/POST/PATCH/DELETE `/api/items`, GET `/api/items/{id}/history`
-- `api/stocks.py` — GET/POST/PATCH/DELETE `/api/stocks`
+- `api/stock_alerts.py` — GET/POST/PATCH/DELETE `/api/stockalerts`
 - `api/poll.py` — POST `/api/poll/prices`, POST `/api/poll/stocks`, rate-limited to 1 call / 5 min
 - `api/health.py` — GET `/api/health`
 
@@ -42,8 +42,8 @@ These were resolved through discussion before implementation — recorded here s
 5. **`validate_ticker` scope**: confirmed Finnhub REST is the sole validation source; yfinance is scoped to historical chart data only, never live validation. `api.md`'s "yfinance/Finnhub, 400 if both fail" wording was stale.
 6. **Concurrency guard added** (not in original issue scope): manual poll triggers had no lock against overlapping with the scheduled job or each other — this was an existing TODO comment in `main.py`. Added `asyncio.Lock` around both `poll_prices()` and a new `poll_stocks()`.
 7. **`poll_stocks()` didn't exist** — `/api/poll/stocks` had nothing to call. Designed as a manual REST fallback alongside the always-on Finnhub WebSocket: re-checks all actively-cached tickers via `FinnhubClient.get_price()` + reuses `_check_threshold()`, covering any price movement missed during a brief WS disconnect.
-8. **`/api/stocks/{id}/analyze` + `/api/stocks/{id}/analysis`** — present in `api.md` but absent from the issue's router list. Added to scope; `/analyze` only creates a pending `AnalysisResult` row (real TradingAgents analysis is still a future stub).
-9. **Singular GET endpoints added**: `GET /api/items/{id}` and `GET /api/stocks/{id}` were missing — only list + sub-resource routes existed. Added for REST completeness (PATCH/DELETE/sub-routes already assumed a known ID; these read it directly without listing everything).
+8. **`/api/stockalerts/{id}/analyze` + `/api/stockalerts/{id}/analysis`** — present in `api.md` but absent from the issue's router list. Added to scope; `/analyze` only creates a pending `AnalysisResult` row (real TradingAgents analysis is still a future stub).
+9. **Singular GET endpoints added**: `GET /api/items/{id}` and `GET /api/stockalerts/{id}` were missing — only list + sub-resource routes existed. Added for REST completeness (PATCH/DELETE/sub-routes already assumed a known ID; these read it directly without listing everything).
 10. **404 handling, 422 validation on `scraper_type`, 204 on DELETE** — none of these were explicitly specified; added as standard REST defaults.
 11. **Duplicate prevention added** (not in original issue scope): `UNIQUE(url)` on `WatchItem`, `UNIQUE(ticker, direction)` on `StockAlert` — enforced across all rows regardless of `active` state. Returns 409 on conflict. Frontend will do an optimistic client-side check against its already-loaded list; the DB constraint is the authoritative guard.
 
@@ -52,7 +52,7 @@ These were resolved through discussion before implementation — recorded here s
 ### Files Changed
 - **`app/core/auth.py`** (new) — `verify_api_key` dependency
 - **`app/api/items.py`** (new) — items router
-- **`app/api/stocks.py`** (new) — stocks router
+- **`app/api/stockalerts.py`** (new) — stocks router
 - **`app/api/poll.py`** (new) — poll trigger router
 - **`app/api/health.py`** (new) — health router
 - **`app/main.py`** — remove inline routes, mount new routers, add CORS middleware

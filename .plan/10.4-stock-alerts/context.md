@@ -37,9 +37,10 @@ Design worked out with the user during planning: keep the tile's existing
 visual shape (read-only, real data, no new mutation UI crammed into a
 compact row); put all `StockAlert` mutation UI on `/market/[ticker]`
 instead, behind a **new, separate alarm-icon button** (distinct from the
-existing star) that opens a dialog. See `schema.md` for the dialog's exact
-shape and `challenges.md` for why it has two independent sections rather
-than one form.
+existing star) that opens a sheet (`Sheet`, `side="right"` — corrected
+2026-08-12 from an originally-planned `Dialog`, see `implementation.md`'s
+Step 3 note for why). See `schema.md` for the sheet's exact shape and
+`challenges.md` for why it has two independent sections rather than one form.
 
 ## Component / Route Summary
 
@@ -53,53 +54,57 @@ than one form.
 - **`frontend/src/app/market/[ticker]/page.tsx:136-144`** — star icon toggles
   local `watchlisted` `useState`, seeded from `stockWatchlistData.some(...)`.
   No persistence, no backend call. **Out of scope, left as-is.**
-- **`backend/app/api/stocks.py`** — full CRUD already built and tested
+- **`backend/app/api/stockalerts.py`** — full CRUD already built and tested
   (`backend/tests/api/test_stocks_routes.py`, `backend/tests/test_stocks.py`):
-  `GET/POST /api/stocks`, `GET/PATCH/DELETE /api/stocks/{id}`, plus
-  `POST /api/stocks/{id}/analyze` and `GET /api/stocks/{id}/analysis`
+  `GET/POST /api/stockalerts`, `GET/PATCH/DELETE /api/stockalerts/{id}`, plus
+  `POST /api/stockalerts/{id}/analyze` and `GET /api/stockalerts/{id}/analysis`
   (both out of scope here — see below).
 - **`frontend/src/app/api/proxy/[...path]/route.ts`** — generic catch-all
-  proxy already relays `/api/proxy/stocks/*` with no changes needed (same
+  proxy already relays `/api/proxy/stockalerts/*` with no changes needed (same
   one `#36` built for `/api/proxy/items`).
 - **`frontend/src/lib/api/items.ts`** — the pattern this issue's new
-  `lib/api/stocks.ts` mirrors: typed request/response interfaces, one
+  `lib/api/stock-alerts.ts` mirrors: typed request/response interfaces, one
   function per mutation, a shared `ApiError` class, `request<T>()` helper.
 - No frontend test infra exists at all (`frontend/package.json` has no
   Vitest/RTL/Jest dependency or config) — `#29` is the ticket that adds it.
 
 ### Target State
 
-- `/portfolio`'s Watchlist Tile fetches real `StockAlert[]` via
-  `useSWR("/api/proxy/stocks", fetcher, { refreshInterval: 30_000 })`,
-  same visual row shape, paused rows dimmed, `+` button removed.
+<!-- Corrected 2026-08-12 — the Watchlist Tile bullet below was removed, not
+     updated: that work is entirely #10.6's now (tile reads /api/proxy/watchlist
+     + /api/proxy/market/quotes, never StockAlert). This issue's target state
+     is the detail-page sheet only. -->
 - `/market/[ticker]` gains a new alarm-icon button in the header (next to
-  the untouched star) whose fill/color reflects this ticker's alert state,
-  and a dialog (opened by that icon) with two independent sections —
-  above-alert and below-alert — each supporting create/edit/pause/delete/
-  `run_analysis`.
-- New `frontend/src/lib/api/stocks.ts` — typed API client, same shape as
-  `lib/api/items.ts`.
-- Both pages read the same SWR key (`/api/proxy/stocks`), so one
-  `mutate("/api/proxy/stocks")` after any mutation keeps tile and dialog
-  in sync without page reload — no SSE, no new proxy work.
+  the untouched star, which itself becomes real via `#10.6` rather than
+  staying decorative) whose fill/color reflects this ticker's alert state,
+  and a `Sheet` (opened by that icon, `side="right"` — same container
+  `watchlist/page.tsx` uses for a product's detail panel, not a `Dialog`;
+  see this file's earlier note) with two independent sections — above-alert
+  and below-alert — each supporting create/edit/pause/`run_analysis`, and
+  delete via a nested confirm `Dialog`.
+- New `frontend/src/lib/api/stock-alerts.ts` — typed API client, same shape as
+  `lib/api/items.ts`. Already built (`#10.4`'s Step 1).
+- `mutate("/api/proxy/stockalerts")` after any mutation keeps the sheet's own
+  state in sync without page reload — no SSE, no new proxy work. No longer a
+  claim about `/portfolio`'s tile, which doesn't read this endpoint at all.
 
 ## Impact & Risk
 
 ### Files Changed
-- **`frontend/src/app/portfolio/page.tsx`** — replace mock `stockWatchlistData`
-  usage in the Watchlist Tile with real SWR data; remove `+` button; dim
-  paused rows; null-guard `last_price`.
+<!-- portfolio/page.tsx removed from this list 2026-08-12 — that file's
+     Watchlist Tile work belongs to #10.6 now, not this issue. -->
 - **`frontend/src/app/market/[ticker]/page.tsx`** — add alarm-icon button +
-  two-section dialog; wire to real alert data for this ticker (filtered
+  two-section `Sheet`; wire to real alert data for this ticker (filtered
   client-side from the same SWR list, no per-ticker backend route exists).
-- **`frontend/src/lib/api/stocks.ts`** (new) — typed CRUD client.
+- **`frontend/src/lib/api/stock-alerts.ts`** (new) — typed CRUD client.
 - **`.doc/issues.md`** — rewrite #10.4's body/AC to match this design (see
   `_index.md`); add a one-line note to #37.
 
 ### Dependencies
 - **`lib/toast.ts`** — reused as-is for mutation success/error feedback.
-- **`components/ui/dialog.tsx`, `switch.tsx`, `input.tsx`, `button.tsx`** —
-  reused as-is, same components `watchlist/page.tsx` already uses.
+- **`components/ui/sheet.tsx`, `dialog.tsx` (delete-confirm only), `switch.tsx`,
+  `input.tsx`, `button.tsx`** — reused as-is, same components `watchlist/page.tsx`
+  already uses for its product detail panel + delete confirmation.
 - **`lib/mock-portfolio.ts`** — `stockWatchlistData` and its
   `StockAlertData`/`StockAlertDirection` types become dead once the tile
   switches to real data; `holdingsData` (Position mock, `#19`'s concern)

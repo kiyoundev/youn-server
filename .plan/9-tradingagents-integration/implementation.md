@@ -11,7 +11,7 @@
 - [ ] `app/models/stock_alert.py` — add 6 nullable columns: `deep_think_llm: Mapped[str | None]`, `quick_think_llm: Mapped[str | None]`, `anthropic_effort: Mapped[str | None]`, `max_debate_rounds: Mapped[int | None]`, `max_risk_discuss_rounds: Mapped[int | None]`, `analysts: Mapped[str | None]` (CSV).
 - [ ] `app/models/analysis_result.py` — remove `stop_loss` column, add `report_path: Mapped[str | None]`.
 - [ ] Alembic migration `0006_stock_alert_tradingagents_config.py`: `add_column` x6 on `stock_alerts`, `drop_column("analysis_results", "stop_loss")`, `add_column("analysis_results", "report_path")`.
-- [ ] `app/schemas/stock_alert.py` — add the 6 fields to `StockAlertCreate`, `StockAlertUpdate`, `StockAlertResponse`. `analysts` as `list[Literal["market","social","news","fundamentals"]] | None` in the API layer; convert to/from the CSV column in the route handlers (small `_analysts_to_csv` / `_csv_to_analysts` helpers, or a computed property on the ORM model — pick whichever keeps `api/stocks.py` free of string-splitting noise).
+- [ ] `app/schemas/stock_alert.py` — add the 6 fields to `StockAlertCreate`, `StockAlertUpdate`, `StockAlertResponse`. `analysts` as `list[Literal["market","social","news","fundamentals"]] | None` in the API layer; convert to/from the CSV column in the route handlers (small `_analysts_to_csv` / `_csv_to_analysts` helpers, or a computed property on the ORM model — pick whichever keeps `api/stock_alerts.py` free of string-splitting noise).
 - [ ] `app/schemas/analysis_result.py` — remove `stop_loss` field, add `report_path: str | None`.
 - [ ] `app/core/config.py` — add `tradingagents_path: str = "/opt/tradingagents"`, `tradingagents_venv_python: str = "/opt/tradingagents/.venv/bin/python"`, `tradingagents_results_dir: str = "/opt/tradingagents/data"`.
 
@@ -42,7 +42,7 @@
 
 ### 5. Wiring — consumer + manual route
 - [ ] `app/consumers/analysis.py`: after `session.add(AnalysisResult(...))`, `await session.flush()` to get `.id` before the function returns (dispatcher commits the session afterward — flush is enough to assign the PK without duplicating the commit). Then `trading_agents.spawn(trading_agents.run_analysis(alert, analysis.id))`.
-- [ ] `app/api/stocks.py::analyze_stock_alert`: after `await db.commit()` on the new `AnalysisResult`, `trading_agents.spawn(trading_agents.run_analysis(alert, analysis.id))` before `return analysis`.
+- [ ] `app/api/stockalerts.py::analyze_stock_alert`: after `await db.commit()` on the new `AnalysisResult`, `trading_agents.spawn(trading_agents.run_analysis(alert, analysis.id))` before `return analysis`.
 
 ### 6. New router — version/update
 - [ ] `app/api/analysis.py`:
@@ -58,11 +58,11 @@
 ### 8. Testing & validation
 - [ ] Manual test: `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` — confirm the host venv is importable from inside the container before wiring anything else (verifies challenges.md #2, ABI compat).
 - [ ] Manual test: blank/bad `ANTHROPIC_API_KEY`, trigger analysis — confirm fast, visible failure (`status = "failed"`, error logged) rather than a hang (verifies challenges.md #3).
-- [ ] Manual test: `POST /api/stocks/{id}/analyze` on a real alert with `ANTHROPIC_API_KEY` set — confirm `status` goes `pending → running → done` and `result` is populated.
+- [ ] Manual test: `POST /api/stockalerts/{id}/analyze` on a real alert with `ANTHROPIC_API_KEY` set — confirm `status` goes `pending → running → done` and `result` is populated.
 - [ ] Manual test: kill the subprocess mid-run (or set timeout artificially low) — confirm `status = "failed"`, process is actually reaped (no zombie).
 - [ ] Manual test: temporarily rename `/opt/tradingagents` — confirm `status = "failed"`, no unhandled exception in logs.
-- [ ] Manual test: two overlapping `POST /api/stocks/{id}/analyze` calls for the same ticker — second returns 409 (existing unique-index guard from #8, unaffected by this issue).
-- [ ] Manual test: `PATCH /api/stocks/{id}` with `anthropic_effort=null` after previously setting `"high"` — confirm the next run falls back to the global env default (no per-alert env override applied).
+- [ ] Manual test: two overlapping `POST /api/stockalerts/{id}/analyze` calls for the same ticker — second returns 409 (existing unique-index guard from #8, unaffected by this issue).
+- [ ] Manual test: `PATCH /api/stockalerts/{id}` with `anthropic_effort=null` after previously setting `"high"` — confirm the next run falls back to the global env default (no per-alert env override applied).
 - [ ] Manual test: `GET /api/analysis/tradingagents/version` before and after a manual `git commit` on a test branch upstream (or a stale local clone) — confirm `behind_count` and `update_available` are accurate.
 - [ ] Edge case: TradingAgents wrapper script prints non-JSON to stdout (e.g. a stray `print()` from a dependency) — confirm `status = "failed"` rather than a silent wrong-parse.
 

@@ -157,6 +157,9 @@ export default function PortfolioPage() {
   const changeSign = isChangeZero ? "" : isChangeUp ? "+" : "-";
   const changeColor = isChangeZero ? "var(--status-neutral)" : isChangeUp ? "var(--status-success)" : "var(--status-error)";
 
+  // Tracks the Popular Assets carousel's own prev/next button state — synced
+  // to popularAssetsApi (embla), not to anything this page owns. Re-subscribes
+  // only when the api instance itself changes (mounts once carousel is ready).
   useEffect(() => {
     if (!popularAssetsApi) return;
     const onSelect = () => {
@@ -172,6 +175,11 @@ export default function PortfolioPage() {
     };
   }, [popularAssetsApi]);
 
+  // "q" cycles the chart's date-range selector — a page-wide window listener,
+  // unrelated to the carousel above (different target, different lifecycle:
+  // attaches once on mount, [] dep, never re-subscribes). Kept as its own
+  // effect rather than merged with the one above so this doesn't get torn
+  // down/re-attached every time popularAssetsApi changes.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && ["INPUT", "TEXTAREA"].includes(e.target.tagName)) {

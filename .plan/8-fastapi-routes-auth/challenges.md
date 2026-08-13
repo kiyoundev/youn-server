@@ -10,7 +10,7 @@
 
 4. **Patchright resource pressure on Pi 5** — if a manual `/api/poll/prices` trigger overlaps with the scheduled 6h job (prevented by the new lock) or if multiple Patchright-requiring items exist, sequential scraping (not parallel) is the only thing keeping memory bounded. The lock prevents *concurrent poll cycles*, but a single cycle with many Patchright items is still slow — not addressed by this issue, just noting it's not a regression either.
 
-5. ~~**`POST /api/stocks/{id}/analyze` price source can fail**~~ **Resolved:** this route is a debug/manual-trigger tool only — the real usage path is automatic (threshold crossing + `run_analysis=true`). No live Finnhub fetch at all; uses `alert.last_price` directly as `triggered_price`, which required making `AnalysisResult.triggered_price` nullable (it can be `null` for an alert that's never fired). Simpler than the live-fetch design, and matches the route's actual purpose.
+5. ~~**`POST /api/stockalerts/{id}/analyze` price source can fail**~~ **Resolved:** this route is a debug/manual-trigger tool only — the real usage path is automatic (threshold crossing + `run_analysis=true`). No live Finnhub fetch at all; uses `alert.last_price` directly as `triggered_price`, which required making `AnalysisResult.triggered_price` nullable (it can be `null` for an alert that's never fired). Simpler than the live-fetch design, and matches the route's actual purpose.
 
 6. **Rate-limit state is in-memory, per-process** — both `/api/poll/prices` and `/api/poll/stocks` rate-limit timestamps reset on server restart. This is consistent with the issue's original design ("in-memory timestamp") and acceptable for a single-instance Pi deployment, but worth remembering if the app is ever made multi-process.
 

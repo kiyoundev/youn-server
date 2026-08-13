@@ -11,7 +11,7 @@ class AnalysisResult(Base):
     __tablename__ = "analysis_results"
     __table_args__ = (
         # at most one pending/running analysis per ticker at a time — makes the
-        # POST /api/stocks/{id}/analyze 409 guard race-safe, not just an
+        # POST /api/stockalerts/{id}/analyze 409 guard race-safe, not just an
         # app-level check-then-insert
         Index(
             "uq_analysis_results_ticker_running",
