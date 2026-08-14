@@ -11,7 +11,7 @@ feature branch/PR.
 | Step | Status | File |
 |------|--------|------|
 | Context & Planning | ✅ Done | [context.md](context.md) |
-| Implementation | ⬜ Not started | [implementation.md](implementation.md) |
+| Implementation | ✅ Done | [implementation.md](implementation.md) |
 | Challenges | ✅ Done | [challenges.md](challenges.md) |
 | Review | ⬜ Not started | [review.md](review.md) |
 

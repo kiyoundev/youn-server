@@ -1305,40 +1305,69 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 
 ---
 
-## [ ] Issue #13.1 — Tailscale Subnet Routing (NAS Postgres Reachability)
+## [x] Issue #13.1 — Tailscale Subnet Routing (NAS Postgres Reachability)
 
 **Type:** ops / HITL
-**Estimate:** ~0.75h
+**Estimate:** ~0.75h (actual: ~2h — extra time locating the correct NAS Postgres instance among two running instances, see below)
 **Blocked by:** None — Tailscale already installed/joined on Pi and dev Mac per `#13`'s provisioning note
 **HITL reason:** Requires Pi SSH access, Synology DSM access, and a one-time click in the Tailscale admin console.
 
-### What to build
+### What was built
 
-Off the home LAN, `DATABASE_URL` (`<nas-ip>:5433`, the NAS) isn't
+Off the home LAN, `DATABASE_URL` (`<nas-ip>:5433`, the NAS) wasn't
 reachable even with Tailscale joined, since Tailscale only makes the Pi
-itself reachable — not other devices on the Pi's LAN. Configure the Pi as a
-Tailscale subnet router advertising just the NAS host (`<nas-ip>/32`, not
-the full `/24` — least-privilege: a compromised tailnet device should only
-gain a path to the Postgres port, not the whole home LAN), and tighten the
-NAS's `pg_hba.conf` from `0.0.0.0/0` to `<lan-subnet>/24` (closing the TODO left
-open since `#1.5`), relying on Tailscale's default SNAT behavior so
-Postgres sees the connection as coming from the Pi's LAN IP.
+itself reachable — not other devices on the Pi's LAN. Configured the Pi as
+a Tailscale subnet router advertising just the NAS host (`<nas-ip>/32`,
+not the full `/24` — least-privilege: a compromised tailnet device should
+only gain a path to the Postgres port, not the whole home LAN), persisted
+via `tailscale set --advertise-routes=<nas-ip>/32` (not `up`, to avoid
+disturbing the Pi's existing auth session) and approved in the Tailscale
+admin console. `net.ipv4.ip_forward=1` persisted via
+`/etc/sysctl.d/99-tailscale.conf`. Both route and IP forwarding confirmed
+to survive a real `sudo reboot` of the Pi, not just the current boot
+session.
 
-See `.plan/13.1-tailscale-subnet-routing/` for the full step-by-step runbook
-(IP forwarding persistence, route advertisement + admin console approval,
-Mac-side accept-routes check, `pg_hba.conf` edit, and on-LAN regression
-testing).
+**NAS runs two separate Postgres instances** — discovered while locating
+`pg_hba.conf`, cost most of the extra time above. `youn_server` (the one
+`DATABASE_URL` actually uses) runs as the `sc-postgresql` service account
+from `/volume1/@appdata/postgresql/data`, listening on `0.0.0.0:5433`. A
+second, unrelated instance runs as a plain `postgres` account from
+`/var/services/pgsql`, listening on `127.0.0.1:5432` only (not externally
+reachable, not touched by this issue). The first `pg_hba.conf` found by
+directory-name guessing (`/volume1/@database/pgsql/`) belonged to neither
+— confirm the live one via `ps aux | grep postgres` (check the `-D` data
+dir) or `netstat -tlnp | grep 543`, don't assume the path from `#1.5`'s
+docs.
+
+**Correction to this issue's original text:** `pg_hba.conf`'s prior state
+was actually `<lan-subnet>/22`, not `0.0.0.0/0` as originally written above —
+someone had already partially tightened it at some point, undocumented.
+Tightened further to `<lan-subnet>/24` (matches the Pi's LAN subnet, needed
+because Tailscale's subnet-router SNAT makes off-LAN connections appear to
+originate from the Pi's LAN IP) and confirmed via config reload
+(`pg_ctl reload`, not a full package restart — sufficient for a
+`pg_hba.conf`-only change, avoids dropping existing connections).
+
+**Bonus hardening (not in original acceptance criteria):** upgraded the
+`youn_server` rule's auth method from `md5` to `scram-sha-256` — the
+`youn` role's stored password was already SCRAM-hashed (`password_encryption`
+defaults to `scram-sha-256` on modern Postgres), so this was a one-line
+`pg_hba.conf` edit + reload, no password reset needed.
+
+See `.plan/13.1-tailscale-subnet-routing/` for the full step-by-step runbook.
 
 ### Acceptance criteria
 
-- [ ] Pi advertises route `<nas-ip>/32` via Tailscale, persisted across reboots (`tailscale set --advertise-routes=...`, not just `up`)
-- [ ] Route approved in Tailscale admin console
-- [ ] `net.ipv4.ip_forward=1` set persistently on the Pi (`/etc/sysctl.d/`, survives `sudo reboot`)
-- [ ] Dev Mac has "Accept subnet routes" enabled and can reach `<nas-ip>:5433` while off the home LAN
-- [ ] `backend/.venv/bin/uvicorn app.main:app --reload` starts cleanly off-LAN with `DATABASE_URL` unchanged
-- [ ] NAS `pg_hba.conf` tightened to `<lan-subnet>/24` for the `youn_server` database; PostgreSQL package restarted
-- [ ] Existing on-LAN Postgres access (from the Pi, from a Mac on the LAN) still works after the `pg_hba.conf` change
-- [ ] Route and IP forwarding both survive a `sudo reboot` of the Pi
+- [x] Pi advertises route `<nas-ip>/32` via Tailscale, persisted across reboots (`tailscale set --advertise-routes=...`, not just `up`)
+- [x] Route approved in Tailscale admin console
+- [x] `net.ipv4.ip_forward=1` set persistently on the Pi (`/etc/sysctl.d/`, survives `sudo reboot`)
+- [x] Dev Mac has "Accept subnet routes" enabled and can reach `<nas-ip>:5433` while off the home LAN
+- [x] `backend/.venv/bin/uvicorn app.main:app --reload` starts cleanly off-LAN with `DATABASE_URL` unchanged
+- [x] NAS `pg_hba.conf` tightened to `<lan-subnet>/24` for the `youn_server` database; PostgreSQL config reloaded
+- [x] Existing on-LAN Postgres access (from the Pi, from a Mac on the LAN) still works after the `pg_hba.conf` change
+- [x] Route and IP forwarding both survive a `sudo reboot` of the Pi
+
+Full implementation log: `.plan/13.1-tailscale-subnet-routing/`
 
 ---
 
