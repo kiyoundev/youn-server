@@ -79,6 +79,27 @@ export function subscribeToListingEvents(handlers: SubscribeHandlers): () => voi
   }
 
   const abortController = new AbortController();
+
+  // Web Locks API is only exposed in secure contexts (HTTPS or localhost).
+  // The app is now served over HTTPS via `tailscale serve` (443, proxying
+  // to this container's plain-HTTP :3000, which docker-compose.yml binds
+  // to localhost only so it can't be reached directly), so navigator.locks
+  // should always exist in practice — this guard is defense-in-depth, not
+  // the primary fix, in case that config ever regresses. Without it, a
+  // missing navigator.locks would throw synchronously inside this effect,
+  // crashing the whole page. Degrade to "every tab connects directly"
+  // instead of leader/follower dedup — loses the connection-budget savings
+  // this module exists for, but that's strictly better than a hard crash.
+  if (typeof navigator === "undefined" || !navigator.locks) {
+    connect();
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      es?.close();
+      channel.close();
+    };
+  }
+
   navigator.locks
     .request(LOCK_NAME, { signal: abortController.signal }, () => {
       // Holds the lock until this promise resolves — resolved only by

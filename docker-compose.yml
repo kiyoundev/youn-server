@@ -19,7 +19,12 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
     ports:
-      - "3000:3000"
+      # Bound to localhost only — `tailscale serve` (443, HTTPS) proxies to
+      # this from the Pi's own host process, but nothing on LAN/Tailscale
+      # can reach plain-HTTP :3000 directly anymore. Closes the insecure
+      # path that crashed the watchlist page (Web Locks API needs a secure
+      # context) instead of relying solely on sse-leader.ts's fallback guard.
+      - "127.0.0.1:3000:3000"
     depends_on:
       - backend
     networks:
