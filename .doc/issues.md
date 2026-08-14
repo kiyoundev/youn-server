@@ -1238,7 +1238,7 @@ Decided: manual entry for now. No new external dependency, no credential-securit
 
 **Type:** ops / HITL
 **Estimate:** ~3h
-**Blocked by:** #8, #10.1–#10.5
+**Blocked by:** #8, #10.1–#10.5, #13.2
 **HITL reason:** Requires physical Raspberry Pi, Tailscale account, and manual SSH access for initial setup.
 
 ### Local dev note (2026-07-22)
@@ -1263,9 +1263,9 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 
 - Install Tailscale on Pi: `curl -fsSL https://tailscale.com/install.sh | sh && tailscale up`
 - Install Tailscale on iPhone, iPad, Mac — all joined to same Tailscale account
-- Install Pushover app on each Apple device (iOS: $4.99 one-time, macOS: $4.99 one-time)
-- Copy `.env` to Pi; `chmod 600 .env`
-- Populate `.env` with `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `API_KEY`, `FINNHUB_API_KEY`, `ANTHROPIC_API_KEY`, `TRADINGAGENTS_LLM_PROVIDER=anthropic`, `TRADINGAGENTS_OUTPUT_LANGUAGE=English`
+- Install Pushover app on each Apple device (iOS: $4.99 one-time, macOS: $4.99 one-time — repurchase, trial previously expired)
+- Copy `.env` to Pi (already email-free per `#13.2`); `chmod 600 .env`
+- Populate `.env` with `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY`, `API_KEY`, `FINNHUB_API_KEY`, `ANTHROPIC_API_KEY`, `TRADINGAGENTS_LLM_PROVIDER=anthropic`, `TRADINGAGENTS_OUTPUT_LANGUAGE=English`
 - No volume mounts needed for DB — PostgreSQL runs on Synology NAS (native DSM package, persistent storage on RAID)
 - **TradingAgents host setup** (validated on Mac during dev — identical steps on Pi, only the machine changes):
   ```bash
@@ -1298,7 +1298,6 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 - [ ] `.env` has `chmod 600`
 - [ ] `GET /api/health` reachable from iPhone over Tailscale (Tailscale IP)
 - [ ] Pushover push notification received on iPhone, iPad, Mac, and Apple Watch
-- [ ] Email alert received at configured Gmail address
 - [ ] PostgreSQL on NAS reachable from Pi after `docker compose restart` (verify via `GET /api/health`)
 - [ ] `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` succeeds
 - [ ] `POST /api/stockalerts/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
@@ -1314,45 +1313,13 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 
 ### What was built
 
-Off the home LAN, `DATABASE_URL` (`<nas-ip>:5433`, the NAS) wasn't
-reachable even with Tailscale joined, since Tailscale only makes the Pi
-itself reachable — not other devices on the Pi's LAN. Configured the Pi as
-a Tailscale subnet router advertising just the NAS host (`<nas-ip>/32`,
-not the full `/24` — least-privilege: a compromised tailnet device should
-only gain a path to the Postgres port, not the whole home LAN), persisted
-via `tailscale set --advertise-routes=<nas-ip>/32` (not `up`, to avoid
-disturbing the Pi's existing auth session) and approved in the Tailscale
-admin console. `net.ipv4.ip_forward=1` persisted via
-`/etc/sysctl.d/99-tailscale.conf`. Both route and IP forwarding confirmed
-to survive a real `sudo reboot` of the Pi, not just the current boot
-session.
+Off the home LAN, `DATABASE_URL` (`<nas-ip>:5433`, the NAS) wasn't reachable even with Tailscale joined, since Tailscale only makes the Pi itself reachable — not other devices on the Pi's LAN. Configured the Pi as a Tailscale subnet router advertising just the NAS host (`<nas-ip>/32`, not the full `/24` — least-privilege: a compromised tailnet device should only gain a path to the Postgres port, not the whole home LAN), persisted via `tailscale set --advertise-routes=<nas-ip>/32` (not `up`, to avoid disturbing the Pi's existing auth session) and approved in the Tailscale admin console. `net.ipv4.ip_forward=1` persisted via `/etc/sysctl.d/99-tailscale.conf`. Both route and IP forwarding confirmed to survive a real `sudo reboot` of the Pi, not just the current boot session.
 
-**NAS runs two separate Postgres instances** — discovered while locating
-`pg_hba.conf`, cost most of the extra time above. `youn_server` (the one
-`DATABASE_URL` actually uses) runs as the `sc-postgresql` service account
-from `/volume1/@appdata/postgresql/data`, listening on `0.0.0.0:5433`. A
-second, unrelated instance runs as a plain `postgres` account from
-`/var/services/pgsql`, listening on `127.0.0.1:5432` only (not externally
-reachable, not touched by this issue). The first `pg_hba.conf` found by
-directory-name guessing (`/volume1/@database/pgsql/`) belonged to neither
-— confirm the live one via `ps aux | grep postgres` (check the `-D` data
-dir) or `netstat -tlnp | grep 543`, don't assume the path from `#1.5`'s
-docs.
+**NAS runs two separate Postgres instances** — discovered while locating `pg_hba.conf`, cost most of the extra time above. `youn_server` (the one `DATABASE_URL` actually uses) runs as the `sc-postgresql` service account from `/volume1/@appdata/postgresql/data`, listening on `0.0.0.0:5433`. A second, unrelated instance runs as a plain `postgres` account from `/var/services/pgsql`, listening on `127.0.0.1:5432` only (not externally reachable, not touched by this issue). The first `pg_hba.conf` found by directory-name guessing (`/volume1/@database/pgsql/`) belonged to neither — confirm the live one via `ps aux | grep postgres` (check the `-D` data dir) or `netstat -tlnp | grep 543`, don't assume the path from `#1.5`'s docs.
 
-**Correction to this issue's original text:** `pg_hba.conf`'s prior state
-was actually `<lan-subnet>/22`, not `0.0.0.0/0` as originally written above —
-someone had already partially tightened it at some point, undocumented.
-Tightened further to `<lan-subnet>/24` (matches the Pi's LAN subnet, needed
-because Tailscale's subnet-router SNAT makes off-LAN connections appear to
-originate from the Pi's LAN IP) and confirmed via config reload
-(`pg_ctl reload`, not a full package restart — sufficient for a
-`pg_hba.conf`-only change, avoids dropping existing connections).
+**Correction to this issue's original text:** `pg_hba.conf`'s prior state was actually `<lan-subnet>/22`, not `0.0.0.0/0` as originally written above — someone had already partially tightened it at some point, undocumented. Tightened further to `<lan-subnet>/24` (matches the Pi's LAN subnet, needed because Tailscale's subnet-router SNAT makes off-LAN connections appear to originate from the Pi's LAN IP) and confirmed via config reload (`pg_ctl reload`, not a full package restart — sufficient for a `pg_hba.conf`-only change, avoids dropping existing connections).
 
-**Bonus hardening (not in original acceptance criteria):** upgraded the
-`youn_server` rule's auth method from `md5` to `scram-sha-256` — the
-`youn` role's stored password was already SCRAM-hashed (`password_encryption`
-defaults to `scram-sha-256` on modern Postgres), so this was a one-line
-`pg_hba.conf` edit + reload, no password reset needed.
+**Bonus hardening (not in original acceptance criteria):** upgraded the `youn_server` rule's auth method from `md5` to `scram-sha-256` — the `youn` role's stored password was already SCRAM-hashed (`password_encryption` defaults to `scram-sha-256` on modern Postgres), so this was a one-line `pg_hba.conf` edit + reload, no password reset needed.
 
 See `.plan/13.1-tailscale-subnet-routing/` for the full step-by-step runbook.
 
@@ -1368,6 +1335,35 @@ See `.plan/13.1-tailscale-subnet-routing/` for the full step-by-step runbook.
 - [x] Route and IP forwarding both survive a `sudo reboot` of the Pi
 
 Full implementation log: `.plan/13.1-tailscale-subnet-routing/`
+
+---
+
+## [x] Issue #13.2 — Drop Email Notification Channel
+
+**Type:** chore
+**Estimate:** ~0.25h (actual: ~0.25h, matched estimate)
+**Blocked by:** None
+
+### What was built
+
+Remove the email/SMTP notification path entirely from `notifications.py`. `notify_email` already defaults to `False` (effectively unused today) and email is no longer wanted as a channel going forward. Pushover remains the sole notification provider — evaluated switching to a self-hosted `ntfy` server instead (driven by Pushover's trial ending), but decided against it for this project specifically: self-hosted `ntfy` on iOS requires a two-hop delivery mechanism (silent poll-trigger via `ntfy.sh`'s relay, then the phone fetching real content from the self-hosted server directly) that's structurally less reliable than Pushover's single-hop direct alert push, not worth the tradeoff for stock/price alerts where a delayed notification has real cost. `ntfy`'s self-hosting appeal remains relevant to a separate, unrelated future feature elsewhere (a different project's notification approve/deny buttons) — decided independently of this repo, whenever that gets built.
+
+- Remove `_send_email_sync`, `send_email` from `backend/app/services/notifications.py`; remove the now-unused `smtplib`, `email.mime.multipart`, `email.mime.text`, `html.escape` imports
+- Remove `settings.notify_email`'s branch in `send_alert()`
+- Remove `gmail_user`, `gmail_app_password`, `notify_email` from `backend/app/core/config.py`
+- Remove `GMAIL_USER`, `GMAIL_APP_PASSWORD` from `.env.example`
+- Update `.doc/architecture.md`: drop the SMTP/email half of `notify.py`'s "Pushover + SMTP dispatch" description — single-channel now
+
+### Acceptance criteria
+
+- [x] No email/SMTP code path remains in `notifications.py`; `smtplib`/`email.mime`/`html.escape` imports removed
+- [x] `config.py`/`.env.example` no longer reference `GMAIL_*`/`notify_email`
+- [x] `architecture.md` reflects Pushover as the sole notification channel
+- [x] Existing Pushover-path behavior in `send_alert()` unaffected — full test suite (272 tests) passes
+
+**Bonus fixes (found during this issue, unrelated to email):** `.env.example`/`.env` had `PUSHOVER_APP_TOKEN` — a pre-existing typo, `config.py`'s actual field is `pushover_api_token` (maps to `PUSHOVER_API_TOKEN`); corrected. `architecture.md` also had three stray "Pi 5" references (should be Pi 4B, per the correction already made in `#13`/`[[project-hardware]]`) — corrected.
+
+Full implementation log: `.plan/13.2-drop-email-notifications/`
 
 ---
 

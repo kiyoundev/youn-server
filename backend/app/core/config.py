@@ -10,11 +10,7 @@ class Settings(BaseSettings):
     pushover_api_token: str = ""
     pushover_user_key: str = ""
 
-    gmail_user: str = ""
-    gmail_app_password: str = ""
-
     notify_pushover: bool = True
-    notify_email: bool = False
 
     finnhub_api_key: str = ""
 

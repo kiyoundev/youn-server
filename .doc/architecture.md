@@ -2,7 +2,7 @@
 
 ## Overview
 
-Self-hosted notification system running on a Raspberry Pi 5. Watches product prices and stock tickers, sends alerts via Pushover (iPhone, iPad, Mac, Apple Watch) and email. When a stock threshold is crossed, optionally triggers AI analysis via TradingAgents as a decoupled downstream reaction.
+Self-hosted notification system running on a Raspberry Pi 4B. Watches product prices and stock tickers, sends alerts via Pushover (iPhone, iPad, Mac, Apple Watch). When a stock threshold is crossed, optionally triggers AI analysis via TradingAgents as a decoupled downstream reaction.
 
 ## System Diagram
 
@@ -17,7 +17,7 @@ flowchart TD
         SSEPROXY["/api/proxy/events/stream<br/>streams, not buffers"]
     end
 
-    subgraph BE["FastAPI Backend — Pi 5"]
+    subgraph BE["FastAPI Backend — Pi 4B"]
         API["/api/items, /api/stockalerts"]
         SCHED["APScheduler<br/>interval, hours=6"]
         SCRAPE["RetailerRouter<br/>_process_item"]
@@ -39,7 +39,6 @@ flowchart TD
         RETAIL["Retailer websites"]
         FINNAPI["Finnhub WebSocket API"]
         PUSH["Pushover API"]
-        MAIL["Gmail SMTP"]
     end
 
     UI -- "useSWR, GET" --> PROXY --> API
@@ -52,7 +51,6 @@ flowchart TD
     SCRAPE -- "always" --> BCAST
     SCRAPE -- "only if alert-worthy" --> EV --> QUEUE --> DISP
     DISP --> PUSH
-    DISP --> MAIL
     DISP -- "STOCK_THRESHOLD +<br/>run_analysis=true" --> TA --> AR
 
     FINNAPI -- "price tick, push" --> FINN -- "threshold crossed" --> EV
@@ -81,7 +79,6 @@ Every backend call in the diagram above (`GET /api/proxy/*`) routes through `fro
 | Scraping | patchright + httpx + BeautifulSoup4 | patchright for JS-rendered/bot-blocked; httpx+BS4 for SSR, Next.js `__NEXT_DATA__`, Shopify JSON API |
 | Stock data | Finnhub WebSocket (primary) + Finnhub REST (fallback/validation/metadata/news) + yfinance (history + trending + market details) | WebSocket for real-time threshold detection; Finnhub REST for degraded mode, ticker validation, company profile, and news; yfinance for dashboard price history charts, trending/popular asset screening, and per-ticker market details (bid/ask/52-week/financials/dividends — none of this is on Finnhub's free tier) |
 | Push | Pushover API | Covers iPhone, iPad, Mac, Apple Watch — no Apple Dev account needed |
-| Email | Gmail SMTP (App Password) | Free, 500 emails/day |
 | Networking | Tailscale | Secure peer-to-peer VPN; Pi reachable from any device off-LAN |
 | Deployment | Docker Compose (ARM64) | Containerized, auto-restart, Pi native |
 | AI Analysis | TradingAgents (subprocess) | Optional; cloned on Pi, spawned per stock event |
@@ -94,7 +91,7 @@ Every backend call in the diagram above (`GET /api/proxy/*`) routes through `fro
 
 | Device | Role |
 |--------|------|
-| Raspberry Pi 5 8GB | FastAPI server, scrapers, consumers, Finnhub WebSocket client |
+| Raspberry Pi 4B 8GB | FastAPI server, scrapers, consumers, Finnhub WebSocket client |
 | Synology NAS (DS718+) | Postgres (native DSM package), Plex Media Server, file storage, backups |
 
 ## Monorepo Structure
@@ -109,10 +106,10 @@ youn-server/
 │   │   ├── services/
 │   │   │   ├── scraper/          # BaseScraper, HTTPScraper, PlaywrightScraper, routing
 │   │   │   ├── stocks.py         # Finnhub WebSocket client + yfinance fallback
-│   │   │   ├── notify.py         # Pushover + SMTP dispatch
+│   │   │   ├── notify.py         # Pushover dispatch
 │   │   │   └── trading_agents.py # TradingAgents subprocess wrapper
 │   │   ├── consumers/
-│   │   │   ├── notify.py         # asyncio.Queue listener → sends Pushover + email
+│   │   │   ├── notify.py         # asyncio.Queue listener → sends Pushover
 │   │   │   └── analysis.py       # asyncio.Queue listener → runs TradingAgents if enabled
 │   │   └── scheduler/            # APScheduler job definitions + event dispatch
 │   ├── alembic/              # DB migrations
@@ -130,7 +127,7 @@ youn-server/
 
 ## Deployment
 
-- **Pi**: Raspberry Pi 5 8GB, Docker Compose (ARM64), `restart: unless-stopped`, starts on boot via systemd
+- **Pi**: Raspberry Pi 4B 8GB, Docker Compose (ARM64), `restart: unless-stopped`, starts on boot via systemd
 - **DB**: Postgres on Synology NAS via native DSM PostgreSQL package; Pi connects over LAN via asyncpg
 - **Networking**: Tailscale on Pi + all Apple devices for stable private IPs off-LAN
 - **Stock data**: Finnhub WebSocket connection managed by `FinnhubClient`, dynamically subscribes/unsubscribes per active `StockAlert`
@@ -157,7 +154,7 @@ Finnhub WebSocket                  APScheduler (scrape job)
                             db.add(event, status="pending")   ← audit/crash recovery
                             await queue.put(event)            ← immediate delivery
                                     ├── NotifyConsumer (queue listener)
-                                    │       → sends Pushover + email
+                                    │       → sends Pushover
                                     │       → marks event processed
                                     │
                                     └── AnalysisConsumer (queue listener)
@@ -178,7 +175,7 @@ On startup: any `events` rows with `status="pending"` are loaded back into the q
 NotifyConsumer (this app — the publisher)
    │
    │  POST https://api.pushover.net/1/messages.json
-   │  { token: PUSHOVER_APP_TOKEN,   ← identifies this app to Pushover
+   │  { token: PUSHOVER_API_TOKEN,   ← identifies this app to Pushover
    │    user:  PUSHOVER_USER_KEY,    ← identifies you (all your devices) — a "topic", not a device
    │    title, message, url }
    │
@@ -212,7 +209,7 @@ Scraper finishes one listing
    │      └── always: broadcast in-memory → SSE → frontend receives push, no polling
    │
    └── only if alert-worthy: write Event row (DB, audit) → asyncio.Queue → dispatcher
-          └── → Pushover + email
+          └── → Pushover
 ```
 
 Two independent branches off the same scrape-completion point — the SSE branch is unconditional (every listing, every cycle), the `Event`/queue/Pushover branch stays exactly as it was before this issue, conditional on crossing a threshold. Neither depends on the other.
