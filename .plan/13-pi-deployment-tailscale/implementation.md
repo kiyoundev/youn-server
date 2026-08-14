@@ -3,7 +3,7 @@
 ## Steps
 
 ### 1. Pi — get the latest repo
-- [x] `ssh youn@<pi-tailscale-ip>` (or LAN: `youn@<pi-lan-ip>`)
+- [x] `ssh youn@youn-server` (MagicDNS hostname, confirmed working off-LAN too per `#16`; raw Tailscale IP `<pi-tailscale-ip>` / LAN `youn@<pi-lan-ip>` still work as fallbacks)
 - [x] `cd ~/projects/youn-server && git pull` — picks up `#13.1`/`#13.2`'s changes (already-cloned repo from `#34`'s deploy key setup)
 - [x] Confirm the deploy key still has at least read access: `git pull` succeeding is sufficient proof, no separate check needed
 

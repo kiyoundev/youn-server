@@ -51,10 +51,10 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ⬜ Open | #11 | Analysis Results UI | feat / AFK | ~3h | #9, #10.1–#10.5 |
 | ~~❌ Removed~~ | ~~#12~~ | ~~iOS SwiftUI Token Registration App~~ | ~~feat / HITL~~ | ~~#8~~ | ~~Replaced by Pushover~~ |
 | ✅ Done | #13 | Pi Deployment + Tailscale | ops / HITL | ~3h | #8, #10.1–#10.5 |
-| ⬜ Open | #13.1 | Tailscale Subnet Routing (NAS Postgres Reachability) | ops / HITL | ~0.75h | None |
+| ✅ Done | #13.1 | Tailscale Subnet Routing (NAS Postgres Reachability) | ops / HITL | ~0.75h | None |
 | ⬜ Open | #14 | Integration Tests | test / AFK | ~4h | #3, #4, #5, #7, #8 |
 | ⬜ Open | #15 | Headless Chromium Bot Detection on Pi | ops / AFK | ~2h | #3, #13 |
-| ⬜ Open | #16 | Tailscale MagicDNS (Human-Readable Hostnames) | ops / HITL | ~0.5h | #13 |
+| ✅ Done | #16 | Tailscale MagicDNS (Human-Readable Hostnames) | ops / HITL | ~0.5h | #13 |
 | ✅ Done | #17 | TradingAgents Progress Heartbeat + Idle Timeout | feat / AFK | ~2h | #9 |
 | ⬜ Open | #18 | DB Connection Resilience (pool_pre_ping + Pending-Event Rescan) | feat / AFK | ~1.5h | #6, #7 |
 | ⬜ Open | #19 | Manual Portfolio Position Tracking | feat / AFK | ~4h | #8, #10.1–#10.5 |
@@ -1528,7 +1528,7 @@ This makes the container launch a headless X11 server internally and run Chromiu
 
 ---
 
-## [ ] Issue #16 — Tailscale MagicDNS (Human-Readable Hostnames)
+## [x] Issue #16 — Tailscale MagicDNS (Human-Readable Hostnames)
 
 **Type:** ops / HITL
 **Estimate:** ~0.5h
@@ -1546,11 +1546,11 @@ Replace raw Tailscale IPs with human-readable names for the Pi and NAS, so devic
 
 ### Acceptance criteria
 
-- [ ] MagicDNS enabled in Tailscale admin console
-- [ ] Pi and NAS have human-readable names (not auto-generated gibberish) in the Tailscale admin console
-- [ ] `http://<pi-name>:8000/api/health` resolves and responds from an off-LAN device on the tailnet
-- [ ] `backend/.env`'s `DATABASE_URL` unchanged — still points at the NAS LAN IP, not a Tailscale name
-- [ ] Any bookmarks/docs referencing raw Tailscale IPs updated to the new MagicDNS names
+- [x] MagicDNS enabled in Tailscale admin console
+- [x] Pi has a human-readable name (`youn-server`, not auto-generated gibberish) in the Tailscale admin console — NAS is **not** its own tailnet node (reached via `#13.1`'s subnet route through the Pi, using its real LAN IP), so it has no separate tailnet identity to rename
+- [x] `http://<pi-name>:8000/api/health` resolves and responds from an off-LAN device on the tailnet — confirmed via `ssh youn@youn-server` and a real iPhone request over cellular during `#13`'s testing
+- [x] `backend/.env`'s `DATABASE_URL` unchanged — still points at the NAS LAN IP (`<nas-ip>:5433`), not a Tailscale name
+- [x] Any bookmarks/docs referencing raw Tailscale IPs updated to the new MagicDNS names — `#13`'s `implementation.md` now leads with `ssh youn@youn-server`; other raw-IP mentions are historical execution logs from already-completed issues, left as accurate records of what ran at the time
 
 ---
 
