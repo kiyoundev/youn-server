@@ -50,7 +50,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ⬜ Open | #10.6 | Ticker Watchlist (Star, Persisted) | feat / AFK | ~2h | #10.4 |
 | ⬜ Open | #11 | Analysis Results UI | feat / AFK | ~3h | #9, #10.1–#10.5 |
 | ~~❌ Removed~~ | ~~#12~~ | ~~iOS SwiftUI Token Registration App~~ | ~~feat / HITL~~ | ~~#8~~ | ~~Replaced by Pushover~~ |
-| ⬜ Open | #13 | Pi Deployment + Tailscale | ops / HITL | ~3h | #8, #10.1–#10.5 |
+| ✅ Done | #13 | Pi Deployment + Tailscale | ops / HITL | ~3h | #8, #10.1–#10.5 |
 | ⬜ Open | #13.1 | Tailscale Subnet Routing (NAS Postgres Reachability) | ops / HITL | ~0.75h | None |
 | ⬜ Open | #14 | Integration Tests | test / AFK | ~4h | #3, #4, #5, #7, #8 |
 | ⬜ Open | #15 | Headless Chromium Bot Detection on Pi | ops / AFK | ~2h | #3, #13 |
@@ -74,8 +74,9 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ✅ Done | #36 | Wishlist Page (Real Data + Live Price History via SSE) | feat / AFK | ~6h | #8, #24 |
 | ⬜ Open | #37 | Stocks/Portfolio Page — Live Updates via SSE (Finnhub Tick Broadcast) | feat / AFK | ~4h | #36, #10.4 |
 | ⬜ Open | #38 | Earnings Calendar (Portfolio Page + Ticker Detail Page) | feat / AFK | ~3h | #19, #31 |
+| ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
 
-**Total estimated:** ~102.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi)*
+**Total estimated:** ~105.25h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned)*
 
 ---
 
@@ -1234,7 +1235,7 @@ Decided: manual entry for now. No new external dependency, no credential-securit
 
 ---
 
-## [ ] Issue #13 — Pi Deployment + Tailscale
+## [x] Issue #13 — Pi Deployment + Tailscale
 
 **Type:** ops / HITL
 **Estimate:** ~3h
@@ -1297,7 +1298,7 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 - [ ] Containers restart automatically after `sudo reboot`
 - [ ] `.env` has `chmod 600`
 - [ ] `GET /api/health` reachable from iPhone over Tailscale (Tailscale IP)
-- [ ] Pushover push notification received on iPhone, iPad, Mac, and Apple Watch
+- [ ] Pushover push notification received on iPhone, iPad, Mac, and Apple Watch **from a real stock-alert trigger** (`POST /api/poll/stocks` crossing an actual threshold) — a generic Pushover API test (direct `curl` to `api.pushover.net`, no real alert) confirmed delivery infra works, but a real alert-triggered push is still untested: the attempt on a `.TO` ticker hit Finnhub's free-tier 403 on non-US symbols (unrelated to this issue), so this needs re-attempting against a US-ticker alert
 - [ ] PostgreSQL on NAS reachable from Pi after `docker compose restart` (verify via `GET /api/health`)
 - [ ] `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` succeeds
 - [ ] `POST /api/stockalerts/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
@@ -2310,3 +2311,28 @@ Surfaced testing `#10.2`'s add flow — adding a real `amazon.ca` listing correc
 - [ ] An alert-crossing first scrape (price already below target on add) still triggers Pushover/email via the existing `Event`/queue path, same as any other scrape
 - [ ] A failed first scrape (bad URL, site down) sets `last_scrape_status: "error"` and doesn't block or fail the add itself — the item/listing stays created either way
 - [ ] Bulk add with multiple URLs: each successful listing gets its own background first-scrape, not just the first one
+
+---
+
+## [ ] Issue #42 — TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy
+
+**Type:** ops / HITL
+**Estimate:** ~2.5h
+**Blocked by:** #13, #9
+
+### What to build
+
+1. Decide the LLM provider (OpenAI vs Anthropic) for the Pi's TradingAgents runs, and add the missing API key to the Pi's `.env`. Right now `.env` has no `OPENAI_API_KEY` — the provider TradingAgents defaults to when `TRADINGAGENTS_LLM_PROVIDER` is unset — so a run fails immediately trying to call the LLM. `settings.anthropic_api_key` already exists in `backend/app/core/config.py` but is dead code: never read anywhere, never forwarded into `_build_env()`'s subprocess env in `trading_agents.py`. If Anthropic is chosen, that field needs to actually get wired through (as `ANTHROPIC_API_KEY`) alongside setting `TRADINGAGENTS_LLM_PROVIDER=anthropic`.
+2. Migrate previously-generated TradingAgents reports from the Mac's local TradingAgents clone over to the Pi, so analysis history isn't lost in the cutover.
+3. Decide and implement a durable report storage strategy going forward. The Pi's local disk has different capacity/durability characteristics than the Mac's — decide whether reports should stay on the Pi's filesystem (`settings.tradingagents_results_dir`, currently `/opt/tradingagents/data`), get written to NAS-backed storage instead, or move into the DB. `AnalysisResult.result`/`report_path` already exist; clarify what `report_path` should point at once this is settled.
+
+### Why (context)
+
+Surfaced mid-`#13`, checking the actual runtime config before attempting step 8's real TradingAgents analyze run on the Pi — `.env` only has `FINNHUB_API_KEY`, no LLM key at all, so the run would have failed immediately. Digging into `_build_env()` also surfaced that `settings.anthropic_api_key` is defined but unused, meaning even adding an Anthropic key to `.env` wouldn't do anything without further wiring. Separately, moving primary compute from Mac to Pi raises questions `#13` never addressed: where existing generated reports go, and where future ones should durably live given the Pi's more limited local storage.
+
+### Acceptance criteria
+
+- [ ] LLM provider chosen, its API key present in the Pi's `.env`, and actually wired end-to-end — verified by a real `POST /api/stockalerts/{id}/analyze` completing `pending → running → done` on the Pi
+- [ ] Previously-generated reports from the Mac are present and accessible from the Pi's deployment
+- [ ] Report storage location decided and documented (Pi-local / NAS / DB), with `report_path` semantics consistent with that decision
+- [ ] `#13`'s deferred step 8c (TradingAgents analyze smoke test) re-attempted and passing under this issue instead
