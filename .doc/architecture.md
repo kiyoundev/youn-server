@@ -127,10 +127,20 @@ youn-server/
 
 ## Deployment
 
-- **Pi**: Raspberry Pi 4B 8GB, Docker Compose (ARM64), `restart: unless-stopped`, starts on boot via systemd
-- **DB**: Postgres on Synology NAS via native DSM PostgreSQL package; Pi connects over LAN via asyncpg
-- **Networking**: Tailscale on Pi + all Apple devices for stable private IPs off-LAN
+- **Pi**: Raspberry Pi 4B 8GB, Docker Compose (ARM64), `restart: unless-stopped`; Docker itself boots via its own `systemctl enable docker` (no custom systemd unit — `#13` deliberately skipped building one, redundant given Docker's own boot-enable + compose's restart policy)
+- **DB**: Postgres on Synology NAS via native DSM PostgreSQL package; Pi connects over LAN via asyncpg — deliberately *not* routed through Tailscale, stays on the local LAN even for off-LAN client requests
+- **Networking**: Tailscale on Pi + all Apple devices, MagicDNS enabled (`#16`) — Pi reachable as `youn-server` both on-LAN and off-LAN, same hostname either way. Frontend served over HTTPS via `tailscale serve` (`443`, auto-provisioned cert) at `https://<tailnet-hostname>`, proxying to the container's plain-HTTP `:3000` — required because the watchlist page's SSE tab-leader election (`sse-leader.ts`) uses the Web Locks API, which only exists in secure contexts. `docker-compose.yml` binds that port to `127.0.0.1` only, closing direct plain-HTTP access on LAN/Tailscale
 - **Stock data**: Finnhub WebSocket connection managed by `FinnhubClient`, dynamically subscribes/unsubscribes per active `StockAlert`
+
+## Local Development
+
+Two-file Docker Compose split — one base file both environments can run, one Mac-only patch layered on top:
+
+- **Pi** always runs `docker compose up -d` (no `-f` flags) — reads only `docker-compose.yml`, the real recipe (`backend`, `frontend`, `pihole`), pointed at the real NAS Postgres.
+- **Mac local dev** runs `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build` — layers a Mac-only patch on top. Compose merges per-service/per-key: `frontend`/`pihole` pass through from the base file untouched; `backend` keeps everything from the base file except its `volumes` key, which the local file overrides to remap the TradingAgents mount from `/opt/tradingagents` to a path under `/Users/...` (Docker Desktop shares `/Users` with containers by default; `/opt` needs manual File Sharing permission otherwise). The local file also adds an entirely new `db` service — a throwaway local Postgres container, deliberately isolated from the NAS DB.
+- **Why an isolated local DB, not the NAS directly**: local dev and the Pi hitting the same live database concurrently risks the scheduler double-fire bug (see `challenges.md`). Mac's local `.env` points `DATABASE_URL` at the local `db` container; the NAS connection string is kept commented out alongside it for reference, not deleted.
+- **No CI/CD or auto-migration** — building (`--build`) and migrations (`alembic upgrade head`) are manual on both Mac and Pi, every time, independently. `.env` isn't synced automatically between the two either.
+- **No git branch workflow** — solo project, every commit goes straight to `main`. Orthogonal to the environment split above (that's a config/database concern, not a code-version one).
 
 ## Polling Schedule
 

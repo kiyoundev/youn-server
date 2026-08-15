@@ -1,5 +1,7 @@
-# Temporary local Postgres for dev when the Synology NAS isn't reachable
-# (e.g. off the home LAN, before Tailscale is set up).
+# Local dev overrides for docker-compose.yml — not shipped to the Pi.
+# Provides a temporary local Postgres for dev when the Synology NAS isn't
+# reachable (e.g. off the home LAN, before Tailscale is set up), and remaps
+# backend's TradingAgents mount to a Docker-Desktop-default-shared path.
 #
 # Usage:
 #   docker compose -f docker-compose.local.yml up -d
@@ -17,6 +19,17 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 # (the db becomes reachable from other services as host "db", port 5432)
 services:
+  # Remaps backend's /opt/tradingagents mount to a path under /Users, which
+  # Docker Desktop shares with containers by default — /opt itself isn't,
+  # so the base compose file's mount fails on Mac with "mounts denied"
+  # unless /opt is manually added under Settings -> Resources -> File
+  # Sharing. Compose merges `volumes` by matching the container-side target
+  # path, so this entry replaces docker-compose.yml's for local runs only;
+  # the Pi's deploy (docker-compose.yml alone, no override) is unaffected.
+  backend:
+    volumes:
+      - /Users/youn/Documents/tools/TradingAgents:/opt/tradingagents
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -35,6 +48,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Standalone usage (just this file) has no other service to share a
+    # network with, so `db` was left off `app` and fell onto Compose's
+    # implicit default network instead. That silently broke the layered
+    # usage below this file's own comment claims works — backend/frontend
+    # (docker-compose.yml) are explicitly on `app`, so `db` needs to be too
+    # or `backend` can't resolve the hostname `db` at all (confirmed live:
+    # asyncpg raised `socket.gaierror: Name or service not known`).
+    networks:
+      - app
+
+networks:
+  app:
+    # Declares (doesn't redefine) the network docker-compose.yml already
+    # creates, so Compose attaches to the same one instead of erroring on
+    # an undeclared network name when this file's `db` service references
+    # it under the layered-usage case.
+    external: false
 
 volumes:
   pgdata:
