@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.scheduler.jobs import poll_prices
+from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.stocks import FinnhubClient
 from app.services.synology import synology_client
 
@@ -49,6 +50,15 @@ async def lifespan(app: FastAPI):
         args=[queue],
         next_run_time=datetime.now(_TZ),
     )
+    # No next_run_time override here (unlike poll_prices above) — this shouldn't
+    # fire immediately on every app restart, only on its normal daily cadence.
+    # Recycles Patchright's browser context for long-uptime resilience (#40);
+    # a no-op if the browser was never launched in the first place (lazy init).
+    scheduler.add_job(
+        PatchrightScraper.recycle_browser,
+        "interval",
+        hours=24,
+    )
     scheduler.start()
 
     dispatch_task = asyncio.create_task(dispatcher.run(queue))
@@ -65,6 +75,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
     await finnhub.stop()
     await synology_client.close()
+    await PatchrightScraper.close_browser()  # no-op if never launched (lazy init)
 
 
 app = FastAPI(title="youn-server", lifespan=lifespan)

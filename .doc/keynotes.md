@@ -405,6 +405,68 @@ A commonly cited checklist of what separates "works in a demo" from "survives pr
 
 Overall: 2 of 6 solid, the other 4 are real gaps — but ones that specifically don't bite *yet* because this is a single-user app where you control every client that talks to it. Worth revisiting this checklist if the app ever grows past "just me."
 
+## Locks (Mutexes) — coordinating concurrent code that shouldn't overlap
+
+Why this section exists: both examples below reach for `asyncio.Lock` to fix a real bug, but neither explains the underlying concept on its own terms. Worth understanding once, generally — this is a decades-old computer science primitive, not something specific to Python, `asyncio`, or this repo.
+
+### The problem: two things racing to do something exactly once
+
+Async code frequently has many logical tasks running "at the same time" (interleaved on one event loop, or genuinely parallel across processes/machines in other languages). Without coordination, two of those tasks can both check a condition, both see it as unmet, and both act on it — even though only one of them should have.
+
+Concretely, the shape that recurs: `if not already_done: do_the_thing()`. Read in isolation this looks safe. Under concurrency it isn't — between the check and the action, another task can run the exact same check, see the same "not done yet" answer, and start doing the same thing too.
+
+### The fix: a lock (mutex — "mutual exclusion")
+
+A lock is a single shared token that only one piece of code can hold at a time. Everyone else who wants it has to wait until the holder releases it.
+
+The classic mental model: a single bathroom key on a hook. Person A takes the key, goes in. Person B tries to take it, finds the hook empty, and just waits there. A finishes, hangs the key back up. B, waiting, takes it immediately. Nobody's ever inside at the same time — even though both wanted in simultaneously.
+
+In Python's `asyncio`:
+```python
+lock = asyncio.Lock()
+
+async def do_the_thing():
+    async with lock:   # wait for the key; auto-releases even if an exception happens inside
+        ...             # only one caller's body runs at a time here
+```
+`asyncio.Lock` is standard library, not project-specific — `threading.Lock` is the equivalent for OS threads, and essentially every language with concurrency has some form of this (`Mutex` in Rust, `sync.Mutex` in Go, `synchronized` in Java). Same concept, different syntax.
+
+### The pattern both examples below use: double-checked locking
+
+Naively wrapping the *entire* check-and-act sequence in a lock works, but forces every caller to wait for the lock even in the overwhelmingly common case where nothing needs doing (the thing's already set up). Double-checked locking adds a fast, lock-free check first, and only pays the lock's cost on the rare occasion it's actually needed:
+
+```python
+async def ensure_ready():
+    if already_set_up():          # fast path — no lock, correct once things are steady-state
+        return
+    async with lock:               # slow path — only reached when it might not be set up yet
+        if already_set_up():      # re-check — someone else may have finished while we waited
+            return
+        do_the_setup()
+```
+The **second** check is what actually prevents duplicate work — it catches the case where another caller raced ahead and finished while this one was waiting for the lock.
+
+### Two concrete instances of this exact pattern in this repo
+
+| | `SynologyClient._get_sid` | `PatchrightScraper.start_browser` |
+|---|---|---|
+| What's being protected | DSM's session slot — a *second* login silently invalidates the *first*'s session ID | The browser process itself — launching twice wastes memory/CPU and could corrupt the shared profile directory |
+| The race, unguarded | Two concurrent DSM calls each log in independently → whichever finishes last wins, the other holds a now-dead session ID → `503`, code 119 (see "Concurrent Session Invalidation" below, and the DSM 503 write-up under Challenges) | Multiple concurrent scrapes (e.g. a bulk-add of several `amazon.ca` listings) each see no browser running yet → each launches its own Chromium instance |
+| Status | Fixed — implemented, live | Planned — `#40`, not yet built |
+
+Both are the *same* underlying shape: "expensive setup step, must happen at most once, multiple concurrent callers might all trigger it simultaneously." The lock doesn't make the setup step itself faster — it makes "only one caller actually does it" true regardless of how many ask at once.
+
+### Related but distinct: Lock vs. Semaphore vs. Queue vs. Event
+
+Easy to conflate since they're all `asyncio` concurrency primitives — each solves a different problem:
+
+- **`Lock`** (this section) — at most **one** caller in the guarded section at a time. Binary: held or free.
+- **`Semaphore(n)`** — at most **n** callers at a time, `n > 1`. Already used in this repo: `items.py`'s `_PROBE_CONCURRENCY` bounds concurrent routing-probes during bulk-add (`#10.2`); the same pattern is planned for `#41`'s concurrent background scrapes. A `Lock` is really just `Semaphore(1)` conceptually, but Python exposes them as separate types since a binary lock has simpler, stricter semantics (e.g., only the holder should release it).
+- **`Queue`** — hands *data* from one task to another, with built-in ordering and backpressure. See "In-memory fan-out — why a queue, not a callback" above for this repo's SSE broadcast use.
+- **`Event`** — a one-shot or reusable "something happened" signal, no payload. Mentioned above as what `Queue` was chosen *over* for the SSE case, precisely because it lacks a payload.
+
+None of these substitute for each other — picking the wrong one is a common source of subtle concurrency bugs (e.g., using a `Lock` where a `Semaphore` was needed silently serializes work that was safe to run in parallel; using a plain variable where a `Queue` was needed silently drops data, as covered above).
+
 ## Concurrent Session Invalidation — a "successful login" isn't a guarantee
 
 **The generalizable lesson:** a `success: true` response from a login call only means the session was valid *at that instant*. It's not a durable guarantee — anything else sharing that same identity slot (your own app's next request, a concurrent call, even a browser tab open to the same account) can invalidate it a moment later. Code that assumes "I just logged in successfully, so my session is safe to use for the next step" is implicitly assuming exclusive access to that identity — true only if something in your own code actually enforces it. Not Synology-specific: any API with single-active-session auth, seat-limited licensing, or similar exclusivity models has the same trap.

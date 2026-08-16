@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.services.scraper.config import NEXTDATA_PATHS
+from app.services.scraper.config import HTTP_TIMEOUT_SECONDS, NEXTDATA_PATHS
 from app.services.scraper.result import ScraperResult
 
 USER_AGENTS = [
@@ -140,7 +140,7 @@ class BaseScraper(ABC):
 
         try:
             ua = random.choice(USER_AGENTS)
-            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS) as client:
                 resp = await client.get(api_url, headers=_build_headers(ua))
             if resp.status_code != 200:
                 return None

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scraper Routing &amp; Extraction Flow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.75rem;
+    }
+    p.sub {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      max-width: 720px;
+      margin-bottom: 1.5rem;
+    }
+    section + section { margin-top: 3.5rem; }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · youn-server</p>
+    <h1>Scraper Routing &amp; Extraction Flow</h1>
+    <p class="sub">How a listing's URL gets a price: which fetch engine handles the request, then which signal in the resulting HTML actually yields a price.</p>
+
+    <section>
+      <svg viewBox="0 0 1100 820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="routing-title routing-desc">
+        <title id="routing-title">Scraper engine routing</title>
+        <desc id="routing-desc">Flowchart showing how a listing URL is routed to a fetch engine: a dedicated per-retailer scraper if the hostname is registered, a direct Patchright call if a prior probe cached that need, or HTTPScraper tried first with Patchright as its fallback on error — all three paths feed the shared extraction hierarchy.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ============ ARROWS (behind nodes) ============ -->
+
+        <!-- Start -> Diamond1 -->
+        <line x1="300" y1="80" x2="300" y2="104" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Diamond1 YES -> Dedicated Scraper -->
+        <line x1="400" y1="152" x2="600" y2="152" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Diamond1 NO -> Diamond2 -->
+        <line x1="300" y1="200" x2="300" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Diamond2 YES -> PatchrightScraper (left edge) -->
+        <line x1="400" y1="296" x2="600" y2="296" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Diamond2 NO -> HTTPScraper -->
+        <line x1="300" y1="344" x2="300" y2="376" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- HTTPScraper -> Diamond3 -->
+        <line x1="300" y1="424" x2="300" y2="456" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Diamond3 YES (error) -> PatchrightScraper (bottom edge, x=660) -->
+        <path d="M 400 504 L 660 504 L 660 320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Diamond3 NO (success) -> End oval (happy path, coral) -->
+        <path d="M 300 552 L 300 616" fill="none" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+        <!-- Dedicated Scraper -> End oval (fan point x=250), bypass gutter x=860, jog y=580 -->
+        <path d="M 680 176 L 860 176 L 860 580 L 250 580 L 250 616" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- small bridge hop where this path crosses PatchrightScraper's return path at (700,580) -->
+        <path d="M 690 580 A 10 10 0 0 1 710 580" fill="none" stroke="#f5f5f5" stroke-width="3"/>
+        <path d="M 690 580 A 10 10 0 0 1 710 580" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+
+        <!-- PatchrightScraper -> End oval (bottom edge exit x=700, fan point x=350) -->
+        <path d="M 700 320 L 700 600 L 350 600 L 350 616" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- ============ ARROW LABELS ============ -->
+        <rect x="418" y="122" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="432" y="131" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+
+        <rect x="284" y="212" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="298" y="221" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <rect x="418" y="266" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="432" y="275" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+
+        <rect x="284" y="356" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="298" y="365" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <rect x="500" y="484" width="34" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="517" y="493" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ERROR</text>
+
+        <rect x="284" y="576" width="34" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="301" y="585" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SUCCESS</text>
+
+        <!-- ============ NODES ============ -->
+
+        <!-- Start oval -->
+        <rect x="220" y="32" width="160" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="300" y="60" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Listing URL</text>
+
+        <!-- Diamond1: In RETAILER_MAP? -->
+        <polygon points="300,104 400,152 300,200 200,152" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="300" y="148" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">In RETAILER_MAP?</text>
+        <text x="300" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">e.g. amazon.ca</text>
+
+        <!-- Dedicated Scraper -->
+        <rect x="600" y="128" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="680" y="150" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Dedicated Scraper</text>
+        <text x="680" y="164" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">AmazonCAScraper</text>
+
+        <!-- Diamond2: Cached as Patchright? -->
+        <polygon points="300,248 400,296 300,344 200,296" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="300" y="292" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Cached as</text>
+        <text x="300" y="306" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Patchright?</text>
+
+        <!-- PatchrightScraper -->
+        <rect x="600" y="272" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="680" y="294" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PatchrightScraper</text>
+        <text x="680" y="308" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">headless Chromium</text>
+
+        <!-- HTTPScraper -->
+        <rect x="220" y="376" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="300" y="398" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">HTTPScraper</text>
+        <text x="300" y="412" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">plain httpx GET</text>
+
+        <!-- Diamond3: Fetch errored? -->
+        <polygon points="300,456 400,504 300,552 200,504" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="300" y="500" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fetch</text>
+        <text x="300" y="514" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Errored?</text>
+
+        <!-- End oval (focal, coral) -->
+        <rect x="220" y="616" width="160" height="56" rx="28" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="300" y="642" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Extraction</text>
+        <text x="300" y="658" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Hierarchy →</text>
+
+        <!-- ============ LEGEND ============ -->
+        <line x1="40" y1="712" x2="1060" y2="712" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="728" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+
+        <rect x="40" y="744" width="24" height="12" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="72" y="754" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Start / end (oval)</text>
+
+        <rect x="220" y="744" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="252" y="754" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Fetch engine (rectangle)</text>
+
+        <polygon points="452,750 464,744 476,750 464,756" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="488" y="754" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Decision (diamond)</text>
+
+        <line x1="644" y1="752" x2="672" y2="752" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+        <text x="680" y="754" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Happy path</text>
+
+        <line x1="808" y1="752" x2="836" y2="752" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <text x="844" y="754" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Fallback / branch</text>
+      </svg>
+    </section>
+
+    <section>
+      <svg viewBox="0 0 980 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="extraction-title extraction-desc">
+        <title id="extraction-title">Extraction hierarchy — the 4 signal variants</title>
+        <desc id="extraction-desc">Flowchart showing the fixed sequence every fetched HTML page runs through to find a price: a Shopify products.json API shortcut, JSON-LD structured data, OpenGraph price meta tags, then a Next.js NEXT_DATA blob search, falling through to an error result if none match.</desc>
+        <defs>
+          <marker id="arrow2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow2-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ============ ARROWS ============ -->
+        <line x1="280" y1="80" x2="280" y2="104" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+
+        <!-- Diamond A YES -> Success (gutter x=520, fan y=280) -->
+        <path d="M 380 152 L 520 152 L 520 280 L 620 280" fill="none" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow2-accent)"/>
+        <line x1="280" y1="200" x2="280" y2="232" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+
+        <!-- Diamond B YES -> Success (gutter x=540, fan y=292) -->
+        <path d="M 380 280 L 540 280 L 540 292 L 620 292" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+        <line x1="280" y1="328" x2="280" y2="360" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+
+        <!-- Diamond C YES -> Success (gutter x=560, fan y=304) -->
+        <path d="M 380 408 L 560 408 L 560 304 L 620 304" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+        <line x1="280" y1="456" x2="280" y2="488" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+
+        <!-- Diamond D YES -> Success (gutter x=580, fan y=316) -->
+        <path d="M 380 536 L 580 536 L 580 316 L 620 316" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+        <!-- Diamond D NO -> Error oval -->
+        <line x1="280" y1="584" x2="280" y2="632" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow2)"/>
+
+        <!-- ============ ARROW LABELS ============ -->
+        <rect x="392" y="122" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="406" y="131" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+        <rect x="264" y="212" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="278" y="221" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <rect x="392" y="250" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="406" y="259" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+        <rect x="264" y="340" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="278" y="349" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <rect x="392" y="378" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="406" y="387" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+        <rect x="264" y="468" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="278" y="477" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <rect x="392" y="506" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="406" y="515" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+        <rect x="264" y="596" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="278" y="605" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <!-- ============ NODES ============ -->
+        <rect x="200" y="32" width="160" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="280" y="60" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fetched HTML</text>
+
+        <!-- Diamond A: Shopify -->
+        <polygon points="280,104 380,152 280,200 180,152" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="280" y="148" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Shopify /products/</text>
+        <text x="280" y="162" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">path match?</text>
+
+        <!-- Diamond B: JSON-LD -->
+        <polygon points="280,232 380,280 280,328 180,280" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="280" y="284" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">JSON-LD found?</text>
+
+        <!-- Diamond C: OG -->
+        <polygon points="280,360 380,408 280,456 180,408" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="280" y="412" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">OG price tag</text>
+        <text x="280" y="426" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">found?</text>
+
+        <!-- Diamond D: NEXT_DATA -->
+        <polygon points="280,488 380,536 280,584 180,536" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="280" y="532" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">__NEXT_DATA__</text>
+        <text x="280" y="546" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">found?</text>
+
+        <!-- Success oval (focal) -->
+        <rect x="620" y="268" width="200" height="56" rx="28" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="720" y="292" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Result: ok / oos</text>
+        <text x="720" y="308" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">first match wins</text>
+
+        <!-- Error oval -->
+        <rect x="200" y="632" width="160" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="280" y="660" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Result: error</text>
+
+        <!-- ============ LEGEND ============ -->
+        <line x1="40" y1="700" x2="940" y2="700" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="716" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND · SEQUENTIAL, STOPS AT FIRST MATCH</text>
+      </svg>
+    </section>
+  </div>
+</body>
+</html>

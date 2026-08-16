@@ -74,9 +74,13 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 | ✅ Done | #36 | Wishlist Page (Real Data + Live Price History via SSE) | feat / AFK | ~6h | #8, #24 |
 | ⬜ Open | #37 | Stocks/Portfolio Page — Live Updates via SSE (Finnhub Tick Broadcast) | feat / AFK | ~4h | #36, #10.4 |
 | ⬜ Open | #38 | Earnings Calendar (Portfolio Page + Ticker Detail Page) | feat / AFK | ~3h | #19, #31 |
+| ⬜ Open | #39 | Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support) | fix / AFK | ~1.5h | None |
+| ✅ Done | #40 | Lazy-Launch Patchright's Browser, Guarded by a Lock | fix / AFK | ~1h | None |
+| ⬜ Open | #41 | Immediate First Scrape on Item/Listing Add | feat / AFK | ~3h | #40 |
 | ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
+| ✅ Done | #43 | Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix) | ops / HITL | ~1h | #13, #16 |
 
-**Total estimated:** ~105.25h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned)*
+**Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
 
 ---
 
@@ -1481,27 +1485,31 @@ Not blocked on `#24`/`#10.1`–`#10.5`: `/watchlist` already exists in the repo 
 
 **Type:** ops / AFK
 **Estimate:** ~2h
-**Blocked by:** #3, #13
+**Blocked by:** #3, #13, #40 (Xvfb's subprocess must launch before `start_browser()`'s Chromium call, inside the same lifecycle #40 wires into `main.py`'s `lifespan` — building this before #40 exists would mean redoing the wiring)
 
-### Background
+### Background — re-verified and corrected this session, superseding the original findings below
 
-During local smoke testing (Issue #3), BestBuy and SSENSE returned 403 in headless Patchright but passed immediately with `headless=False`. Amazon served a stripped decoy page headless but loaded correctly headful after a homepage warm-up navigation. This confirms the blocker is headless detection (Chromium DevTools fingerprint), not IP reputation or request rate.
+Original testing (pre-`#13`) found BestBuy and SSENSE both 403 in headless Patchright, passing with `headless=False` — and, separately, guessed BestBuy's block was TLS/JA4 fingerprinting (network-layer, unfixable by Xvfb) rather than headless detection. **That TLS theory was re-tested this session and disproven**: running the identical URL through a real headed Chromium (`headless=False`, `.venv` on Mac) passed cleanly for *both* BestBuy and SSENSE — real page titles, real content, no block page. If BestBuy's block were TLS-level, headful vs. headless wouldn't matter, since both use the exact same TLS stack. It clearly does matter, which means both sites are headless-detection, not network-level — the same fixable category, not two different problems.
 
-The production environment is a Raspberry Pi 5 running Docker (`mcr.microsoft.com/playwright/python:v1.52.0-jammy`). The Pi has no physical display, so `headless=False` is not directly usable in production without a virtual framebuffer.
+Confirmed bot-detection vendors present: BestBuy uses Akamai Bot Manager (`bm_s`/`bm_so` cookies observed on the 403 response). SSENSE uses Cloudflare's JS challenge (`"Just a moment..."` title) plus Riskified (`beacon.riskified.com` observed in page content) — a fraud-detection vendor, layered on top of Cloudflare's own check.
+
+Also re-verified as part of this session's separate Playwright-version-bump fix (patchright had drifted to `1.61.2`, needing a matching Chromium build the old `v1.44.0-jammy` base image didn't have): **Amazon now passes headless with no workaround needed** — the original warm-up-navigation trick is obsolete, likely because a more current bundled Chromium build removed whatever headless-specific tell was previously tripping Amazon's detection.
+
+Production is a **Raspberry Pi 4B 8GB** (not a Pi 5 — corrected per `[[project-hardware]]`) running Docker, now on `mcr.microsoft.com/playwright/python:v1.61.0-jammy` (bumped this session, was `v1.44.0-jammy`). Pi OS Lite has no display server (X11/Wayland) at all — not just "no monitor plugged in," genuinely no windowing software running, even though the hardware has a physical HDMI port. `headless=False` cannot run as-is; needs Xvfb to provide a virtual display for Chromium to render into.
 
 ### What to validate first
 
-Patchright applies CDP-level patches specifically to defeat headless Chromium fingerprinting. The `mcr.microsoft.com/playwright/python` Docker image uses a separate Chromium build that Patchright targets. It's plausible that headless works fine on Pi/Docker even though it failed locally — local Chromium and Docker-bundled Chromium differ.
+**Step 1 — run `smoke_test.py --patchright` inside the Docker container on Pi**, now that the image's already been bumped to `v1.61.0-jammy` this session. Expect Amazon and Shopify to pass headless already (confirmed on Mac); BestBuy and SSENSE to still fail headless (also confirmed on Mac, matching the pre-existing finding) — this step is about confirming the *same* results reproduce on Pi's actual ARM64 Docker environment, not Mac's, before committing to the Xvfb build below.
 
-**Step 1 — run `smoke_test.py --patchright` inside the Docker container on Pi after #13 deployment.** If BestBuy and SSENSE return `status="ok"`, no further action needed; headless is working.
+### Fix: Xvfb virtual framebuffer
 
-### Fallback: Xvfb virtual framebuffer
-
-If headless detection persists on Pi, add a virtual display to the Docker container:
+Add a virtual display to the Docker container so Chromium can run in genuinely real headed mode without a physical monitor:
 
 ```dockerfile
-# In backend/Dockerfile — before the CMD line
-RUN apt-get install -y xvfb
+# In backend/Dockerfile — merge into the existing python3-venv apt-get RUN line
+# (added by #13's fix) rather than a separate RUN, to avoid an extra image layer
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv xvfb \
+    && rm -rf /var/lib/apt/lists/*
 ```
 
 ```python
@@ -1512,19 +1520,25 @@ os.environ["DISPLAY"] = ":99"
 # then launch_persistent_context(..., headless=False)
 ```
 
-This makes the container launch a headless X11 server internally and run Chromium in "headed" mode against it. Chromium sees a real display; bot detectors see a headed browser. Resource cost is minimal (~30 MB RAM).
+Chromium connects to Xvfb over the normal X11 protocol and has no way to tell it isn't a real display — it runs fully real headed Chromium, just rendering into memory instead of a screen. Bot detectors see a genuinely headed browser, because it genuinely is one. Resource cost ~30 MB RAM.
+
+**Coordination with `#40`'s browser lifecycle** (`start_browser()`/`close_browser()`, wired into `main.py`'s `lifespan`, plus its daily `recycle_browser()`):
+- Xvfb's subprocess must be spawned *before* `launch_persistent_context()` is called in `start_browser()` (Chromium needs `DISPLAY` set at launch time), and killed in `close_browser()`'s cleanup alongside the existing context/playwright teardown.
+- `recycle_browser()` (from `#40`) should **not** need to restart the Xvfb subprocess — Xvfb itself holds no session state that degrades over time, only Chromium's context does. Recycling should close+reopen just the browser context, leaving Xvfb running continuously underneath. Confirm this assumption live once both are built.
+- Not yet confirmed: whether the `xvfb` apt package has a prebuilt ARM64 build for jammy — very likely yes (Xvfb is a standard, widely-packaged X utility across architectures), but unverified until the Dockerfile actually builds on Pi.
 
 ### Known limitations
 
-- **BestBuy** may remain blocked even with Xvfb. BestBuy uses a Cloudflare WAF with TLS/JA4 fingerprinting — even a headed Chromium can be fingerprinted by its TLS handshake before any HTML is served. If BestBuy blocks on Pi regardless of headless/headed, treat it as unsupported and remove from `RETAILER_MAP` or mark as `scraper_type=null`.
-- **Amazon** works headful with the `[data-pricetopay-label]` semantic selector + `.a-offscreen` regex fallback. These selectors are stable because Amazon's own JS depends on them internally. If headless also works on Pi Docker (Step 1), Amazon needs no Xvfb.
+- **Amazon** no longer needs Xvfb or a warm-up workaround — confirmed passing headless as of this session's Playwright version bump. Keep it on the plain headless path; don't route it through Xvfb unnecessarily.
+- Both BestBuy and SSENSE have positive evidence Xvfb should fix them (both pass headful on Mac) — but that's evidence from a real physical display, not yet from Xvfb's virtual one specifically. Treat as strong-not-certain until verified live on Pi; if either still blocks even with Xvfb, mark it unsupported (remove from `RETAILER_MAP` / `scraper_type=null`) rather than continuing to chase it — BestBuy's Akamai Bot Manager and SSENSE's Cloudflare+Riskified stack are both sophisticated commercial products that could layer in additional signals beyond headless-detection.
 
 ### Acceptance criteria
 
-- [ ] Smoke test `--patchright` passes on Pi Docker for: `deadstock.ca` (Shopify), `ssense.com` (Next.js), `amazon.ca`
-- [ ] If Xvfb path taken: Dockerfile builds cleanly on ARM64 with `xvfb` installed
-- [ ] If Xvfb path taken: `start_browser()` starts Xvfb subprocess before Chromium launch, cleans up on `close_browser()`
-- [ ] BestBuy result documented: `ok`, `oos`, or marked unsupported with rationale
+- [ ] Smoke test `--patchright` passes on Pi Docker for: `deadstock.ca` (Shopify), `amazon.ca` — confirming the version-bump fix holds on Pi's real ARM64 environment, not just Mac
+- [ ] Dockerfile builds cleanly on Pi's ARM64 with `xvfb` installed
+- [ ] `start_browser()` starts the Xvfb subprocess before Chromium launch (with `DISPLAY` set), `close_browser()` cleans it up
+- [ ] BestBuy and SSENSE both re-tested against Xvfb specifically (not just the earlier real-display headful test) — result documented: `ok`, `oos`, or marked unsupported with rationale for each independently
+- [ ] `#40`'s `recycle_browser()` confirmed to not need Xvfb-subprocess restart — a scrape immediately after a recycle still succeeds without Xvfb having been touched
 
 ---
 
@@ -2262,55 +2276,95 @@ Surfaced testing `#10.2`'s add-item flow with a real `https://a.co/d/...` Amazon
 
 ---
 
-## [ ] Issue #40 — Start Patchright's Browser at App Startup
+## [x] Issue #40 — Lazy-Launch Patchright's Browser, Guarded by a Lock
 
 **Type:** fix / AFK
-**Estimate:** ~30min
+**Estimate:** ~1h
 
 ### What to build
 
-`PatchrightScraper.start_browser()`/`close_browser()` (`backend/app/services/scraper/patchright_scraper.py`) are fully implemented but never called anywhere in the running app — confirmed via a full-codebase grep, the only call site is a standalone `smoke_test.py` script. Wire `start_browser()` into `main.py`'s `lifespan` (alongside the existing Finnhub client startup) and `close_browser()` into its shutdown path, mirroring `smoke_test.py`'s already-correct usage pattern.
+`PatchrightScraper.start_browser()`/`close_browser()` (`backend/app/services/scraper/patchright_scraper.py`) are fully implemented but never called anywhere in the running app — confirmed via a full-codebase grep, the only call site is a standalone `smoke_test.py` script. Any code path needing the browser (`detect_scraper_type`'s fallback probe, `AmazonCAScraper`'s actual scraping, `RetailerRouter`'s generic-hierarchy-failed fallback) instantly returns `status="error"` instead of actually trying.
+
+**Lazy-init, guarded by a lock — not eager startup.** Originally planned as an eager `start_browser()` call in `main.py`'s `lifespan`, matching `FinnhubClient`'s unconditional-at-startup pattern; reconsidered after mapping the actual routing flow (see the Scraper Routing diagram, `.doc/diagrams/scraper-routing-flow.html`): Patchright is a *minority* path — only invoked for `RETAILER_MAP`-mapped retailers (currently just `amazon.ca`) or listings whose `scraper_type` was cached as `"patchright"` from a prior probe. Most sites (Shopify, JSON-LD, OpenGraph, Next.js) are handled entirely by `HTTPScraper`, never touching Patchright. Eager-start would mean running a persistent Chromium process 24/7 for a capability a given deployment might rarely or never exercise.
+
+```python
+_start_lock = asyncio.Lock()
+
+@classmethod
+async def start_browser(cls) -> None:
+    if cls._context is not None:
+        return
+    async with cls._start_lock:
+        if cls._context is not None:  # re-check after acquiring the lock
+            return
+        # ... launch as before
+```
+
+Call `start_browser()` defensively at the top of `get_price()` itself, not from `main.py`'s `lifespan`. The lock is what makes this safe under `#41`'s concurrency: when multiple background scrapes fire concurrently and several need Patchright simultaneously (e.g. a bulk-add of several `amazon.ca` listings), the first caller to reach the lock launches the browser; every other concurrent caller blocks briefly on the lock, then re-checks and finds `_context` already set, skipping a duplicate launch. Exactly one browser process ever starts, no matter how many concurrent callers need it at once — the launch-latency cost (a few seconds) is paid once collectively, not once per caller, and not at all if nothing in a given deployment ever needs Patchright.
+
+**Periodic recycle**, added for long-uptime resilience (a 24/7-running app, given the scheduler's own 6h polling never stops it) — needed regardless of eager vs. lazy, since once launched the browser runs continuously either way:
+- Add `PatchrightScraper._active_scrapes: int` counter, incremented before `_context.new_page()` in `get_price()`, decremented in the existing `finally` block alongside `page.close()`
+- Add `PatchrightScraper.recycle_browser()` classmethod: skip immediately if `_context is None` (never launched — nothing to recycle); otherwise skip (log, retry next scheduled tick) if `_active_scrapes > 0`; otherwise `close_browser()` then `start_browser()`
+- Register a new daily `AsyncIOScheduler` job in `main.py`'s `lifespan`, same `scheduler.add_job(...)` pattern already used for `poll_prices`
+- Add a row to `architecture.md`'s "Polling Schedule" table documenting it
+- Skip-if-busy instead of proper lock/wait coordination — deliberate simplification, discussed before building: at this app's scale (single user, scrapes bounded well under a minute, recycling only needs to happen roughly daily), the odds of a recycle tick landing exactly mid-scrape are low, and missing one day's recycle costs nothing
 
 ### Why (context)
 
-Surfaced debugging `#10.2`'s add-item flow — `PatchrightScraper._context` is always `None` in the running app, so any code path needing it (`detect_scraper_type`'s fallback probe, `AmazonCAScraper`'s actual scraping, `RetailerRouter`'s generic-hierarchy-failed fallback) instantly returns `status="error"` instead of actually trying. Broader than `#10.2` — this affects the **scheduled price-scraper job** (`jobs.py`'s `poll_prices` → `_process_item`, every 6h) for every existing/future `amazon.ca` listing and any listing whose `scraper_type` resolved to `"patchright"`, not just newly-added items. Confirmed live: manually starting the browser (`PatchrightScraper.start_browser()`) and calling `AmazonCAScraper().get_price(...)` against a real Amazon product page correctly returned a real price — the scraper code itself works, it's purely a missing startup wire-up.
+Surfaced debugging `#10.2`'s add-item flow — `PatchrightScraper._context` is always `None` in the running app, so any code path needing it instantly returns `status="error"` instead of actually trying. Broader than `#10.2` — this affects the **scheduled price-scraper job** (`jobs.py`'s `poll_prices` → `_process_item`, every 6h) for every existing/future `amazon.ca` listing and any listing whose `scraper_type` resolved to `"patchright"`, not just newly-added items. Confirmed live: manually starting the browser (`PatchrightScraper.start_browser()`) and calling `AmazonCAScraper().get_price(...)` against a real Amazon product page correctly returned a real price — the scraper code itself works, it's purely a missing startup wire-up. Likely the actual cause of the `scraper error for listing 13 (amazon_ca)` log line seen recurring on every Pi restart during `#13`'s testing.
+
+The eager-vs-lazy startup question and periodic recycle were both discussed and decided before implementation, not left as later cleanup — see reasoning above. Eager was the original plan; lazy+lock is the corrected one, reached after diagramming the actual routing flow made the "Patchright is a minority path" point concrete rather than abstract.
 
 ### Acceptance criteria
 
-- [ ] `PatchrightScraper.start_browser()` called during `main.py`'s `lifespan` startup, before the app starts accepting requests
-- [ ] `PatchrightScraper.close_browser()` called during `lifespan` shutdown
-- [ ] A real `amazon.ca` listing's scheduled scrape (`poll_prices` / manual `POST /api/poll/prices` trigger) successfully returns a real price, not `last_scrape_status: "error"`
-- [ ] `detect_scraper_type`'s Patchright fallback (for unknown domains that fail `HTTPScraper`) actually attempts a real headless-browser probe instead of instant-failing
-- [ ] App startup time impact is acceptable — launching a persistent browser context adds real startup latency; confirm it doesn't meaningfully delay the app becoming ready
+- [x] `PatchrightScraper.start_browser()` called lazily from `get_price()`, guarded by `_start_lock` — not called unconditionally from `main.py`'s `lifespan`. Fixed in **both** `PatchrightScraper.get_price()` and `AmazonCAScraper`'s override (a subclass with its own duplicate guard, not called out in the original spec text) — both call `PatchrightScraper.start_browser()` explicitly, not `self`/`cls`, so the subclass shares the base class's browser instead of creating a second one.
+- [x] `PatchrightScraper.close_browser()` still called during `lifespan` shutdown (cleanup remains eager even though startup isn't)
+- [x] Concurrent callers that all need Patchright simultaneously (e.g. a bulk-add of multiple `amazon.ca` listings) result in exactly one browser launch, verified live — not one per caller (instrumented 3-way concurrent test, launch count confirmed as 1)
+- [x] A real `amazon.ca` listing's scrape (`AmazonCAScraper().get_price()`, live) successfully returns a real price, not `status: "error"`
+- [x] `detect_scraper_type`'s Patchright fallback actually attempts a real headless-browser probe instead of instant-failing (unchanged code path, now backed by a working `start_browser()`)
+- [x] First-use launch latency confirmed acceptable — a few seconds, well within this app's non-latency-sensitive scrape cadence
+- [x] `recycle_browser()` correctly no-ops when the browser was never launched, skips when a scrape is in-flight (`_active_scrapes > 0`, verified via a real concurrent in-flight test), and successfully closes+reopens when idle (verified via context-identity change)
+- [x] Daily recycle job registered and firing on schedule, documented in `architecture.md`'s Polling Schedule table
+- [x] A scrape immediately following a recycle succeeds normally — verified live
 
 ---
 
 ## [ ] Issue #41 — Immediate First Scrape on Item/Listing Add
 
 **Type:** feat / AFK
-**Estimate:** ~2h
+**Estimate:** ~3h
 **Blocked by:** #40 (Patchright must actually be running for this to do anything)
 
 ### What to build
 
 Today, a newly-added product/listing shows `—` for price/status until the next scheduled 6h `poll_prices` cycle, or a manual `POST /api/poll/prices` call — nothing scrapes it at add-time. Add a background first-scrape: after `create_item`/`create_listing` returns its response (not blocking the request itself), fire a background task per newly-created listing that runs the same scrape logic `_process_item` (`jobs.py`) already does — write `PriceHistory`, update `Listing.last_price`/`last_scrape_status`, and (unconditionally, matching `_process_item`'s existing behavior) broadcast via the SSE mechanism `#36` already built.
 
-**Deliberately not synchronous** — blocking the add request on a real scrape (up to ~30s for a `Patchright`-dependent site) would make "Saving…" hang unacceptably long for what's otherwise a fast bulk-create. Firing it after the response returns, and letting `#36`'s existing SSE push (`mutate('/api/proxy/items')` on the frontend, already wired) deliver the result when it lands, needs zero new frontend plumbing — the table already updates itself on any SSE-pushed change.
+**Deliberately not synchronous** — blocking the add request on a real scrape (up to ~30s for a `Patchright`-dependent site) would make "Saving…" hang unacceptably long for what's otherwise a fast bulk-create. Firing it after the response returns, and letting `#36`'s existing SSE push (`mutate('/api/proxy/items')` on the frontend, already wired) deliver the result when it lands, means the *data refresh* needs zero new plumbing — but see the "Processing" UI state below, which does need new frontend work.
 
 Likely needs extracting `_process_item`'s scrape-one-listing logic (currently coupled to iterating `poll_prices`'s active-listings query) into a reusable function callable both from the scheduler loop and from this new add-time trigger, rather than duplicating the scrape+write+broadcast logic in a second place.
 
+**Concurrency bound:** background scrapes fire per-listing, one task each — bound this with `asyncio.Semaphore(3)`, reusing the same limit `#10.2`'s bulk-add already uses (`items.py`'s `_PROBE_CONCURRENCY`). Important distinction from that precedent, though: `#10.2`'s semaphore bounds `detect_scraper_type`'s lightweight *routing probe*, not a full scrape — this issue is the first time the app would run the *heavy* `_process_item`-style scrape (real page render, up to ~30s) concurrently at all; the scheduled `poll_prices` job runs those strictly sequentially today. Patchright's shared single-browser-context design should handle concurrent heavy scrapes the same way it handles concurrent probes, but that's an extrapolation from `#10.2`'s verification, not something already tested — verify live once built, don't assume it.
+
+**"Processing" UI state** (new frontend work, not just a data refresh):
+- Table: Status badge shows **"Processing"** instead of the normal status while any of a product's listings has `last_scrape_status: null` (never scraped since creation — derivable from existing nullable columns, no new backend field needed)
+- Table: Best Price cell shows a spinner during processing
+- Table: Last Checked and Price History cells show **empty string** (not `—`) during processing — distinct from the dash's existing meaning (checked before, no value came back)
+- Sheet panel: same "Processing" status shown; the active/inactive `Switch` is **disabled** while processing (can't pause something still doing its first scrape)
+
 ### Why (context)
 
-Surfaced testing `#10.2`'s add flow — adding a real `amazon.ca` listing correctly skips the add-time *probe* (by design, `RETAILER_MAP` fast path, unrelated to this), but that also means nothing ever fetches an actual price until the next 6h cycle. Reasonable expectation for anyone adding an item to want to see today's price and status immediately, not a multi-hour blank state.
+Surfaced testing `#10.2`'s add flow — adding a real `amazon.ca` listing correctly skips the add-time *probe* (by design, `RETAILER_MAP` fast path, unrelated to this), but that also means nothing ever fetches an actual price until the next 6h cycle. Reasonable expectation for anyone adding an item to want to see today's price and status immediately, not a multi-hour blank state. The "Processing" UI state and concurrency bound were spec'd out fully before implementation, discussing this issue ahead of `#40`.
 
 ### Acceptance criteria
 
 - [ ] Adding a real, scrapable listing triggers a background scrape that completes within a reasonable time after the add response returns (not blocking `POST /api/items`/`POST .../listings` itself)
 - [ ] That scrape writes `PriceHistory`, updates `last_price`/`last_scrape_status`, exactly like a normal scheduled cycle would
-- [ ] The result reaches the frontend via `#36`'s existing SSE broadcast — no new frontend code needed, table updates itself same as any other push
+- [ ] The result reaches the frontend via `#36`'s existing SSE broadcast, updating the row from "Processing" to its real values
 - [ ] An alert-crossing first scrape (price already below target on add) still triggers Pushover/email via the existing `Event`/queue path, same as any other scrape
 - [ ] A failed first scrape (bad URL, site down) sets `last_scrape_status: "error"` and doesn't block or fail the add itself — the item/listing stays created either way
-- [ ] Bulk add with multiple URLs: each successful listing gets its own background first-scrape, not just the first one
+- [ ] Bulk add with multiple URLs: each successful listing gets its own background first-scrape, not just the first one, bounded by `asyncio.Semaphore(3)`
+- [ ] "Processing" state (badge, Best Price spinner, empty-string Last Checked/Price History, disabled sheet-panel switch) verified live for both a single add and a multi-retailer bulk add
+- [ ] Concurrent heavy-scrape behavior against Patchright's shared browser context verified live post-implementation, not assumed safe from `#10.2`'s lighter-weight routing-probe precedent
 
 ---
 
@@ -2336,3 +2390,29 @@ Surfaced mid-`#13`, checking the actual runtime config before attempting step 8'
 - [ ] Previously-generated reports from the Mac are present and accessible from the Pi's deployment
 - [ ] Report storage location decided and documented (Pi-local / NAS / DB), with `report_path` semantics consistent with that decision
 - [ ] `#13`'s deferred step 8c (TradingAgents analyze smoke test) re-attempted and passing under this issue instead
+
+---
+
+## [x] Issue #43 — Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix)
+
+**Type:** ops / HITL
+**Estimate:** ~1h
+**Blocked by:** #13, #16
+
+### What was built
+
+The watchlist page crashed on the Pi with a generic "Application error: a client-side exception has occurred" — root-caused to `sse-leader.ts`'s SSE tab-leader election, which calls `navigator.locks.request(...)` unguarded. The Web Locks API only exists in secure contexts (HTTPS or `localhost`); the frontend was served over plain `http://youn-server:3000`, so `navigator.locks` was `undefined` and the call threw synchronously inside a `useEffect`.
+
+Fixed by actually getting the frontend onto HTTPS rather than just working around the crash:
+- `sudo tailscale serve --bg --https=443 localhost:3000` — Tailscale's own reverse proxy terminates TLS with an auto-provisioned cert, no manual cert management. App now reachable at `https://<tailnet-hostname>`, same URL on-LAN and off-LAN.
+- `docker-compose.yml`'s frontend port binding changed from `"3000:3000"` to `"127.0.0.1:3000:3000"` — closes the old plain-HTTP path on LAN/Tailscale entirely (`tailscale serve` still reaches it locally on the Pi's own loopback).
+- `sse-leader.ts` also got a defense-in-depth guard for a missing `navigator.locks` (falls back to one direct SSE connection per tab instead of crashing), in case the HTTPS setup ever regresses.
+
+Fixing this surfaced a second, unrelated bug in `docker-compose.local.yml` (Mac local dev's `db` service was on the wrong Docker network, and the TradingAgents mount hit Docker Desktop's `/opt` File Sharing restriction) — both fixed alongside, documented in `.doc/architecture.md`'s new Local Development section.
+
+### Acceptance criteria
+
+- [x] Frontend reachable over HTTPS at `https://<tailnet-hostname>`, same URL on home Wi-Fi and off-LAN (Tailscale-connected either way)
+- [x] Direct `http://youn-server:3000` no longer reachable from LAN/Tailscale (bound to Pi's `127.0.0.1` only)
+- [x] Watchlist page loads without the client-side exception on the Pi (verified live)
+- [x] Local Mac Docker dev stack (`docker-compose.yml` + `docker-compose.local.yml`) builds and runs clean, unaffected by the frontend port-binding change

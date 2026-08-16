@@ -39,6 +39,7 @@ async def test_lifespan_starts_and_stops_scheduler_and_finnhub() -> None:
         patch("app.main.FinnhubClient", return_value=finnhub) as finnhub_cls,
         patch("app.main.AsyncIOScheduler", return_value=scheduler) as scheduler_cls,
         patch("app.main.dispatcher.run", new=AsyncMock()) as dispatcher_run,
+        patch("app.main.PatchrightScraper.close_browser", new=AsyncMock()) as close_browser,
     ):
         async with lifespan(app):
             await asyncio.sleep(0)
@@ -54,14 +55,25 @@ async def test_lifespan_starts_and_stops_scheduler_and_finnhub() -> None:
             scheduler_cls.assert_called_once()
             dispatcher_run.assert_awaited_once_with(app.state.event_queue)
 
-            add_job_call = scheduler.add_job.call_args
-            assert add_job_call.args[1] == "interval"
-            assert add_job_call.kwargs["hours"] == 6
-            assert add_job_call.kwargs["args"] == [app.state.event_queue]
-            assert "next_run_time" in add_job_call.kwargs
+            # Two add_job calls now — poll_prices (6h) and Patchright's
+            # recycle_browser (24h). .call_args alone would only see the
+            # most recent one, so check call_args_list explicitly.
+            assert scheduler.add_job.call_count == 2
+            poll_prices_call, recycle_call = scheduler.add_job.call_args_list
+
+            assert poll_prices_call.args[1] == "interval"
+            assert poll_prices_call.kwargs["hours"] == 6
+            assert poll_prices_call.kwargs["args"] == [app.state.event_queue]
+            assert "next_run_time" in poll_prices_call.kwargs
+
+            assert recycle_call.args[1] == "interval"
+            assert recycle_call.kwargs["hours"] == 24
+            # Deliberately no next_run_time override — shouldn't fire on every restart
+            assert "next_run_time" not in recycle_call.kwargs
 
     scheduler.shutdown.assert_called_once_with(wait=False)
     finnhub.stop.assert_awaited_once()
+    close_browser.assert_awaited_once()
 
 
 @pytest.mark.asyncio
