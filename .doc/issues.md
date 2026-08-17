@@ -27,6 +27,30 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 
 ---
 
+## Issues by Feature Area
+
+Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
+
+**Watchlist / Price Scraping**
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ⬜ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45
+
+**Stocks / Portfolio**
+✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
+
+**TradingAgents / AI Chat**
+✅ #9, ✅ #17, ⬜ #42, ⬜ #25, ⬜ #26, ⬜ #27, ⬜ #28
+
+**Wealthsimple Import**
+⬜ #32, ⬜ #33
+
+**Infra / Deploy / Ops**
+✅ #1.5, ✅ #13, ✅ #13.1, ✅ #13.2, ✅ #16, ⬜ #20, ⬜ #21, ✅ #21.5, ✅ #34, ✅ #43
+
+**Core Backend Foundation** (shared plumbing + cross-cutting frontend shell, not owned by one domain)
+✅ #1, ✅ #2, ✅ #5, ✅ #6, ✅ #7, ⬜ #18, ✅ #8, ✅ #10.5, ⬜ #22, ⬜ #14, ⬜ #29
+
+---
+
 ## Progress Tracker
 
 | Status | ID | Description | Type | Est. | Blocked by |
@@ -2441,10 +2465,11 @@ Concretely:
 - `ProductCreate.name` becomes optional; when omitted, `Product.name` starts blank/placeholder and gets filled from the first successful scrape's inferred title — same async, non-blocking pattern `#41` already established for first-scrape (don't make item creation wait on this).
 - User-provided values always win — inference only ever fills a genuinely blank `Product.name`, never overwrites it; same for `retailer_display_name` falling back to today's hostname-derived string if inference comes back `None`.
 - `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) keep their static override untouched — inference only fills the gap for everything *not* already in `RETAILER_DISPLAY_NAMES`.
+- **After the above lands**, update the bulk-add failure toast (`watchlist/page.tsx`'s `handleAddItem`) to use each failed URL's retailer display name instead of the raw URL — today's message (`${f.url} (${f.detail})`) gets unreadably long for a real product URL. Deliberately sequenced after the rest of this issue: a failed-to-scrape URL has no successful scrape to infer a display name *from*, so this needs the same hostname-derived/`RETAILER_DISPLAY_NAMES` fallback this issue already builds for the non-inferred case, just applied at probe-failure time instead of post-scrape.
 
 ### Why (context)
 
-Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add showed the retailer badge as `muddygeorge_com` instead of a real brand name, and separately noted `Product.name` has no inference path at all if a user just pastes a URL without typing a name. Both point at the same root gap (no page-metadata extraction anywhere in the scraper layer), so scoped as one issue rather than two independent small ones.
+Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add showed the retailer badge as `muddygeorge_com` instead of a real brand name, and separately noted `Product.name` has no inference path at all if a user just pastes a URL without typing a name. Both point at the same root gap (no page-metadata extraction anywhere in the scraper layer), so scoped as one issue rather than two independent small ones. The bulk-add failure toast's long-raw-URL problem surfaced testing `#41` too (4-URL Airpods Max add, 3 failures) — same underlying fix, added as a sequenced task on this issue rather than a third one.
 
 ### Acceptance criteria
 
@@ -2453,3 +2478,69 @@ Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add
 - [ ] User-provided `Product.name` and any already-set `retailer_display_name` are never overwritten by inference
 - [ ] Inference failure (no extractable title/site name) degrades gracefully to today's existing fallback behavior — never blocks creation or scraping
 - [ ] `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) unaffected — static override still takes priority
+- [ ] Bulk-add failure toast shows each failed URL's retailer display name, not the raw URL
+
+---
+
+## [ ] Issue #45 — Multi-Currency Support (Detection, Display, Cross-Currency Comparison)
+
+**Type:** feat
+**Estimate:** ~5h
+
+### What to build
+
+Every price in the app is displayed with a hardcoded `$` — table Best Price, target price, sheet-panel listing prices, and the price-history chart tooltip (currently shows a bare unprefixed number, e.g. `52`, not even `$52`). This is silently wrong for non-USD/CAD sites: a Korean retailer quoting ₩52,000 gets parsed as a raw number and displayed as if it were `$52`, no conversion, no indication anything's off.
+
+**Currency lives per-`Listing`, not per-`Product`** — different retailers for the same watched item can genuinely be priced in different currencies (a KRW site and a USD site for the same product), so the model needs to support that rather than assuming one currency per product.
+
+Concretely:
+1. **Detection** — extend `ScraperResult` (same shared extraction point `#44` is already adding a `site_name` field to) with a `currency` field, inferred from the page: currency symbol adjacent to the price text, `og:price:currency`/JSON-LD `priceCurrency` metadata, or a locale/TLD-based default (`.co.kr` → KRW) as a last-resort fallback.
+2. **Storage** — new nullable `Listing.currency` column (migration required, e.g. ISO 4217 code like `"KRW"`, `"USD"`), set from detection on first scrape, same "only fill if unset" caching pattern as `#44`'s `retailer_display_name`.
+3. **Manual override** — sheet panel gets a currency selector per listing, so a wrong/undetected inference can be corrected by hand. User override always wins over re-detection on subsequent scrapes.
+4. **Display everywhere** — every price rendering (table, sheet panel, chart tooltip) uses the listing's actual currency symbol instead of a hardcoded `$`. Fixes the chart tooltip's missing-`$` bug as a side effect of doing this properly, rather than patching it separately with another hardcoded symbol.
+5. **Cross-currency "cheapest"/alert comparison — real FX conversion.** `compute_status`/the alert path's `min(available_listings, key=lambda l: l.last_price)` compares raw numbers today; once listings can differ in currency, that comparison is meaningless without conversion. Needs: an FX rate source (free-tier API — e.g. `exchangerate.host`, `frankfurter.app` — cached/refreshed on some interval, not fetched per-comparison), a decision on which currency `target_price`/alerts are expressed in (likely: the product's *primary* listing's currency, or a user-chosen product-level target currency), and converting every listing's `last_price` into that common currency before comparing. Stale/unavailable FX rates need a defined fallback (e.g. skip cross-currency comparison for that cycle rather than alerting on a stale rate) rather than silently comparing raw numbers again.
+
+### Why (context)
+
+Surfaced live-testing `#41` — a `muddygeorge.com` (Korean retailer, prices in KRW) listing displayed its price as `$52` with no conversion or currency indication, and the price-history chart tooltip doesn't even show a currency symbol at all today. Scoped separately from `#44` (which also extends `ScraperResult` with inferred metadata) because the cross-currency comparison design — FX source, staleness handling, what currency alerts are expressed in — is a materially bigger decision than a display-name fallback, not just another field to infer.
+
+### Acceptance criteria
+
+- [ ] Listing prices display with the correct currency symbol (not hardcoded `$`) across the table, sheet panel, and chart tooltip
+- [ ] Currency auto-detected from the scraped page on first scrape, stored per-`Listing`
+- [ ] Sheet panel lets a user manually set/override a listing's currency; override always wins over re-detection
+- [ ] "Cheapest"/target-price alert comparison across listings in different currencies uses real FX conversion, not raw-number comparison
+- [ ] FX rate staleness/unavailability has a defined, non-silent fallback — never alerts (or fails to alert) based on a stale/missing rate without it being knowable from logs
+- [ ] Existing single-currency products (the common case today) are unaffected — no behavior change when every listing on a product shares one currency
+
+---
+
+## [ ] Issue #46 — Ticker-Relevant News on the Detail Page
+
+**Type:** feat
+**Estimate:** ~2h
+
+### What to build
+
+Add a news section to the ticker detail page (`market/[ticker]/page.tsx`, built in `#31`), sourced from Finnhub's `/company-news` REST endpoint — the same API this app already talks to for quotes (`FinnhubClient.get_price`) and history (`get_price_history`), no new external dependency.
+
+**Plain REST, not the existing WebSocket — confirmed, not assumed.** The WS connection `FinnhubClient` already holds open only pushes `trade` messages (price ticks); news isn't part of that feed at this app's Finnhub tier, only available via the separate polling `/company-news` endpoint. Fits this app's own established polling-vs-push principle (`keynotes.md`) — a ticker's news doesn't arrive anywhere near tick frequency, so a plain fetch on page-load is the right transport, not something worth building push infra for. Also sidesteps a real scoping mismatch: the existing WS subscription is deliberately limited to `StockAlert`-backed tickers only (`#19`'s design decision), but the detail page can be visited for *any* ticker — a WS-based approach would need to extend that scoping rule for no real benefit.
+
+Concretely:
+- `FinnhubClient.get_company_news(ticker: str, days: int = 7) -> list[dict]` — same `_enabled` gate, try/except-and-log-empty-on-failure pattern as `get_price`/`get_price_history`; caps the returned list (e.g. 20 items) rather than returning Finnhub's full response.
+- New backend route — no existing route file fits (`stock_alerts.py` is alert-CRUD only; there's no `market.py`/ticker-detail route file at all today). `GET /api/market/{ticker}/news` in a new `api/market.py`.
+- Frontend: new card on the ticker detail page, same visual pattern as the existing `RecentActivityCard` — headline (links out to the source article), source name, relative timestamp. Fetched via `useSWR` on mount; a refresh interval is optional, not required, given how slowly this data actually changes.
+
+**Deliberately narrow scope — noted, not solved here:** the ticker detail page's non-alert data (`detail`, logo color, etc.) is currently mocked (`lib/mock-market.ts`'s `getMarketDetail()`), not real. This issue only builds the news piece; it doesn't replace the rest of that mock data, even though the new `market.py` route file created here would be a natural future home for it too.
+
+### Why (context)
+
+Requested directly — user wants ticker-relevant news visible on the detail page while looking up a stock.
+
+### Acceptance criteria
+
+- [ ] Ticker detail page shows recent news for that ticker (headline, source, link, relative timestamp)
+- [ ] Backend route returns real Finnhub company-news data, capped to a reasonable recent window
+- [ ] Gracefully empty (not broken) when a ticker has no recent news, or the Finnhub call fails
+- [ ] No new external dependency — reuses the existing `FinnhubClient`/`FINNHUB_API_KEY`
+- [ ] `lib/mock-market.ts`'s other mocked detail data is untouched — this issue adds news only
