@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +28,8 @@ from app.schemas.product import (
 )
 from app.scheduler.jobs import process_item
 from app.services.product_status import compute_last_checked, compute_status
+from app.services.scraper.base import USER_AGENTS, _build_headers
+from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
 from app.services.scraper.router import (
     RETAILER_DISPLAY_NAMES,
     RETAILER_MAP,
@@ -72,27 +76,72 @@ def _derive_retailer(hostname: str) -> str:
     return RETAILER_DISPLAY_NAMES.get(hostname, hostname.replace(".", "_"))
 
 
+async def _resolve_final_url(url: str) -> str:
+    """Follow redirects to `url`'s actual destination before RETAILER_MAP
+    routing decides on it (#39) — a shortlink (a.co, amzn.to, or any other
+    retailer's shortener) never matches its destination's entry otherwise,
+    since the un-resolved hostname is what gets checked. HEAD first
+    (cheaper — the response body is never needed, just the final URL);
+    some sites reject/mishandle HEAD, so fall back to GET on a non-2xx
+    status. Any network failure (DNS, timeout, connection refused, ...)
+    means we can't even find out where this URL goes, so it's raised the
+    same way an unscrapable URL is — callers already treat HTTPException
+    as a per-URL failure, not a whole-request one."""
+    try:
+        ua = random.choice(USER_AGENTS)
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS, http2=True
+        ) as client:
+            try:
+                resp = await client.head(url, headers=_build_headers(ua))
+                if resp.status_code >= 400:
+                    resp = await client.get(url, headers=_build_headers(ua))
+            except httpx.HTTPError:
+                # Some sites don't cleanly 4xx/5xx a HEAD they dislike —
+                # they drop the connection, hang, or send a malformed
+                # response instead, which httpx surfaces as an exception,
+                # not a status code. Retry as GET before giving up, same as
+                # the status-code fallback above; only a GET failure means
+                # the URL is actually unreachable.
+                resp = await client.get(url, headers=_build_headers(ua))
+        return str(resp.url)
+    except httpx.HTTPError as e:
+        # Narrowed to httpx's own exceptions — network/protocol failures
+        # only. A bug in this function itself (not a network problem)
+        # should surface as a 500, not get reported to the user as "URL
+        # could not be resolved".
+        _log.warning("URL resolution failed for %s", url, exc_info=True)
+        raise HTTPException(status_code=400, detail="URL could not be resolved") from e
+
+
 async def _resolve_retailer_and_scraper_type(
     url: str, retailer: str | None, scraper_type: str | None
-) -> tuple[str, str | None]:
-    """Shared by both POST endpoints: derive `retailer` from the URL's hostname
-    unless explicitly given, and auto-detect `scraper_type` via the scraper
-    extraction hierarchy unless the hostname is pre-registered or an explicit
-    override was provided."""
-    hostname = _hostname_of(url)
+) -> tuple[str, str, str | None]:
+    """Shared by both POST endpoints: resolve `url` to its final destination
+    first (#39 — following any redirects, e.g. a.co/amzn.to shortlinks), then
+    derive `retailer` from the resolved hostname unless explicitly given, and
+    auto-detect `scraper_type` via the scraper extraction hierarchy unless
+    the resolved hostname is pre-registered or an explicit override was
+    provided. Returns the resolved URL too — callers must store/use it
+    instead of the original, since RetailerRouter.get_price
+    (app/services/scraper/router.py) re-derives hostname from whatever URL
+    ends up on the Listing on every scheduled poll; storing the shortlink
+    would leave it routing wrong forever, not just failing this one add."""
+    resolved_url = await _resolve_final_url(url)
+    hostname = _hostname_of(resolved_url)
     resolved_retailer = retailer or _derive_retailer(hostname)
 
     if hostname in RETAILER_MAP:
-        return resolved_retailer, None
+        return resolved_url, resolved_retailer, None
     if scraper_type is not None:
-        return resolved_retailer, scraper_type
+        return resolved_url, resolved_retailer, scraper_type
     try:
-        detected = await detect_scraper_type(url)
+        detected = await detect_scraper_type(resolved_url)
     except ValueError:
         raise HTTPException(
             status_code=400, detail="URL could not be scraped by any available method"
         )
-    return resolved_retailer, detected
+    return resolved_url, resolved_retailer, detected
 
 
 async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
@@ -108,8 +157,10 @@ async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
     just its own URL, defeating the point of the concurrent-batch design."""
     async with semaphore:
         try:
-            retailer, scraper_type = await _resolve_retailer_and_scraper_type(url, None, None)
-            return _ProbeResult(url=url, retailer=retailer, scraper_type=scraper_type)
+            resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
+                url, None, None
+            )
+            return _ProbeResult(url=resolved_url, retailer=retailer, scraper_type=scraper_type)
         except HTTPException as e:
             return _ProbeResult(url=url, error=str(e.detail))
         except Exception:
@@ -306,10 +357,34 @@ async def create_item(
     if to_probe:
         semaphore = asyncio.Semaphore(_PROBE_CONCURRENCY)
         results = await asyncio.gather(*(_resolve_one(url, semaphore) for url in to_probe))
-        for result in results:
+
+        # Resolution (#39) can land two different pasted URLs on the same
+        # real destination — two shortlinks, or a shortlink alongside its
+        # own already-tracked resolved URL — which the pre-resolve dedup
+        # checks above (seen/existing_urls, both against raw candidates)
+        # can't catch. Listing.url is DB-unique, so without this second
+        # pass, gather()'s succeeded set would 409 the *whole* commit
+        # instead of degrading just the colliding URL — same invariant the
+        # rest of this function protects (one bad URL can't cancel the
+        # others).
+        succeeded_resolved = [r.url for r in results if r.error is None]
+        resolved_existing: set[str] = set()
+        if succeeded_resolved:
+            existing_resolved = await db.execute(
+                select(Listing.url).where(Listing.url.in_(succeeded_resolved))
+            )
+            resolved_existing = {row[0] for row in existing_resolved.all()}
+
+        seen_resolved: set[str] = set()
+        for original_url, result in zip(to_probe, results):
             if result.error is not None:
-                failed.append(ListingFailure(url=result.url, detail=result.error))
+                failed.append(ListingFailure(url=original_url, detail=result.error))
+            elif result.url in resolved_existing or result.url in seen_resolved:
+                failed.append(
+                    ListingFailure(url=original_url, detail="An item with this URL already exists")
+                )
             else:
+                seen_resolved.add(result.url)
                 product.listings.append(
                     Listing(url=result.url, retailer=result.retailer, scraper_type=result.scraper_type)
                 )
@@ -360,12 +435,19 @@ async def create_listing(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="An item with this URL already exists")
 
-    retailer, scraper_type = await _resolve_retailer_and_scraper_type(
+    # No second pre-commit check against the *resolved* URL here, unlike
+    # create_item's post-gather pass — this is a single URL, not a batch, so
+    # there's no "one bad URL shouldn't cancel the others" invariant to
+    # protect. A resolved-URL collision (this shortlink turns out to point
+    # at an already-tracked destination) still gets caught, just later: the
+    # IntegrityError → 409 handler below fires at commit, same message
+    # either way.
+    resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
         body.url, body.retailer, body.scraper_type
     )
 
     listing = Listing(
-        url=body.url, retailer=retailer, scraper_type=scraper_type, product_id=product_id
+        url=resolved_url, retailer=retailer, scraper_type=scraper_type, product_id=product_id
     )
     db.add(listing)
     try:
@@ -445,10 +527,13 @@ async def update_listing(
         if existing.scalar_one_or_none() is not None:
             raise HTTPException(status_code=409, detail="An item with this URL already exists")
 
-        retailer, scraper_type = await _resolve_retailer_and_scraper_type(
+        # Same as create_listing above — a resolved-URL collision not caught
+        # by this raw-URL pre-check still gets caught at commit's
+        # IntegrityError → 409 handler below.
+        resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
             body.url, body.retailer, None
         )
-        listing.url = body.url
+        listing.url = resolved_url
         listing.retailer = retailer
         listing.scraper_type = scraper_type
 

@@ -3,12 +3,26 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from app.api import items
 from app.schemas.listing import ListingCreate, ListingUpdate
 from app.schemas.product import ProductCreate, ProductUpdate
 from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import IntegrityError
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolve_final_url():
+    """_resolve_retailer_and_scraper_type (#39) now resolves the URL's final
+    destination via a real network round-trip before routing — irrelevant to
+    most of this file's route-behavior tests, and would otherwise hit a real
+    network for a test URL that doesn't exist. Stubbed to an identity no-op
+    (returns the URL unchanged, as if it never redirected) so every test
+    keeps today's pre-#39 behavior for free; the redirect-specific tests
+    below override it locally."""
+    with patch("app.api.items._resolve_final_url", new=AsyncMock(side_effect=lambda url: url)) as mock:
+        yield mock
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +53,12 @@ def _request() -> SimpleNamespace:
 # exception-guard behavior directly instead of the stub.
 _real_bounded_process_item = items._bounded_process_item
 
+# Same pattern, for _resolve_final_url (#39) — the autouse
+# _stub_resolve_final_url fixture below patches this name for every other
+# test in this file, so _resolve_final_url's own unit tests need the
+# unpatched function to actually exercise it.
+_real_resolve_final_url = items._resolve_final_url
+
 
 class _AsyncCM:
     def __init__(self, value):
@@ -46,6 +66,23 @@ class _AsyncCM:
 
     async def __aenter__(self):
         return self._value
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeHTTPClient:
+    """Stand-in for `httpx.AsyncClient` used only by `_resolve_final_url`'s
+    unit tests below — a real client's `async with ... as client:` needs
+    `.head`/`.get` to be independently awaitable mocks, not a single
+    `_AsyncCM`-wrapped value."""
+
+    def __init__(self, *, head: AsyncMock | None = None, get: AsyncMock | None = None):
+        self.head = head or AsyncMock()
+        self.get = get or AsyncMock()
+
+    async def __aenter__(self):
+        return self
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
@@ -372,6 +409,211 @@ async def test_create_listing_duplicate_url_returns_409() -> None:
 
     assert exc_info.value.status_code == 409
     db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_item_shortlink_resolves_before_retailer_map_routing(
+    _stub_resolve_final_url: AsyncMock,
+) -> None:
+    # #39 — a shortlink's own hostname (a.co) would never match RETAILER_MAP;
+    # routing must happen against the resolved destination's hostname.
+    request = _request()
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_rows_result([]))
+    db.add = MagicMock(side_effect=_assign_persisted_defaults)
+    db.commit = AsyncMock()
+
+    _stub_resolve_final_url.side_effect = lambda url: "https://www.amazon.ca/dp/B0X"
+
+    body = ProductCreate(name="Watch", target_price=10.0, urls=["https://a.co/d/abc"])
+
+    with (
+        patch.dict("app.api.items.RETAILER_MAP", {"amazon.ca": object()}),
+        patch("app.api.items.detect_scraper_type", new=AsyncMock()) as detect,
+    ):
+        result = await items.create_item(request, body, db)
+
+    detect.assert_not_awaited()
+    assert result.product.listings[0].url == "https://www.amazon.ca/dp/B0X"
+    assert result.product.listings[0].retailer == "Amazon"
+    assert result.failed == []
+
+
+@pytest.mark.asyncio
+async def test_create_listing_shortlink_resolves_before_retailer_map_routing(
+    _stub_resolve_final_url: AsyncMock,
+) -> None:
+    request = _request()
+    product = _product(product_id=5)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[_scalar_result(product), _scalar_result(None)])
+    db.add = MagicMock(side_effect=_assign_persisted_defaults)
+    db.commit = AsyncMock()
+
+    _stub_resolve_final_url.side_effect = lambda url: "https://www.bestbuy.ca/p"
+
+    body = ListingCreate(url="https://bby.link/xyz")
+
+    with patch.dict("app.api.items.RETAILER_MAP", {"bestbuy.ca": object()}):
+        result = await items.create_listing(request, 5, body, db)
+
+    assert result.url == "https://www.bestbuy.ca/p"
+    assert result.retailer == "bestbuy_ca"
+
+
+@pytest.mark.asyncio
+async def test_create_item_resolved_url_collision_within_batch_reported_in_failed(
+    _stub_resolve_final_url: AsyncMock,
+) -> None:
+    # Two different pasted shortlinks resolving to the same real product —
+    # the pre-resolve in-batch/DB dedup checks (against raw candidates)
+    # can't catch this; must be re-checked post-resolve, and must degrade
+    # per-URL rather than 409ing the whole batch (Listing.url is unique).
+    request = _request()
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_rows_result([]))
+    db.add = MagicMock(side_effect=_assign_persisted_defaults)
+    db.commit = AsyncMock()
+
+    _stub_resolve_final_url.side_effect = lambda url: "https://www.amazon.ca/dp/B0X"
+
+    body = ProductCreate(
+        name="Item",
+        target_price=10.0,
+        urls=["https://a.co/d/one", "https://amzn.to/two"],
+    )
+
+    with (
+        patch.dict("app.api.items.RETAILER_MAP", {"amazon.ca": object()}),
+        patch("app.api.items.detect_scraper_type", new=AsyncMock()),
+    ):
+        result = await items.create_item(request, body, db)
+
+    assert len(result.product.listings) == 1
+    assert result.product.listings[0].url == "https://www.amazon.ca/dp/B0X"
+    assert len(result.failed) == 1
+    assert result.failed[0].detail == "An item with this URL already exists"
+    # Failure still echoes the URL the user actually pasted, not the
+    # resolved one — same shape as every other failed[] entry.
+    assert result.failed[0].url in ("https://a.co/d/one", "https://amzn.to/two")
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_item_resolved_url_matches_existing_listing_reported_in_failed(
+    _stub_resolve_final_url: AsyncMock,
+) -> None:
+    # Pasted shortlink resolves to a URL some other listing already tracks
+    # directly — pre-resolve existing_urls check (against the raw shortlink)
+    # can't catch this either; must be re-checked post-resolve.
+    request = _request()
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[_rows_result([]), _rows_result([("https://www.amazon.ca/dp/B0X",)])]
+    )
+    db.add = MagicMock(side_effect=_assign_persisted_defaults)
+    db.commit = AsyncMock()
+
+    _stub_resolve_final_url.side_effect = lambda url: "https://www.amazon.ca/dp/B0X"
+
+    body = ProductCreate(name="Item", target_price=10.0, urls=["https://a.co/d/one"])
+
+    with (
+        patch.dict("app.api.items.RETAILER_MAP", {"amazon.ca": object()}),
+        patch("app.api.items.detect_scraper_type", new=AsyncMock()),
+    ):
+        result = await items.create_item(request, body, db)
+
+    assert result.product.listings == []
+    assert result.failed[0].url == "https://a.co/d/one"
+    assert result.failed[0].detail == "An item with this URL already exists"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_head_success_returns_final_url() -> None:
+    resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0X")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://a.co/d/abc")
+
+    assert result == "https://www.amazon.ca/dp/B0X"
+    client.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_falls_back_to_get_on_head_error_status() -> None:
+    head_resp = SimpleNamespace(status_code=405, url="https://a.co/d/abc")
+    get_resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0X")
+    client = _FakeHTTPClient(
+        head=AsyncMock(return_value=head_resp), get=AsyncMock(return_value=get_resp)
+    )
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://a.co/d/abc")
+
+    assert result == "https://www.amazon.ca/dp/B0X"
+    client.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_unchanged_when_no_redirect() -> None:
+    resp = SimpleNamespace(status_code=200, url="https://shop.example.com/p")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://shop.example.com/p")
+
+    assert result == "https://shop.example.com/p"
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_falls_back_to_get_on_head_exception() -> None:
+    # Some sites don't cleanly 4xx a HEAD they dislike — they drop the
+    # connection or send a malformed response, which httpx surfaces as an
+    # exception rather than a status code. Must still fall back to GET
+    # before giving up, same as the status-code case.
+    get_resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0X")
+    client = _FakeHTTPClient(
+        head=AsyncMock(side_effect=httpx.RemoteProtocolError("boom")),
+        get=AsyncMock(return_value=get_resp),
+    )
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://a.co/d/abc")
+
+    assert result == "https://www.amazon.ca/dp/B0X"
+    client.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_network_failure_raises_400() -> None:
+    # Both HEAD and the GET fallback fail — genuinely unreachable.
+    client = _FakeHTTPClient(
+        head=AsyncMock(side_effect=httpx.ConnectError("boom")),
+        get=AsyncMock(side_effect=httpx.ConnectError("boom")),
+    )
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        with pytest.raises(HTTPException) as exc_info:
+            await _real_resolve_final_url("https://dead-shortlink.example/x")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "URL could not be resolved"
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_non_http_error_propagates_uncaught() -> None:
+    # A bug in this function itself (not a network problem) should surface
+    # as an unhandled exception (500), not get reported to the user as a
+    # routing/resolution failure — the except clause is narrowed to
+    # httpx.HTTPError specifically, not a bare `except Exception`.
+    client = _FakeHTTPClient(head=AsyncMock(side_effect=RuntimeError("bug, not a network issue")))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        with pytest.raises(RuntimeError):
+            await _real_resolve_final_url("https://shop.example.com/p")
 
 
 @pytest.mark.asyncio

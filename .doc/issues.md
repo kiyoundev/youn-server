@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ⬜ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -98,7 +98,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #36 | Wishlist Page (Real Data + Live Price History via SSE) | feat / AFK | ~6h | #8, #24 |
 | ⬜ Open | #37 | Stocks/Portfolio Page — Live Updates via SSE (Finnhub Tick Broadcast) | feat / AFK | ~4h | #36, #10.4 |
 | ⬜ Open | #38 | Earnings Calendar (Portfolio Page + Ticker Detail Page) | feat / AFK | ~3h | #19, #31 |
-| ⬜ Open | #39 | Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support) | fix / AFK | ~1.5h | None |
+| ✅ Done | #39 | Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support) | fix / AFK | ~1.5h | None |
 | ✅ Done | #40 | Lazy-Launch Patchright's Browser, Guarded by a Lock | fix / AFK | ~1h | None |
 | ⬜ Open | #41 | Immediate First Scrape on Item/Listing Add | feat / AFK | ~3h | #40 |
 | ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
@@ -2274,7 +2274,7 @@ Surfaced while placing a "Run TradingAgents" button on `#31`'s ticker detail pag
 
 ---
 
-## [ ] Issue #39 — Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support)
+## [x] Issue #39 — Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support)
 
 **Type:** fix / AFK
 **Estimate:** ~1.5h
@@ -2293,10 +2293,12 @@ Surfaced testing `#10.2`'s add-item flow with a real `https://a.co/d/...` Amazon
 
 ### Acceptance criteria
 
-- [ ] Adding a real Amazon shortlink (`a.co`/`amzn.to`) routes to `AmazonCAScraper` and successfully extracts a price, same as pasting the resolved `amazon.ca` URL directly
-- [ ] Retailer display name derives from the resolved hostname, not the shortlink's own domain (e.g. shows "Amazon", not "a_co")
-- [ ] A URL that doesn't redirect at all (already the final destination) behaves identically to today — no regression for the common case
-- [ ] `create_listing` (single-URL add, sheet's "add retailer" flow) gets the same fix — not just bulk `create_item`
+- [x] Adding a real Amazon shortlink (`a.co`/`amzn.to`) routes to `AmazonCAScraper` and successfully extracts a price, same as pasting the resolved `amazon.ca` URL directly — verified this way, not just at routing time: `_resolve_final_url` persists the **resolved** URL as `Listing.url`, not the shortlink. Required, not cosmetic — `RetailerRouter.get_price` (`services/scraper/router.py`) re-derives hostname from whatever URL is stored on every scheduled poll (`jobs.py`'s 6h `poll_prices`), so storing the shortlink would leave routing broken forever, not just fix the initial add.
+- [x] Retailer display name derives from the resolved hostname, not the shortlink's own domain (e.g. shows "Amazon", not "a_co")
+- [x] A URL that doesn't redirect at all (already the final destination) behaves identically to today — no regression for the common case
+- [x] `create_listing` (single-URL add, sheet's "add retailer" flow) gets the same fix — not just bulk `create_item`. `update_listing`'s URL-change path picks up the same fix for free too, since it shares `_resolve_retailer_and_scraper_type` — not called out in the original spec text.
+- [x] (Beyond the original spec) Bulk `create_item`'s dedup re-checks *resolved* URLs, not just raw pasted ones — two different shortlinks resolving to the same destination (or a shortlink resolving to a URL another listing already tracks directly) degrades to a per-URL `failed[]` entry, not a whole-batch 409 (`Listing.url` is DB-unique).
+- [x] (Beyond the original spec) A URL that can't be resolved at all (DNS failure, timeout, connection refused) is treated as unscrapable — reported in `failed[]` for bulk, 400 for single-add — instead of silently falling back to routing against the original hostname.
 
 ---
 
