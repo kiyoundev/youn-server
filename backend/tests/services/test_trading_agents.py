@@ -350,17 +350,3 @@ async def test_run_analysis_bad_json_sets_failed():
     assert analysis.status == "failed"
     assert analysis.error_reason == "invalid_output"
 
-
-# --- spawn --------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_spawn_holds_and_releases_task_reference():
-    async def _noop():
-        return None
-
-    task = trading_agents.spawn(_noop())
-    assert task in trading_agents._background_tasks
-
-    await task
-    assert task not in trading_agents._background_tasks

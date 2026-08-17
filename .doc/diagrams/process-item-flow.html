@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>process_item Flow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1100px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · Diagram Design</p>
+    <h1>process_item — one function, two callers, two notification paths</h1>
+
+    <svg viewBox="0 0 800 740" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="process-item-flow-title process-item-flow-desc">
+      <title id="process-item-flow-title">process_item — scrape, DB write, and the two notification branches</title>
+      <desc id="process-item-flow-desc">Flowchart showing the scheduled poll_prices job and the planned #41 add-time background spawn both converging on process_item, which scrapes a listing, always writes price and status to Postgres, then splits into two independent branches — a conditional alert path through an asyncio.Queue and dispatcher to Pushover, and an unconditional SSE broadcast that pushes live updates to open browser tabs.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- ============ ARROWS (drawn before boxes) ============ -->
+
+      <!-- A: poll_prices -> process_item (single-bend, vertical entry into top edge) -->
+      <path d="M160,120 H352 Q360,120 360,128 V160"
+            fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="282" y="138" width="70" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="317" y="147" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">SEQUENTIAL</text>
+
+      <!-- B: add-time spawn -> process_item (single-bend, mirrored, vertical entry into top edge) -->
+      <path d="M640,120 H448 Q440,120 440,128 V160"
+            fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="448" y="138" width="80" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="488" y="147" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">PER LISTING</text>
+
+      <!-- C1: process_item -> Retailer site (request) -->
+      <line x1="500" y1="200" x2="540" y2="200" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="504" y="180" width="32" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="520" y="189" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.02em">SCRAPE</text>
+
+      <!-- C2: Retailer site -> process_item (response) -->
+      <line x1="540" y1="232" x2="500" y2="232" stroke="#2e5aa8" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-link)"/>
+      <rect x="506" y="238" width="28" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="520" y="247" fill="#7189bb" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.02em">HTML</text>
+
+      <!-- D1: process_item -> DB, non-success outcomes (dashed, status only) -->
+      <line x1="350" y1="256" x2="350" y2="296" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="230" y="268" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="286" y="277" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.03em">OOS / ERR / NO-PRICE</text>
+
+      <!-- D2: process_item -> DB, success outcome (solid) -->
+      <line x1="450" y1="256" x2="450" y2="296" stroke="#2d3142" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="458" y="268" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="490" y="277" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">SUCCESS</text>
+
+      <!-- E1: DB -> Event/Queue/Dispatcher (single-bend, mirrored, vertical entry into top edge) -->
+      <path d="M340,376 H208 Q200,376 200,384 V424"
+            fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="102" y="398" width="90" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="147" y="407" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.03em">ALERT-WORTHY</text>
+
+      <!-- E2: DB -> SSE broadcast (single-bend, vertical entry into top edge) -->
+      <path d="M460,376 H592 Q600,376 600,384 V424"
+            fill="none" stroke="#2d3142" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="608" y="398" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="407" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ALWAYS</text>
+
+      <!-- F: Event/Queue/Dispatcher -> Pushover -->
+      <line x1="200" y1="520" x2="200" y2="560" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="172" y="532" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="200" y="541" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">POST</text>
+
+      <!-- G: SSE broadcast -> EventSource -->
+      <line x1="600" y1="520" x2="600" y2="560" stroke="#2d3142" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="572" y="532" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="541" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">PUSH</text>
+
+      <!-- ============ NODES ============ -->
+
+      <!-- 1. poll_prices -->
+      <rect x="60" y="40" width="200" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="60" y="40" width="200" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="68" y="52" width="34" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="85" y="61" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">JOB</text>
+      <text x="160" y="82" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">poll_prices</text>
+      <text x="160" y="98" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">jobs.py · every 6h</text>
+
+      <!-- 2. add-time spawn (#41, planned — dashed/optional) -->
+      <rect x="540" y="40" width="200" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="540" y="40" width="200" height="80" rx="6" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="548" y="52" width="46" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="571" y="61" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SPAWN</text>
+      <text x="640" y="82" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">add-time spawn</text>
+      <text x="640" y="98" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">items.py · #41, planned</text>
+
+      <!-- 3. process_item (focal) -->
+      <rect x="300" y="160" width="200" height="96" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="160" width="200" height="96" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <rect x="308" y="172" width="36" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.55)" stroke-width="0.8"/>
+      <text x="326" y="181" fill="#eb6c36" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP</text>
+      <text x="400" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">process_item</text>
+      <text x="400" y="220" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">jobs.py · scrape + write + notify</text>
+      <text x="400" y="240" fill="#7a8399" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="middle">one function, either caller</text>
+
+      <!-- 4. Retailer site (external) -->
+      <rect x="540" y="172" width="160" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="540" y="172" width="160" height="80" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="548" y="184" width="30" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="563" y="193" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="620" y="214" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Retailer site</text>
+      <text x="620" y="230" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">amazon.ca, etc.</text>
+
+      <!-- 5. Postgres (store) -->
+      <rect x="300" y="296" width="200" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="296" width="200" height="80" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="308" y="308" width="26" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="321" y="317" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="400" y="338" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Postgres</text>
+      <text x="400" y="354" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">price_history + listings</text>
+
+      <!-- 6. Event / Queue / Dispatcher (conditional, dashed) -->
+      <rect x="80" y="424" width="240" height="96" rx="6" fill="#f5f5f5"/>
+      <rect x="80" y="424" width="240" height="96" rx="6" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="88" y="436" width="46" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="111" y="445" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">QUEUE</text>
+      <text x="200" y="468" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Event → dispatcher</text>
+      <text x="200" y="484" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">asyncio.Queue[int]</text>
+      <text x="200" y="500" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">app.state.event_queue</text>
+
+      <!-- 7. SSE broadcast (unconditional, solid) -->
+      <rect x="480" y="424" width="240" height="96" rx="6" fill="#f5f5f5"/>
+      <rect x="480" y="424" width="240" height="96" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="488" y="436" width="34" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="505" y="445" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP</text>
+      <text x="600" y="468" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SSE broadcast</text>
+      <text x="600" y="484" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sse.py · in-memory fan-out</text>
+      <text x="600" y="500" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">not app.state, module-global</text>
+
+      <!-- 8. Pushover (external) -->
+      <rect x="100" y="560" width="200" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="100" y="560" width="200" height="80" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="108" y="572" width="30" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="123" y="581" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="200" y="602" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Pushover</text>
+      <text x="200" y="618" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">api.pushover.net</text>
+
+      <!-- 9. EventSource (browser) -->
+      <rect x="500" y="560" width="200" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="500" y="560" width="200" height="80" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="508" y="572" width="52" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="534" y="581" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BROWSER</text>
+      <text x="600" y="602" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">EventSource</text>
+      <text x="600" y="618" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">watchlist page, per tab</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="30" y1="672" x2="770" y2="672" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="30" y="688" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="30" y="700" width="12" height="12" rx="3" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="50" y="709" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">CONVERGENCE POINT</text>
+
+      <line x1="215" y1="706" x2="243" y2="706" stroke="#2d3142" stroke-width="1.2"/>
+      <text x="251" y="709" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">ALWAYS FIRES</text>
+
+      <line x1="370" y1="706" x2="398" y2="706" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="406" y="709" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">CONDITIONAL / ALERT-ONLY</text>
+
+      <rect x="580" y="700" width="20" height="12" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="608" y="709" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">PLANNED — NOT YET BUILT</text>
+    </svg>
+  </div>
+</body>
+</html>

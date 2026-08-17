@@ -71,7 +71,7 @@ async def test_poll_prices_processes_all_active_items() -> None:
     with (
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.RetailerRouter") as router_cls,
-        patch("app.scheduler.jobs._process_item", new=AsyncMock()) as process_item,
+        patch("app.scheduler.jobs.process_item", new=AsyncMock()) as process_item,
     ):
         queue = asyncio.Queue()
         await jobs.poll_prices(queue)
@@ -87,7 +87,7 @@ async def test_poll_prices_processes_all_active_items() -> None:
 async def test_poll_prices_skips_when_lock_already_held() -> None:
     with (
         patch("app.scheduler.jobs.RetailerRouter") as router_cls,
-        patch("app.scheduler.jobs._process_item", new=AsyncMock()) as process_item,
+        patch("app.scheduler.jobs.process_item", new=AsyncMock()) as process_item,
     ):
         async with jobs._prices_lock:
             queue = asyncio.Queue()
@@ -111,7 +111,7 @@ async def test_poll_prices_continues_when_item_processing_errors() -> None:
     with (
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.RetailerRouter") as router_cls,
-        patch("app.scheduler.jobs._process_item", new=process),
+        patch("app.scheduler.jobs.process_item", new=process),
     ):
         queue = asyncio.Queue()
         await jobs.poll_prices(queue)
@@ -144,7 +144,7 @@ async def test_process_item_writes_history_and_price_drop_event() -> None:
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(7, router, queue)
+        await jobs.process_item(7, router, queue)
 
     assert session.add.call_count == 2  # PriceHistory + Event
     assert listing.last_price == 90.0
@@ -171,7 +171,7 @@ async def test_process_item_blocks_duplicate_drop_when_alerted() -> None:
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(8, router, queue)
+        await jobs.process_item(8, router, queue)
 
     assert session.add.call_count == 1  # PriceHistory only, no new Event (already alerted)
     assert product.alerted_at == alerted  # unchanged
@@ -196,7 +196,7 @@ async def test_process_item_recovery_clears_alerted_at() -> None:
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(9, router, queue)
+        await jobs.process_item(9, router, queue)
 
     assert product.alerted_at is None
     assert session.add.call_count == 1
@@ -225,7 +225,7 @@ async def test_process_item_ignores_inactive_sibling_listing_when_recomputing_ch
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(20, router, queue)
+        await jobs.process_item(20, router, queue)
 
     assert paused_sibling.last_price == 1.0  # untouched
     assert product.alerted_at is None  # 120 > 100, never triggered
@@ -260,7 +260,7 @@ async def test_process_item_excludes_oos_listing_stale_price_from_cheapest() -> 
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(40, router, queue)
+        await jobs.process_item(40, router, queue)
 
     # Without the fix, oos_sibling's stale $50 would win and incorrectly
     # trigger (50 <= 100), even though nothing is actually available there.
@@ -296,7 +296,7 @@ async def test_process_item_recovery_not_blocked_by_stale_oos_sibling() -> None:
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(50, router, queue)
+        await jobs.process_item(50, router, queue)
 
     # Without the fix, oos_sibling's stale $50 would keep "cheapest" <= 100
     # forever, so alerted_at would never clear even though the only
@@ -327,7 +327,7 @@ async def test_process_item_unrelated_active_listing_does_not_incorrectly_rearm(
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(30, router, queue)
+        await jobs.process_item(30, router, queue)
 
     assert product.alerted_at == alerted  # still armed — BestBuy is still under target
     assert queue.empty()
@@ -348,7 +348,7 @@ async def test_process_item_persists_scrape_status_on_oos_or_error(status: str) 
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(10, router, queue)
+        await jobs.process_item(10, router, queue)
 
     assert listing.last_scrape_status == status
     session.add.assert_not_called()  # no PriceHistory row — no price to record
@@ -372,7 +372,7 @@ async def test_process_item_skips_ok_status_with_none_price() -> None:
 
     queue = asyncio.Queue()
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
-        await jobs._process_item(10, router, queue)
+        await jobs.process_item(10, router, queue)
 
     session.add.assert_not_called()
     session.commit.assert_not_awaited()
@@ -398,7 +398,7 @@ async def test_process_item_broadcasts_after_successful_scrape() -> None:
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.broadcast") as broadcast_mock,
     ):
-        await jobs._process_item(7, router, queue)
+        await jobs.process_item(7, router, queue)
 
     broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})
 
@@ -426,7 +426,7 @@ async def test_process_item_broadcast_uses_scraped_listing_not_cheapest_winner()
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.broadcast") as broadcast_mock,
     ):
-        await jobs._process_item(7, router, queue)
+        await jobs.process_item(7, router, queue)
 
     broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})  # not 8
 
@@ -449,7 +449,7 @@ async def test_process_item_does_not_broadcast_on_oos_or_error(status: str) -> N
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.broadcast") as broadcast_mock,
     ):
-        await jobs._process_item(10, router, queue)
+        await jobs.process_item(10, router, queue)
 
     broadcast_mock.assert_not_called()
 
@@ -471,7 +471,7 @@ async def test_process_item_does_not_broadcast_when_ok_status_has_none_price() -
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.broadcast") as broadcast_mock,
     ):
-        await jobs._process_item(10, router, queue)
+        await jobs.process_item(10, router, queue)
 
     broadcast_mock.assert_not_called()
 
@@ -491,7 +491,7 @@ async def test_process_item_does_not_broadcast_for_an_inactive_listing() -> None
         patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
         patch("app.scheduler.jobs.broadcast") as broadcast_mock,
     ):
-        await jobs._process_item(10, router, queue)
+        await jobs.process_item(10, router, queue)
 
     router.get_price.assert_not_called()
     broadcast_mock.assert_not_called()

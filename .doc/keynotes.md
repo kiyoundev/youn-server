@@ -618,6 +618,164 @@ Same pattern applies to hoisting a function definition out of a component so it 
 
 **The one-line way to keep them apart:** #1 is a rule the JS engine follows automatically when parsing code. #2 is an instruction a human carries out by hand, usually in response to a reviewer saying "hoist this." Same English word, unrelated mechanism underneath — in a React/JS codebase, "hoist this" in review means #2 essentially every time.
 
+## asyncio concurrency — event loop, coroutines vs Tasks, and why it isn't parallelism (2026-08-15)
+
+Came up while planning `#41`'s background first-scrape (step 1: extracting `spawn()` to `app/core/background_tasks.py`). Worth a permanent write-up — the concurrency-vs-parallelism distinction and the no-preemption rule both bite in non-obvious ways once real concurrent scrapes start running (`#41`'s `Semaphore(3)`, step 3, not yet built).
+
+### Concurrency vs parallelism — not the same thing
+
+- **Concurrency** — dealing with multiple things over an overlapping time period, by interleaving. Never two things running at the literal same instant; just switching between them whenever one goes idle.
+- **Parallelism** — actually doing multiple things at the literal same instant. Requires multiple physical execution units (CPU cores, separate machines).
+
+`asyncio` gives concurrency, not parallelism. One thread, one interpreter, one event loop. At any given nanosecond at most one coroutine's bytecode is executing — what makes it *feel* faster than doing things one-after-another is that most of the wait isn't CPU work at all (network round-trip, disk I/O, a timer) — the loop fills those idle gaps with other coroutines' work instead of just blocking on one thing at a time.
+
+This only helps **I/O-bound** work. CPU-bound work has no idle gaps to fill — see the interruption case below.
+
+### Coroutine vs Task, traced literally
+
+```python
+async def make_coffee():
+    print("start coffee")
+    await asyncio.sleep(3)
+    print("coffee done")
+
+async def make_toast():
+    print("start toast")
+    await asyncio.sleep(2)
+    print("toast done")
+```
+
+Calling `make_coffee()` does nothing yet — it returns a coroutine object, inert until something drives it. `await` and `create_task` drive it in structurally different ways:
+
+**Sequential — `await` inline:**
+```python
+async def main():
+    await make_coffee()   # blocks here until fully done
+    await make_toast()
+```
+Trace: `main` pauses at `await make_coffee()`, hands control to `make_coffee`'s body, which itself pauses at `sleep(3)`. Nothing else is scheduled, so the loop just waits out the 3s, resumes `make_coffee`, it returns, *only then* does `main` even start `make_toast()`. **Total: 5s.** Nothing ran concurrently — `await` always means "block me here until this finishes."
+
+**Concurrent — `create_task` first, `await` after:**
+```python
+async def main():
+    coffee_task = asyncio.create_task(make_coffee())  # scheduled immediately, doesn't wait
+    toast_task = asyncio.create_task(make_toast())
+    await coffee_task
+    await toast_task
+```
+`create_task()` is instant bookkeeping — registers the coroutine with the loop's ready-queue and returns a `Task` handle right away, no waiting. Both tasks are now independently schedulable *before* either is awaited. Loop runs `make_coffee`'s body to its `sleep(3)`, parks it, runs `make_toast`'s body to its `sleep(2)`, parks it too — now watching two timers. Toast's fires at t=2, coffee's at t=3. **Total: 3s** — the longer of the two, not the sum. This is the entire value `create_task`/`spawn()` adds over a plain `await`.
+
+### The CPU-intensive case — no preemption, ever
+
+What happens if coffee's timer fires while toast is mid-execution, not paused at an `await`?
+
+```python
+async def make_toast():
+    print("start toast")
+    await asyncio.sleep(2)
+    do_expensive_cpu_work()   # 5 real seconds, no await inside
+    print("toast done")
+```
+
+```
+t=0   both tasks parked, coffee timer @3, toast timer @2
+t=2   toast_task resumes, enters do_expensive_cpu_work()
+t=3   coffee's timer fires — coffee_task becomes "ready" — but the loop is
+      still stuck inside do_expensive_cpu_work(), which has no await, so
+      it can't check anything else
+t=7   do_expensive_cpu_work() finally returns, toast_task finishes
+t=7   ONLY NOW does the loop check its ready-queue, sees coffee_task has
+      been ready since t=3, resumes it
+```
+
+Coffee's wakeup was delayed 4s past when it was actually ready — not a bug, just the rule: **a coroutine can only be paused at a point it names itself, via `await`. The loop cannot interrupt running code mid-execution — no preemption exists in asyncio.** A coroutine that runs a long stretch with no `await` inside blocks *everything* else in the process for that stretch, not just itself.
+
+Direct relevance to `#41`: if anything in the scrape path (`process_item`, Patchright driving) does synchronous blocking work — a non-async DB call, `time.sleep()` instead of `asyncio.sleep()`, a sync HTTP call — it freezes the *entire* event loop for that duration, stalling unrelated FastAPI request handlers too, not just the other concurrent scrapes. This is why the issue's acceptance criteria explicitly call for verifying concurrent heavy-scrape behavior live rather than assuming it from `#10.2`'s lighter probe precedent — a hidden blocking call would only surface under genuine concurrent load.
+
+### Is Python always single-threaded? Three distinct mechanisms
+
+| Mechanism | Real OS threads/processes? | Parallelism? | Notes |
+|---|---|---|---|
+| `threading` | Yes, real OS threads | No — GIL means only one thread executes Python bytecode at a time, ever | Still helps I/O-bound work (a thread blocked on `socket.recv()` releases the GIL while blocked) |
+| `multiprocessing` | Yes, separate OS processes, separate interpreters/GILs | **Yes** — actual multi-core use | Higher overhead — no shared memory by default, data must be serialized between processes |
+| `asyncio` | No — one thread, one loop | No | Not just GIL-single-threaded like `threading` — no OS thread-switching involved at all; a coroutine only yields control at an `await` it names itself |
+
+So Python *can* do real parallelism (`multiprocessing`), just not via `asyncio` or `threading` for CPU-bound work. `asyncio`'s single-threadedness applies specifically to the coroutine code itself — Patchright's actual browser is presumably its own OS process, and DB drivers may use thread pools under the hood for blocking calls; asyncio's cooperative loop is just the layer coordinating *this app's* Python-level coroutines.
+
+### Worked example from this repo: `spawn()` and why it isn't `async def`
+
+`backend/app/core/background_tasks.py` (extracted from `trading_agents.py` in `#41` step 1, now shared with the item/listing background-scrape use case):
+
+```python
+_background_tasks: set[asyncio.Task[None]] = set()
+
+def spawn(coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+```
+
+**The GC problem this solves.** `asyncio.create_task(coro)` alone is a footgun: the loop does not hold a strong reference to the returned `Task` for you. If nothing else does either, the `Task` object's refcount hits zero the moment its creator's stack frame tears down, and CPython is free to garbage-collect it — mid-execution, silently, no exception, no log. For `#41` specifically: `create_item`/`create_listing` `spawn()` a background scrape per listing, then immediately `return` their HTTP response. Without a held reference, the response going out tears down the request handler's frame, and the just-scheduled scrape `Task` could be collected before Patchright's `page.goto()` even resolves — a listing stuck in "Processing" forever, no error anywhere pointing at why.
+
+`_background_tasks` fixes it: a module-level set, living as long as the process, holds a strong reference from the moment `spawn()` runs until `add_done_callback` removes it — which only fires once the task has actually finished (success, exception, or cancellation), so the registry self-cleans without ever dropping a reference early.
+
+**Why `spawn()` itself is plain `def`, not `async def`.** `async def` only buys two things: calling it returns a coroutine object instead of running immediately, and it's the only kind of function allowed to contain `await`. `spawn()` needs neither — every line inside it (`create_task`, `set.add`, `add_done_callback`) is instant, synchronous, in-memory bookkeeping; nothing in it ever needs to pause and wait for something external. The only real constraint is that `asyncio.create_task()` needs a *running* event loop to register with — so `spawn()` must be *called* from somewhere already executing inside the loop (an `async def` function mid-execution, like `create_item`), even though `spawn()` itself doesn't need to be one. Rule of thumb generally: mark a function `async def` only when its own body needs to `await` something — a function that's purely instant bookkeeping about async machinery stays a plain `def`.
+
+### Real subprocess parallelism vs one shared browser — TradingAgents vs the scraper
+
+Both features use `spawn()`, but their concurrency underneath is architecturally opposite — worth contrasting precisely rather than assuming they work the same way.
+
+**TradingAgents (`run_analysis`, `backend/app/services/trading_agents.py`) — a new OS process per ticker.**
+```python
+process = await asyncio.create_subprocess_exec(
+    settings.tradingagents_venv_python,
+    _WRAPPER_SCRIPT,
+    alert.ticker,
+    ...
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.PIPE,
+)
+stdout_task = asyncio.create_task(_drain_stdout(process))
+stderr_task = asyncio.create_task(_watch_stderr(process, result_id, idle_timeout))
+```
+Every analysis launches a brand-new, independent Python interpreter subprocess — real OS-level parallelism, two tickers' subprocesses can run on two different CPU cores at the literal same instant, entirely outside asyncio's cooperative model. asyncio's job here isn't to make the heavy work (LLM calls, agent debate rounds) concurrent — that's already parallel via the OS. Its job is just to *watch* the subprocess without blocking anything else: `await process.stderr.readline()` pauses on pipe I/O (waiting for the child to write something), letting the loop interleave between however many tickers' watcher-`Task`s are live. Two `Task`s per subprocess (`stdout_task` + `stderr_task`, drained concurrently rather than sequentially) also avoids a classic subprocess deadlock — reading one pipe fully before touching the other risks the child blocking on a full stderr buffer while you're still stuck draining stdout.
+
+**Scraper (`PatchrightScraper`, `backend/app/services/scraper/patchright_scraper.py`) — one shared browser, launched once.**
+```python
+class PatchrightScraper(BaseScraper):
+    _context: BrowserContext | None = None   # class-level — one instance, whole app lifetime
+
+    @classmethod
+    async def start_browser(cls) -> None:
+        if cls._context is not None:
+            return                            # already running — no-op
+        async with cls._start_lock:            # double-checked locking, see Locks section above
+            if cls._context is not None:
+                return
+            cls._context = await cls._playwright.chromium.launch_persistent_context(...)
+```
+`_context` is a class attribute — one Chromium process, shared by every scrape, for the app's whole uptime (until `recycle_browser()` cycles it). `start_browser()`'s lazy launch + `_start_lock` is the double-checked-locking pattern from the Locks section above, applied to a browser launch instead of a DSM login. Every scrape after the first just sees `_context is not None` and skips straight past — **no new OS process per scrape.** Concurrent scrapes instead each call `_context.new_page()` — a new **tab** inside the one already-running browser, not a new process.
+
+The actual `await` boundary is `page.goto(url)`, `page.content()`, `.text_content()` — these aren't running JS inline in the Python process. Patchright talks to the real Chromium process over the **Chrome DevTools Protocol (CDP)**, a message-passing protocol over a pipe/websocket. `await page.goto(url)` sends a CDP command and pauses until Chromium replies — I/O, same shape as `await db.commit()` or TradingAgents' `readline()`, not CPU work happening in the Python process. So N concurrent scrapes (`#41`'s planned `Semaphore(3)`) means N Python coroutines interleaved on the single FastAPI event loop, each awaiting its own CDP round-trip — the pure single-thread cooperative case, no separate OS process per coroutine involved on the Python side at all.
+
+Real parallelism for the scraper case exists, just one layer down: **inside** the one Chromium process's own internal multi-process architecture (a browser process plus roughly one renderer process per tab) — genuinely parallel page rendering/JS execution/network fetches, but entirely invisible to and unmanaged by Python. asyncio doesn't create that parallelism or coordinate it; it just fires CDP commands and waits for replies, interleaved.
+
+| | TradingAgents | Scraper (Patchright) |
+|---|---|---|
+| OS process per unit of work | **Yes** — `create_subprocess_exec` per ticker | **No** — one Chromium process, launched once, reused |
+| What "concurrent" means here | N independent OS processes in true parallel, each watched by a pair of pipe-reading `Task`s | N Python coroutines interleaved on one event loop, each awaiting CDP replies from tabs inside the *same* browser process |
+| Where real parallelism happens | Directly — separate OS processes, separate cores | Indirectly — inside Chromium's own internal multi-process architecture |
+| What bounds concurrency | DB partial unique index on `(ticker) WHERE status IN ('pending','running')` — no duplicate ticker, otherwise unbounded process count | `asyncio.Semaphore(3)` (`#41`, planned) — explicit, since unbounded tabs against one shared context risks real trouble (memory, the shared profile dir, site rate limits) |
+
+### Terminology correction — "shared by processes" vs. "shared by coroutines within one process"
+
+Came up clarifying `main.py`'s `event_queue` object (`asyncio.Queue`, distinct from `sse.py`'s per-connection queues) — worth stating precisely, since the word "shared" is easy to over-read given TradingAgents' actual subprocess use elsewhere in this same file.
+
+`event_queue` is created once in `lifespan()` and handed to three places: `app.state.event_queue`, `poll_prices`'s job args, and `dispatcher.run()`. All three, plus every producer that later calls `.put()` on it (`jobs.py`'s `process_item`, `stocks.py`'s `FinnhubClient`, `#41`'s planned add-time trigger), are coroutines/`Task`s on **one event loop, in one OS process** — the same single-threaded cooperative model traced above. "Shared" here is ordinary Python reference semantics (multiple functions holding a reference to the same object, no different from passing a list around), not inter-process communication. Full producer/consumer breakdown: `.doc/architecture.md` → "Event-Driven Flow" → "One shared queue object, multiple producers, one sequential consumer."
+
+Worth the explicit contrast precisely because this file's own TradingAgents section, right above, describes a case where "process" is literal — `create_subprocess_exec` really does spawn a separate OS process per analysis, needing pipes rather than a shared in-memory object. Don't let one section's "process" bleed into the other's — `event_queue`'s producers/consumer are never that.
+
 # Challenges
 
 ## Synology DSM Storage API — 503 "Invalid session" (code 119) (2026-07-23)

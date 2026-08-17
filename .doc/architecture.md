@@ -178,6 +178,18 @@ Finnhub WebSocket                  APScheduler (scrape job)
 
 On startup: any `events` rows with `status="pending"` are loaded back into the queue to recover unprocessed events from a crash.
 
+**One shared queue object, multiple producers, one sequential consumer — all inside a single OS process.** `queue = asyncio.Queue()` is created exactly once, in `main.py`'s `lifespan()`, and the same object is then handed out three ways: stashed on `app.state.event_queue` (for route handlers to reach via `request.app.state`, e.g. `poll.py`'s manual trigger and `#41`'s add-time first-scrape dispatch), passed directly as an argument to the scheduled `poll_prices` job, and passed directly to `dispatcher.run(queue)`. Every producer below calls `.put()` independently, with no awareness of the others:
+
+| Producer | Trigger |
+|---|---|
+| `main.py` (crash recovery) | Startup, reloading `status="pending"` rows |
+| `jobs.py`'s `process_item` | Called from `poll_prices` (6h scheduled) **and**, once `#41` lands, from `items.py`'s add-time background scrape — same `.put()` call site, two different triggers |
+| `stocks.py`'s `FinnhubClient` | A live WebSocket price tick crossing a `StockAlert` threshold |
+
+All of the above are coroutines/`Task`s running on the **same single event loop, in one Python process** — not separate OS processes (contrast `trading_agents.py`, which genuinely does spawn a subprocess per analysis). "Shared" here means "multiple coroutines hold a reference to the same in-memory object," the same as any Python object passed to several functions — no IPC, no serialization, just ordinary reference semantics.
+
+There is exactly **one** consumer: `dispatcher.run(queue)`, a single `while True: await queue.get()` loop (`consumers/dispatcher.py`) — not two independent listeners despite the two branches drawn above. Each event is dispatched through both phases (`notify.handle()`, then conditionally `analysis.handle()`) sequentially, inside one `_dispatch()` call, before the loop moves on to the next queued item. A burst of events from unrelated producers (a stock tick, a scheduled scrape, an add-time scrape) queues up and is processed strictly in arrival order — a slow `analysis.handle()` run for one event visibly delays delivery of the next one, even though the producers that queued them ran fully concurrently with each other.
+
 ### Pushover delivery — the actual pub/sub hop
 
 `NotifyConsumer`'s Pushover call (above) is the one genuine broker-mediated pub/sub hop in this system — this app publishes once, Pushover's own servers fan it out to every device subscribed under your account:
@@ -224,6 +236,8 @@ Scraper finishes one listing
 ```
 
 Two independent branches off the same scrape-completion point — the SSE branch is unconditional (every listing, every cycle), the `Event`/queue/Pushover branch stays exactly as it was before this issue, conditional on crossing a threshold. Neither depends on the other.
+
+Full diagram, including both `process_item` callers (the scheduled `poll_prices` loop and `#41`'s planned add-time background spawn) and the two structurally separate queues involved: `.doc/diagrams/process-item-flow.html`.
 
 **Multi-tab dedup:** the backend's in-memory fan-out (a `set` of connection mailboxes, `backend/app/services/sse.py`) is one real connection per open browser, not per tab — `frontend/src/lib/sse-leader.ts` uses `navigator.locks` to elect one tab as leader per browser, relaying to any other open tabs via `BroadcastChannel`. Mitigates the browser's per-origin connection cap (6 concurrent under HTTP/1.1 — this stack's actual deployment shape, no TLS/HTTP2 in front today).
 

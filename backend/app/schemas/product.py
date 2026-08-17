@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
+from app.models.product import ProductStatus
 from app.schemas.listing import ListingResponse
 from app.schemas.validators import strip_whitespace, validate_http_url
 
@@ -41,7 +41,7 @@ class ProductResponse(BaseModel):
     name: str
     target_price: float
     alerted_at: datetime | None
-    status: Literal["watching", "triggered", "paused", "failed"]
+    status: ProductStatus
     last_checked: datetime | None
     listings: list[ListingResponse]
     created_at: datetime

@@ -1,9 +1,17 @@
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import DateTime, Float, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+# Lives alongside the model, not in services/ or schemas/ — both
+# product_status.py's compute_status() (business logic) and
+# schemas/product.py's ProductResponse (API contract) need this type, and
+# putting it in either one would make the other import "sideways"/"up" out
+# of its usual layer. models/ is the lowest layer both already depend on.
+ProductStatus = Literal["watching", "triggered", "paused", "failed", "processing"]
 
 
 class Product(Base):

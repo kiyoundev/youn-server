@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ExternalLink, MoreVertical, Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { ExternalLink, LoaderCircle, MoreVertical, Plus, Search, Pencil, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -70,12 +70,16 @@ const STATUS_BADGE: Record<
   triggered: { label: "Triggered", variant: "default" },
   paused: { label: "Paused", variant: "outline" },
   failed: { label: "Failed", variant: "destructive" },
+  processing: { label: "Processing", variant: "outline" },
 };
 
 const formatLastChecked = (iso: string | null) => {
   if (!iso) return "—";
   const diffMs = Date.now() - new Date(iso).getTime();
-  const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.round(diffMs / (1000 * 60));
+  if (diffMinutes < 1) return "just now";
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.round(diffMinutes / 60);
   if (diffHours < 24) return `${diffHours}h ago`;
   return `${Math.round(diffHours / 24)}d ago`;
 };
@@ -215,14 +219,22 @@ function ProductRow({
               ))}
             </div>
           </TableCell>
-          <TableCell>{best !== null ? `$${best.toFixed(2)}` : "—"}</TableCell>
+          <TableCell>
+            {product.status === "processing" ? (
+              <LoaderCircle className="size-4 animate-spin text-muted-foreground" aria-label="Processing" />
+            ) : best !== null ? (
+              `$${best.toFixed(2)}`
+            ) : (
+              "—"
+            )}
+          </TableCell>
           <TableCell>${product.target_price.toFixed(2)}</TableCell>
           <TableCell>
             <Badge variant={status.variant}>{status.label}</Badge>
           </TableCell>
-          <TableCell>{formatLastChecked(product.last_checked)}</TableCell>
+          <TableCell>{product.status === "processing" ? "" : formatLastChecked(product.last_checked)}</TableCell>
           <TableCell>
-            <PriceSparkline data={sparklineData} width={80} height={32} />
+            {product.status !== "processing" && <PriceSparkline data={sparklineData} width={80} height={32} />}
           </TableCell>
           <TableCell onClick={(e) => e.stopPropagation()}>
             <DropdownMenu>
@@ -331,6 +343,7 @@ function ProductRow({
                 <Badge variant={status.variant}>{status.label}</Badge>
                 <Switch
                   checked={product.status !== "paused"}
+                  disabled={product.status === "processing"}
                   aria-label={product.status !== "paused" ? "Pause item" : "Resume item"}
                   onCheckedChange={async (active) => {
                     const results = await Promise.allSettled(product.listings.map((l) => updateListing(product.id, l.id, { active })));

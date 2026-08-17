@@ -11,7 +11,7 @@
 // Matches backend/app/schemas — GET /api/items response shape. Mirrors
 // watchlist/page.tsx's local Product/Listing interfaces (schema.md: no
 // backend response shape changes in this issue, only new request payloads).
-export type WatchStatus = "watching" | "triggered" | "paused" | "failed";
+export type WatchStatus = "watching" | "triggered" | "paused" | "failed" | "processing";
 
 export interface Listing {
   id: number;
@@ -120,11 +120,7 @@ export function updateProduct(productId: number, payload: ProductUpdatePayload):
   return request<Product>(`${BASE}/${productId}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 
-export function updateListing(
-  productId: number,
-  listingId: number,
-  payload: ListingUpdatePayload,
-): Promise<Listing> {
+export function updateListing(productId: number, listingId: number, payload: ListingUpdatePayload): Promise<Listing> {
   return request<Listing>(`${BASE}/${productId}/listings/${listingId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),

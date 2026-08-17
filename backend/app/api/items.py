@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.db import get_db
+from app.core.background_tasks import spawn
+from app.core.db import AsyncSessionLocal, get_db
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
@@ -23,8 +24,14 @@ from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
 )
+from app.scheduler.jobs import process_item
 from app.services.product_status import compute_last_checked, compute_status
-from app.services.scraper.router import RETAILER_DISPLAY_NAMES, RETAILER_MAP, detect_scraper_type
+from app.services.scraper.router import (
+    RETAILER_DISPLAY_NAMES,
+    RETAILER_MAP,
+    RetailerRouter,
+    detect_scraper_type,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -38,6 +45,16 @@ router = APIRouter()
 # pathological large paste, on a Pi 5 also running every other service in
 # the stack. Doesn't throttle the realistic case at all.
 _PROBE_CONCURRENCY = 3
+
+# Bounds how many #41 add-time first-scrapes (each a full process_item call —
+# real page render, up to ~30s) run concurrently. Deliberately separate from
+# _PROBE_CONCURRENCY above despite matching value — that one bounds
+# detect_scraper_type's lightweight routing probe, this bounds the much
+# heavier real scrape; sharing one pool would let a probe burst and a scrape
+# burst compete for the same slots and starve each other, despite very
+# different per-call costs. See .plan/41-immediate-first-scrape/challenges.md.
+_FIRST_SCRAPE_CONCURRENCY = 3
+_first_scrape_semaphore = asyncio.Semaphore(_FIRST_SCRAPE_CONCURRENCY)
 
 
 class _ProbeResult(NamedTuple):
@@ -144,6 +161,49 @@ def _build_product_response(
     )
 
 
+async def _bounded_process_item(
+    listing_id: int, semaphore: asyncio.Semaphore, queue: asyncio.Queue
+) -> None:
+    """Runs process_item under the first-scrape concurrency bound, called via
+    spawn() so it outlives the request/response cycle that triggered it — see
+    .doc/keynotes.md's asyncio concurrency section for why spawn() itself
+    needs no reference-holding help here (it already keeps one via
+    _background_tasks). A fresh RetailerRouter per call is deliberate, not a
+    corner cut — it's stateless (no __init__), so there's nothing to share by
+    reusing one across concurrent calls.
+
+    Must never let an exception escape — this runs inside a detached
+    asyncio.Task (see spawn()); an unhandled exception here doesn't crash
+    anything visibly, it just becomes an "exception was never retrieved"
+    warning while the listing is stuck at last_scrape_status=None (reads as
+    permanently "Processing" in the UI) until the next scheduled poll_prices
+    cycle happens to retry it, up to 6h later, same failure mode
+    trading_agents.py's run_analysis already guards against for the same
+    reason. process_item's own scraper calls already catch realistic
+    failures and return status="error" — this is the backstop for what's
+    left (a DB hiccup, an unexpected bug), so it only writes "error" if the
+    listing is still unscraped, never stomping a status process_item itself
+    already committed (e.g. if the failure were in the trailing broadcast()
+    call, after a real successful scrape+commit)."""
+    async with semaphore:
+        try:
+            await process_item(listing_id, RetailerRouter(), queue)
+        except Exception:
+            _log.error("first-scrape failed for listing %d", listing_id, exc_info=True)
+            try:
+                async with AsyncSessionLocal() as session:
+                    listing = await session.get(Listing, listing_id)
+                    if listing is not None and listing.last_scrape_status is None:
+                        listing.last_scrape_status = "error"
+                        await session.commit()
+            except Exception:
+                _log.error(
+                    "first-scrape: failed to persist error status for listing %d",
+                    listing_id,
+                    exc_info=True,
+                )
+
+
 async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
     result = await db.execute(
         select(Product)
@@ -208,7 +268,7 @@ async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> Produ
     ),
 )
 async def create_item(
-    body: ProductCreate, db: AsyncSession = Depends(get_db)
+    request: Request, body: ProductCreate, db: AsyncSession = Depends(get_db)
 ) -> ProductCreateResponse:
     product = Product(name=body.name, target_price=body.target_price)
     # Materialize the relationship in-memory now, even if it stays empty —
@@ -270,6 +330,17 @@ async def create_item(
             status_code=409, detail="One or more URLs were claimed by another request — try again"
         )
 
+    # Fire-and-forget — not awaited, so the response below builds and returns
+    # while these scrapes run in the background. Only successfully-created
+    # listings are here (product.listings never got the failed ones
+    # appended), so nothing extra to filter.
+    for listing in product.listings:
+        spawn(
+            _bounded_process_item(
+                listing.id, _first_scrape_semaphore, request.app.state.event_queue
+            )
+        )
+
     return ProductCreateResponse(product=_build_product_response(product, {}), failed=failed)
 
 
@@ -281,7 +352,7 @@ async def create_item(
     description="Same retailer-derivation and `scraper_type` auto-detection as `POST /api/items`.",
 )
 async def create_listing(
-    product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)
+    request: Request, product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)
 ) -> ListingResponse:
     await _get_product_or_404(product_id, db)
 
@@ -302,6 +373,11 @@ async def create_listing(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail="An item with this URL already exists")
+
+    # Fire-and-forget, same as create_item above — not awaited.
+    spawn(
+        _bounded_process_item(listing.id, _first_scrape_semaphore, request.app.state.event_queue)
+    )
 
     return _build_listing_response(listing, {})
 

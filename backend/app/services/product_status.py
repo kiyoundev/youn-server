@@ -1,9 +1,7 @@
 from datetime import datetime
-from typing import Literal
 
+from app.models.product import ProductStatus
 from app.models.watch_item import Listing
-
-ProductStatus = Literal["watching", "triggered", "paused", "failed"]
 
 
 def compute_status(listings: list[Listing], alerted_at: datetime | None) -> ProductStatus:
@@ -11,14 +9,18 @@ def compute_status(listings: list[Listing], alerted_at: datetime | None) -> Prod
 
     Priority, first match wins:
     1. All listings inactive -> paused (nothing being watched)
-    2. Any active listing errored on its last scrape -> failed
-    3. Product has an active alert -> triggered
-    4. Otherwise -> watching
+    2. Any active listing never scraped since creation -> processing
+    3. Any active listing errored on its last scrape -> failed
+    4. Product has an active alert -> triggered
+    5. Otherwise -> watching
     """
     active_listings = [listing for listing in listings if listing.active]
 
     if not active_listings:
         return "paused"
+
+    if any(listing.last_scrape_status is None for listing in active_listings):
+        return "processing"
 
     if any(listing.last_scrape_status == "error" for listing in active_listings):
         return "failed"

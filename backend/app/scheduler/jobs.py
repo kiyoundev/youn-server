@@ -38,7 +38,7 @@ async def poll_prices(queue: asyncio.Queue) -> None:
 
         for item_id in item_ids:
             try:
-                await _process_item(item_id, router, queue)
+                await process_item(item_id, router, queue)
             except Exception:
                 _log.error("poll_prices: unhandled error for item %d", item_id, exc_info=True)
 
@@ -65,7 +65,7 @@ async def poll_stocks(finnhub: FinnhubClient) -> None:
         _log.info("poll_stocks: cycle complete")
 
 
-async def _process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
+async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
     async with AsyncSessionLocal() as session:
         listing = await session.get(Listing, item_id)
         if not listing or not listing.active:

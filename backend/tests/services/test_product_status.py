@@ -51,6 +51,47 @@ def test_compute_status_default_watching() -> None:
     assert compute_status(listings, alerted_at=None) == "watching"
 
 
+def test_compute_status_never_scraped_listing_is_processing() -> None:
+    listings = [_listing(last_scrape_status=None)]
+
+    assert compute_status(listings, alerted_at=None) == "processing"
+
+
+def test_compute_status_processing_outranks_failed() -> None:
+    """A never-scraped listing shouldn't be masked by a sibling's past
+    error — see .plan/41-immediate-first-scrape's acceptance criteria."""
+    listings = [_listing(last_scrape_status="error"), _listing(last_scrape_status=None)]
+
+    assert compute_status(listings, alerted_at=None) == "processing"
+
+
+def test_compute_status_processing_outranks_triggered() -> None:
+    """A freshly-added listing on an already-triggered product should read
+    as processing until it reports, not stay stuck on stale 'triggered'."""
+    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status=None)]
+
+    assert compute_status(listings, alerted_at=dt.datetime.now(dt.timezone.utc)) == "processing"
+
+
+def test_compute_status_paused_outranks_processing() -> None:
+    """All-inactive still wins even if the sole listing was never scraped —
+    'paused' short-circuits before the processing check ever runs."""
+    listings = [_listing(active=False, last_scrape_status=None)]
+
+    assert compute_status(listings, alerted_at=None) == "paused"
+
+
+def test_compute_status_inactive_never_scraped_does_not_count() -> None:
+    """Only active listings' scrape state matters — same scoping as the
+    existing 'failed' check, mirrored for 'processing'."""
+    listings = [
+        _listing(active=True, last_scrape_status="ok"),
+        _listing(active=False, last_scrape_status=None),
+    ]
+
+    assert compute_status(listings, alerted_at=None) == "watching"
+
+
 def test_compute_last_checked_returns_stalest() -> None:
     older = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
     newer = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)

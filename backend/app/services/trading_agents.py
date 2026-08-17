@@ -2,11 +2,10 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Coroutine
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
+from app.core.background_tasks import spawn  # noqa: F401 — re-exported for callers using trading_agents.spawn(...)
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.models.analysis_result import AnalysisResult
@@ -17,20 +16,6 @@ _log = logging.getLogger(__name__)
 
 _WRAPPER_SCRIPT = str(Path(__file__).resolve().parents[2] / "scripts" / "run_tradingagents.py")
 _HEARTBEAT_FIELDS = ("llm_calls", "tokens_in", "tokens_out", "tool_calls")
-
-_background_tasks: set[asyncio.Task[None]] = set()
-
-
-def spawn(coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-    """Fire-and-forget a coroutine while keeping a strong reference to its Task.
-
-    asyncio.create_task()'s result must be held somewhere or it can be
-    garbage-collected mid-run — this registry is that somewhere.
-    """
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    return task
 
 
 def _build_env(alert: StockAlert) -> dict[str, str]:

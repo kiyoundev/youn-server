@@ -2329,42 +2329,37 @@ The eager-vs-lazy startup question and periodic recycle were both discussed and 
 
 ---
 
-## [ ] Issue #41 — Immediate First Scrape on Item/Listing Add
+## [x] Issue #41 — Immediate First Scrape on Item/Listing Add
 
 **Type:** feat / AFK
 **Estimate:** ~3h
 **Blocked by:** #40 (Patchright must actually be running for this to do anything)
 
-### What to build
+### What was built
 
-Today, a newly-added product/listing shows `—` for price/status until the next scheduled 6h `poll_prices` cycle, or a manual `POST /api/poll/prices` call — nothing scrapes it at add-time. Add a background first-scrape: after `create_item`/`create_listing` returns its response (not blocking the request itself), fire a background task per newly-created listing that runs the same scrape logic `_process_item` (`jobs.py`) already does — write `PriceHistory`, update `Listing.last_price`/`last_scrape_status`, and (unconditionally, matching `_process_item`'s existing behavior) broadcast via the SSE mechanism `#36` already built.
+A newly-added product/listing used to show `—` for price/status until the next scheduled 6h `poll_prices` cycle. Now `create_item`/`create_listing` fire a background first-scrape per newly-created listing right after `db.commit()`, without blocking the response:
 
-**Deliberately not synchronous** — blocking the add request on a real scrape (up to ~30s for a `Patchright`-dependent site) would make "Saving…" hang unacceptably long for what's otherwise a fast bulk-create. Firing it after the response returns, and letting `#36`'s existing SSE push (`mutate('/api/proxy/items')` on the frontend, already wired) deliver the result when it lands, means the *data refresh* needs zero new plumbing — but see the "Processing" UI state below, which does need new frontend work.
-
-Likely needs extracting `_process_item`'s scrape-one-listing logic (currently coupled to iterating `poll_prices`'s active-listings query) into a reusable function callable both from the scheduler loop and from this new add-time trigger, rather than duplicating the scrape+write+broadcast logic in a second place.
-
-**Concurrency bound:** background scrapes fire per-listing, one task each — bound this with `asyncio.Semaphore(3)`, reusing the same limit `#10.2`'s bulk-add already uses (`items.py`'s `_PROBE_CONCURRENCY`). Important distinction from that precedent, though: `#10.2`'s semaphore bounds `detect_scraper_type`'s lightweight *routing probe*, not a full scrape — this issue is the first time the app would run the *heavy* `_process_item`-style scrape (real page render, up to ~30s) concurrently at all; the scheduled `poll_prices` job runs those strictly sequentially today. Patchright's shared single-browser-context design should handle concurrent heavy scrapes the same way it handles concurrent probes, but that's an extrapolation from `#10.2`'s verification, not something already tested — verify live once built, don't assume it.
-
-**"Processing" UI state** (new frontend work, not just a data refresh):
-- Table: Status badge shows **"Processing"** instead of the normal status while any of a product's listings has `last_scrape_status: null` (never scraped since creation — derivable from existing nullable columns, no new backend field needed)
-- Table: Best Price cell shows a spinner during processing
-- Table: Last Checked and Price History cells show **empty string** (not `—`) during processing — distinct from the dash's existing meaning (checked before, no value came back)
-- Sheet panel: same "Processing" status shown; the active/inactive `Switch` is **disabled** while processing (can't pause something still doing its first scrape)
+- `jobs.py`'s `_process_item` renamed to `process_item` (module-private → cross-module callable), no signature/logic change — same function `poll_prices` already calls, now reused rather than duplicated
+- `spawn()` extracted from `trading_agents.py` into shared `app/core/background_tasks.py`, so `items.py` can reuse the same fire-and-forget-with-reference-holding pattern
+- New `_bounded_process_item` wrapper in `items.py`: `asyncio.Semaphore(3)`-bounded (`_FIRST_SCRAPE_CONCURRENCY`, deliberately separate pool from `#10.2`'s `_PROBE_CONCURRENCY` — different costs, would starve each other if shared), fresh `RetailerRouter()` per call, guarded against unhandled exceptions (logs + persists `last_scrape_status: "error"` only if still unset, never overwriting a result the real scrape already committed)
+- New `"processing"` `ProductStatus`, inserted with real priority-ordering care between `paused` and `failed` in `compute_status()` — a never-scraped listing isn't masked by a sibling's past error or an already-`triggered` product's stale alert state
+- Frontend: `"processing"` badge, animated `LoaderCircle` spinner in Best Price, empty Last Checked/Price History cells (distinct from `—`'s existing meaning), disabled active/inactive `Switch` while processing
+- `.doc/diagrams/process-item-flow.html` added; `.doc/keynotes.md` gained sections on the asyncio concurrency/event-loop model underlying this feature
 
 ### Why (context)
 
-Surfaced testing `#10.2`'s add flow — adding a real `amazon.ca` listing correctly skips the add-time *probe* (by design, `RETAILER_MAP` fast path, unrelated to this), but that also means nothing ever fetches an actual price until the next 6h cycle. Reasonable expectation for anyone adding an item to want to see today's price and status immediately, not a multi-hour blank state. The "Processing" UI state and concurrency bound were spec'd out fully before implementation, discussing this issue ahead of `#40`.
+Surfaced testing `#10.2`'s add flow — adding a real `amazon.ca` listing correctly skips the add-time *probe* (by design, `RETAILER_MAP` fast path, unrelated to this), but that also means nothing ever fetches an actual price until the next 6h cycle. Reasonable expectation for anyone adding an item to want to see today's price and status immediately, not a multi-hour blank state.
 
 ### Acceptance criteria
 
-- [ ] Adding a real, scrapable listing triggers a background scrape that completes within a reasonable time after the add response returns (not blocking `POST /api/items`/`POST .../listings` itself)
-- [ ] That scrape writes `PriceHistory`, updates `last_price`/`last_scrape_status`, exactly like a normal scheduled cycle would
-- [ ] The result reaches the frontend via `#36`'s existing SSE broadcast, updating the row from "Processing" to its real values
-- [ ] An alert-crossing first scrape (price already below target on add) still triggers Pushover/email via the existing `Event`/queue path, same as any other scrape
-- [ ] A failed first scrape (bad URL, site down) sets `last_scrape_status: "error"` and doesn't block or fail the add itself — the item/listing stays created either way
-- [ ] Bulk add with multiple URLs: each successful listing gets its own background first-scrape, not just the first one, bounded by `asyncio.Semaphore(3)`
-- [ ] "Processing" state (badge, Best Price spinner, empty-string Last Checked/Price History, disabled sheet-panel switch) verified live for both a single add and a multi-retailer bulk add
-- [ ] Concurrent heavy-scrape behavior against Patchright's shared browser context verified live post-implementation, not assumed safe from `#10.2`'s lighter-weight routing-probe precedent
+- [x] Adding a real, scrapable listing triggers a background scrape that completes within a reasonable time after the add response returns (not blocking `POST /api/items`/`POST .../listings` itself) — verified live, `muddygeorge.com` add
+- [x] That scrape writes `PriceHistory`, updates `last_price`/`last_scrape_status`, exactly like a normal scheduled cycle would — verified live via Postgres query
+- [x] The result reaches the frontend via `#36`'s existing SSE broadcast, updating the row from "Processing" to its real values — verified live, no manual refresh
+- [x] An alert-crossing first scrape (price already below target on add) still triggers Pushover/email via the existing `Event`/queue path, same as any other scrape — verified live, `PRICE_DROP` event `status="processed"`
+- [x] A failed first scrape (bad URL, site down) sets `last_scrape_status: "error"` and doesn't block or fail the add itself — the item/listing stays created either way — verified live, dead `amazon.ca` URL alongside good listings
+- [ ] Bulk add with multiple URLs: each successful listing gets its own background first-scrape, not just the first one, bounded by `asyncio.Semaphore(3)` — **unverified, explicitly skipped during testing**
+- [x] "Processing" state (badge, Best Price spinner, empty-string Last Checked/Price History, disabled sheet-panel switch) verified live for a single add — bulk-add case unverified (depends on the skipped item above)
+- [ ] Concurrent heavy-scrape behavior against Patchright's shared browser context verified live post-implementation, not assumed safe from `#10.2`'s lighter-weight routing-probe precedent — **unverified, explicitly skipped during testing**
 
 ---
 
@@ -2416,3 +2411,45 @@ Fixing this surfaced a second, unrelated bug in `docker-compose.local.yml` (Mac 
 - [x] Direct `http://youn-server:3000` no longer reachable from LAN/Tailscale (bound to Pi's `127.0.0.1` only)
 - [x] Watchlist page loads without the client-side exception on the Pi (verified live)
 - [x] Local Mac Docker dev stack (`docker-compose.yml` + `docker-compose.local.yml`) builds and runs clean, unaffected by the frontend port-binding change
+
+---
+
+## [ ] Issue #44 — Infer Retailer Display Name & Item Name from Scrape Metadata
+
+**Type:** feat
+**Estimate:** ~3.5h
+
+### What to build
+
+Today, two display values fall back to raw, unpolished derivations instead of anything scraped from the actual page:
+
+1. **Retailer badge** — `RETAILER_DISPLAY_NAMES` (`services/scraper/router.py`) is a small hand-curated dict (currently just `"amazon.ca": "Amazon"`); every other hostname falls through to `hostname.replace(".", "_")` (e.g. `muddygeorge_com`), a raw, ugly fallback rather than a real brand name.
+2. **Product name** — `ProductCreate.name` is always required from the user today; there's no path for it to be inferred from the page itself when left blank.
+
+Both gaps trace back to the same missing capability: `ScraperResult` (`services/scraper/result.py`) is currently bare —
+```python
+@dataclass(frozen=True)
+class ScraperResult:
+    price: float | None
+    status: Literal["ok", "oos", "error"]
+```
+— nothing about the scraped page's title, site name, or brand is captured or returned anywhere in the scraper layer. Adding it once, shared, covers both display gaps rather than solving them independently.
+
+Concretely:
+- Extend `ScraperResult` with an optional field (e.g. `site_name: str | None`) populated during the existing scrape, checked in priority order: `og:site_name` meta tag → JSON-LD `Organization`/`Brand` → `<title>` heuristic fallback → `None` if nothing usable is found. Lives in `BaseScraper`'s shared extraction path where reasonable; `HTTPScraper` and `PatchrightScraper` differ enough in how they reach the parsed page that each may need its own hook into the same priority logic.
+- New nullable `Listing.retailer_display_name` column (migration required) — set once, only if not already set, mirroring the existing `scraper_type` caching pattern (`items.py`'s `_resolve_retailer_and_scraper_type`) rather than re-deriving on every poll.
+- `ProductCreate.name` becomes optional; when omitted, `Product.name` starts blank/placeholder and gets filled from the first successful scrape's inferred title — same async, non-blocking pattern `#41` already established for first-scrape (don't make item creation wait on this).
+- User-provided values always win — inference only ever fills a genuinely blank `Product.name`, never overwrites it; same for `retailer_display_name` falling back to today's hostname-derived string if inference comes back `None`.
+- `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) keep their static override untouched — inference only fills the gap for everything *not* already in `RETAILER_DISPLAY_NAMES`.
+
+### Why (context)
+
+Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add showed the retailer badge as `muddygeorge_com` instead of a real brand name, and separately noted `Product.name` has no inference path at all if a user just pastes a URL without typing a name. Both point at the same root gap (no page-metadata extraction anywhere in the scraper layer), so scoped as one issue rather than two independent small ones.
+
+### Acceptance criteria
+
+- [ ] Adding an item without a name gets a sensible inferred `Product.name` once the first scrape completes, without blocking creation
+- [ ] Retailer badge shows a human-readable name (e.g. "Muddy George") instead of the raw hostname-derived fallback, for domains not already in `RETAILER_DISPLAY_NAMES`
+- [ ] User-provided `Product.name` and any already-set `retailer_display_name` are never overwritten by inference
+- [ ] Inference failure (no extractable title/site name) degrades gracefully to today's existing fallback behavior — never blocks creation or scraping
+- [ ] `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) unaffected — static override still takes priority
