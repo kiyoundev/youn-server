@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patchright Browser Lifecycle</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.75rem;
+    }
+    p.sub {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      max-width: 720px;
+      margin-bottom: 1.5rem;
+    }
+    p.aside {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 0.95rem;
+      color: var(--color-muted);
+      max-width: 640px;
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(45,49,66,0.12);
+    }
+    section + section { margin-top: 3.5rem; }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · youn-server · #47</p>
+    <h1>Patchright Browser Lifecycle</h1>
+    <p class="sub">Two independent triggers — a 6h scheduled poll and ad-hoc adds — each lazily launch and close the shared Patchright browser on their own terms, coordinating only through its shared state, never with each other directly.</p>
+
+    <section>
+      <svg viewBox="0 0 1100 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+        <title id="lifecycle-title">Patchright browser close-on-idle lifecycle</title>
+        <desc id="lifecycle-desc">Flowchart showing two independent triggers — a sequential scheduled price poll and a concurrent ad-hoc add-time scrape batch — both lazily starting the shared Patchright browser and funneling into its shared state, which is closed once the global in-flight scrape count returns to zero and left open otherwise.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ============ ARROWS (behind nodes) ============ -->
+
+        <!-- Scheduled Poll -> poll_prices loop -->
+        <line x1="220" y1="80" x2="220" y2="140" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Ad-Hoc Add -> _dispatch_first_scrapes -->
+        <line x1="860" y1="80" x2="860" y2="140" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- poll_prices loop -> PatchrightScraper (top attach x=460), elbow mid_y=230 -->
+        <path d="M 220,196 V 222 Q 220,230 228,230 H 452 Q 460,230 460,238 V 264"
+              fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- _dispatch_first_scrapes -> PatchrightScraper (top attach x=620), elbow mid_y=230 -->
+        <path d="M 860,196 V 222 Q 860,230 852,230 H 628 Q 620,230 620,238 V 264"
+              fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- PatchrightScraper -> Diamond -->
+        <line x1="540" y1="352" x2="540" y2="412" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Diamond YES (=0) -> close_browser() (accent, consequential path) -->
+        <line x1="610" y1="460" x2="760" y2="460" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+        <!-- Diamond NO (>0) -> Stays Open -->
+        <line x1="540" y1="508" x2="540" y2="580" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- ============ ARROW LABELS ============ -->
+        <rect x="306" y="212" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="344" y="221" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LAZY LAUNCH</text>
+
+        <rect x="698" y="212" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="736" y="221" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LAZY LAUNCH</text>
+
+        <rect x="668" y="440" width="30" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="683" y="449" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">YES</text>
+
+        <rect x="524" y="536" width="30" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="539" y="545" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">NO</text>
+
+        <!-- ============ NODES ============ -->
+
+        <!-- Scheduled Poll (oval, trigger) -->
+        <rect x="120" y="32" width="200" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="220" y="54" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Scheduled Poll</text>
+        <text x="220" y="68" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">poll_prices() · every 6h</text>
+
+        <!-- Ad-Hoc Add (oval, trigger) -->
+        <rect x="760" y="32" width="200" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="860" y="54" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Ad-Hoc Add</text>
+        <text x="860" y="68" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">POST /api/items(/listings)</text>
+
+        <!-- poll_prices loop (rect, step) -->
+        <rect x="100" y="140" width="240" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="220" y="164" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">poll_prices</text>
+        <text x="220" y="180" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sequential · 1 listing at a time</text>
+
+        <!-- _dispatch_first_scrapes (rect, step) -->
+        <rect x="740" y="140" width="240" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="860" y="164" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">_dispatch_first_scrapes</text>
+        <text x="860" y="180" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">gather() · ≤3 concurrent</text>
+
+        <!-- PatchrightScraper shared state (focal, accent) -->
+        <rect x="360" y="264" width="360" height="88" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="540" y="296" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PatchrightScraper</text>
+        <text x="540" y="316" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">_context · _start_lock</text>
+        <text x="540" y="330" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">_active_scrapes (global)</text>
+
+        <!-- Diamond: _active_scrapes == 0? -->
+        <polygon points="540,412 610,460 540,508 470,460" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="540" y="456" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">_active_scrapes</text>
+        <text x="540" y="470" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">== 0?</text>
+
+        <!-- close_browser() (rect, accent outcome) -->
+        <rect x="760" y="432" width="200" height="56" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="860" y="456" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">close_browser()</text>
+        <text x="860" y="472" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">context + playwright torn down</text>
+
+        <!-- Stays Open (oval, end) -->
+        <rect x="420" y="580" width="240" height="48" rx="24" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="540" y="602" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Stays Open</text>
+        <text x="540" y="616" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">another batch still running</text>
+
+        <!-- ============ LEGEND ============ -->
+        <line x1="40" y1="668" x2="1060" y2="668" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="684" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+
+        <rect x="40" y="700" width="24" height="12" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="72" y="710" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Trigger (oval)</text>
+
+        <rect x="220" y="700" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="252" y="710" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Step / action (rectangle)</text>
+
+        <polygon points="452,706 464,700 476,706 464,712" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="488" y="710" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Decision (diamond)</text>
+
+        <rect x="644" y="700" width="24" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="676" y="710" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Shared state / consequential path</text>
+
+        <line x1="928" y1="706" x2="956" y2="706" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <text x="964" y="710" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Handoff</text>
+      </svg>
+    </section>
+
+    <p class="aside">recycle_browser() and its daily scheduler job are removed in #47 — nothing runs long enough between a batch draining and the next one starting to need a periodic forced refresh anymore.</p>
+  </div>
+</body>
+</html>

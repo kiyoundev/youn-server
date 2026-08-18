@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ⬜ #47, ⬜ #48
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -1509,7 +1509,7 @@ Not blocked on `#24`/`#10.1`–`#10.5`: `/watchlist` already exists in the repo 
 
 **Type:** ops / AFK
 **Estimate:** ~2h
-**Blocked by:** #3, #13, #40 (Xvfb's subprocess must launch before `start_browser()`'s Chromium call, inside the same lifecycle #40 wires into `main.py`'s `lifespan` — building this before #40 exists would mean redoing the wiring)
+**Blocked by:** #3, #13, #40, #47 (Xvfb's subprocess must launch before `start_browser()`'s Chromium call, inside the same lifecycle #40 wires into `main.py`'s `lifespan` — building this before #40 exists would mean redoing the wiring. #47 added after this session's planning: it revises that same lifecycle again — close-on-idle instead of persistent-until-recycle — so Xvfb's own lifecycle design, discussed this session, assumes #47's shape, not #40's original persistent one)
 
 ### Background — re-verified and corrected this session, superseding the original findings below
 
@@ -2546,3 +2546,79 @@ Requested directly — user wants ticker-relevant news visible on the detail pag
 - [ ] Gracefully empty (not broken) when a ticker has no recent news, or the Finnhub call fails
 - [ ] No new external dependency — reuses the existing `FinnhubClient`/`FINNHUB_API_KEY`
 - [ ] `lib/mock-market.ts`'s other mocked detail data is untouched — this issue adds news only
+
+---
+
+## [ ] Issue #47 — Ephemeral Patchright Browser (Close on Idle, Drop the Daily Recycle)
+
+**Type:** fix / AFK
+**Estimate:** ~2h
+**Supersedes:** `#40`'s persistent-until-recycle browser lifecycle (`#40` itself stays ✅ Done — this revises a design decision made there, not a bug in what shipped)
+
+### What to build
+
+Surfaced while planning `#15` (which adds Xvfb underneath Patchright — building it on top of `#40`'s current lifecycle would mean redoing the wiring once this lands, same reasoning `#15` already used for depending on `#40` itself). `#40` made Patchright's browser launch lazily (on first real use) but then **stay running indefinitely**, torn down only by a daily `recycle_browser()` job or real app shutdown. Re-examined this session: that persistent-with-recycle model was built to bound the staleness/memory-creep risk of a genuinely long-running process — but this app's actual Patchright traffic is sparse (a handful of scheduled `poll_prices` listings every 6h, plus occasional `#41` ad-hoc adds), so the browser mostly sits idle, paying a real continuous RAM cost (~100–250MB, a persistent Chromium context) on a Pi 4B shared with every other service in this stack, for no benefit — nothing about "staying open" actually saves meaningful aggregate latency at this request volume.
+
+**Core change:** close the browser (and its `_context`/`_playwright`, not Xvfb — see `#15`) once nothing needs it anymore, instead of leaving it open until a scheduled recycle. `PatchrightScraper._active_scrapes` already tracks in-flight usage correctly (incremented before `new_page()`, decremented after `page.close()`) and is the right signal — the only open design question is *when* to act on it hitting zero:
+
+- New `PatchrightScraper.close_if_idle()` classmethod: closes only if the **global** `_active_scrapes` is back to 0. Both callers below go through this, never `close_browser()` directly — required because `poll_prices` and an ad-hoc add's batch run on the same event loop and can genuinely overlap; an unconditional close from whichever finishes first would tear the context down out from under the other's still-open pages.
+- **`poll_prices`** (`jobs.py`) processes every active listing **sequentially** in one function call (`for item_id in item_ids: await process_item(...)`, no concurrency) — it already has a natural batch boundary (the loop itself, serialized end-to-end by `_prices_lock`). Call `close_if_idle()` after that loop finishes, not reactively per-listing — reactive per-scrape closing would thrash (open/close/open/close) if Patchright-routed listings aren't adjacent in the iteration order within one poll cycle.
+- **`#41`'s ad-hoc first-scrapes**: replace the current one-`spawn()`-per-listing pattern with one `spawn()` per *request*, wrapping a new `_dispatch_first_scrapes()` helper that `gather()`s every listing in that request's own batch (still bounded by `_first_scrape_semaphore`), then calls `close_if_idle()`. No debounce needed — `gather()` only returns once this specific request's entire known batch has finished, so there's nothing more from *this* request that could still be coming; a genuinely new, unrelated request's next scrape is just an ordinary lazy relaunch. (An earlier draft of this plan considered a timing-based debounce instead — dropped once the grouped-`gather()` design made a real completion signal available instead of a guess.)
+
+**Direct consequence: remove `recycle_browser()` and its daily `AsyncIOScheduler` job entirely.** It exists only to bound the risk of a long-running process going stale; once nothing lives longer than one batch of activity, there's nothing left to recycle *from*. Remove the job registration in `main.py`'s `lifespan`, the `recycle_browser()` classmethod itself, the `_active_scrapes > 0` skip-if-busy logic it needed (still needed for the new close-on-drain check, just no longer serving recycle too), and `.doc/architecture.md`'s Polling Schedule row for it.
+
+**Confirmed not a concern:** closing the browser more often does *not* undermine the bot-evasion reasoning behind using a persistent profile in the first place (`_USER_DATA_DIR`) — cookies/localStorage/history live on disk and are untouched by `close_browser()`, which only tears down the running process. Re-verified this session by tracing `close_browser()`'s actual body — it never references the profile path.
+
+**Confirmed still needed as-is:** `_start_lock`'s double-checked locking (concurrent callers still share exactly one launch, opening separate tabs via `new_page()` on the same `_context` — this doesn't change at all, only *when the shared instance closes* changes).
+
+### Why (context)
+
+Raised as a direct pushback during `#15`'s planning: keeping a persistent browser process alive for hours between genuinely sparse usage is a real, not hypothetical, resource cost on shared Pi hardware, and the daily-recycle mechanism built to manage a long-running process's risk becomes unnecessary overhead once nothing runs long enough to need managing. Deliberately scoped as its own issue rather than folded into `#15`, since it revises `#40`'s already-shipped, already-deployed design rather than being new functionality `#15` itself needs to add.
+
+### Acceptance criteria
+
+- [ ] `poll_prices` calls `close_if_idle()` after its full sequential pass over active listings completes, not reactively per-listing — verified live with a mixed batch (Patchright-routed listings non-adjacent in iteration order) that it doesn't thrash open/close mid-cycle
+- [ ] `#41`'s ad-hoc add-time scrapes correctly share one browser instance across concurrent adds within one request (unchanged `_start_lock` behavior), and `_dispatch_first_scrapes()` closes it down via `close_if_idle()` only once its own batch has fully drained and nothing else is using it
+- [ ] Verified live: `poll_prices` finishing its loop while an ad-hoc add's batch is still mid-flight does **not** close the browser out from under it (`close_if_idle()`'s global check correctly sees non-zero and skips) — the scenario `close_browser()`-called-directly would have gotten wrong
+- [ ] `recycle_browser()`, its daily scheduler job in `main.py`'s `lifespan`, and its Polling Schedule row in `.doc/architecture.md` are removed
+- [ ] Confirmed live: the browser's `_context` identity actually changes across a close-then-reopen cycle (proves real teardown/relaunch, not a silent no-op) — same verification `#40` did for `recycle_browser()`, now applied to the new close-on-drain path
+- [ ] Confirmed live: a scrape that arrives after the browser has closed relaunches correctly and returns a real price, same as any other lazy-launch trigger
+- [ ] No regression to `#40`'s existing guarantees: concurrent callers still result in exactly one browser launch, not one per caller
+
+---
+
+## [ ] Issue #48 — Per-Product Concurrent Polling + Fix the Latent Double-Alert Race
+
+**Type:** fix / AFK
+**Estimate:** ~2.5h
+**Depends on:** `#47`'s `close_if_idle()`/`_dispatch_first_scrapes()` pattern (this issue reuses the same gather-with-semaphore shape for `poll_prices`, rather than inventing a second one)
+
+### What to build
+
+Surfaced while planning `#47`. Today `poll_prices` (`jobs.py`) queries every active listing as one **flat, ungrouped** list — `select(Listing.id).where(Listing.active == True)`, no `ORDER BY product_id` — and processes them one at a time in whatever order the query happens to return. A product with 3 retailer listings isn't scraped together; its listings could land anywhere in that flat list, potentially processed hours apart within the same nominal "cycle" if they're not adjacent in iteration order.
+
+This matters beyond speed: `process_item`'s cross-listing price comparison (`min(available_listings, key=last_price)`, the thing that decides whether an alert fires) reads whatever `last_price` is *currently in the DB* for a product's sibling listings — meaning today's arbitrary flat ordering can already mix a genuinely-fresh-this-cycle price against an hours-stale one from earlier in the same product's own listing set, purely as a side effect of query order having nothing to do with product grouping.
+
+**Fix, reusing `#47`'s pattern:** group `poll_prices`'s query by product, iterate products sequentially (same total-cycle-safety `_prices_lock` already provides), but scrape each product's *own* listings concurrently — `asyncio.gather()` over that product's `process_item` calls, bounded by a semaphore (same shape as `#47`'s `_dispatch_first_scrapes`, reusing the pattern rather than a new one). Fixes the stale-comparison ordering issue outright (a product's whole listing set finishes together, not hours apart) and speeds up each product's contribution to total cycle time.
+
+**Must ship together, not after — a real correctness bug this change would otherwise make far more likely to fire:** `process_item` opens its own independent `AsyncSessionLocal()` **per listing** and does its own fresh `session.get(Product, ...)`. Its alert-dedup check is:
+```python
+if cheapest <= product.target_price and product.alerted_at is None:
+    ... product.alerted_at = now; await session.commit()
+```
+If two listings of the *same* product are scraped concurrently and both come back under target price, both independent sessions can load `product.alerted_at` as `None` before either commits — both fire, both write an `Event`, both queue a notification. **Double alert for one price drop.**
+
+This isn't new — it already exists **today** in shipped `#41` (bulk-add a product with several URLs where 2+ are already under target price on first scrape, and it fires) — but it's a rare coincidence on a one-time user action there. Extending the same concurrent-per-product shape to `poll_prices`, a job that runs every 6h forever across every multi-listing product, turns a rare coincidence into something that will eventually happen for real, unattended, with a duplicate push notification as the visible symptom. Needs a real fix landing in the same change — e.g. re-checking `product.alerted_at` inside the same transaction that commits the alert (SELECT ... FOR UPDATE or an equivalent guard against the read-then-write race), not a follow-up.
+
+### Why (context)
+
+Raised as a direct pushback during `#47`'s planning, after confirming `poll_prices` has no concurrency at all today (single-listing-at-a-time, flat unordered list) and `#41`'s ad-hoc path already proved the gather-with-semaphore pattern works safely for sharing Patchright's browser across concurrent scrapes of one product. The double-alert race was found while reasoning through what concurrent-per-product scraping would actually do to `process_item`'s existing alert logic — not observed as a live bug, but confirmed as a genuine, currently-latent one via code inspection (`process_item`'s independent-session-per-listing pattern, `.doc/issues.md` cross-reference to `#41`).
+
+### Acceptance criteria
+
+- [ ] `poll_prices`'s query groups active listings by product (not the current flat `select(Listing.id)` with no ordering/grouping)
+- [ ] A product's own listings are scraped concurrently (bounded, reusing `#47`'s semaphore-gather shape), products themselves still processed one at a time (preserves `_prices_lock`'s whole-cycle serialization guarantee)
+- [ ] The `product.alerted_at` read-then-write race is fixed as part of this change — verified live with a product having 2+ listings that both cross target price in the same cycle, confirming exactly one `Event`/notification fires, not two
+- [ ] Regression check: the same fix doesn't reintroduce the double-alert race for `#41`'s existing concurrent bulk-add path either — both call sites end up protected by the same guard, not two different ones
+- [ ] No change to `poll_prices`'s external behavior for single-listing products (the common case) — same result, just correctly ordered/grouped for multi-listing ones
+- [ ] Total `poll_prices` cycle wall-clock time measured before/after on a real multi-product, multi-listing dataset — confirms the concurrency actually helps, not just theoretically

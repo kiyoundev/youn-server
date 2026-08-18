@@ -30,9 +30,7 @@ async def lifespan(app: FastAPI):
 
     # crash recovery: reload unprocessed events from the previous run
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Event.id).where(Event.status == "pending")
-        )
+        result = await session.execute(select(Event.id).where(Event.status == "pending"))
         pending_ids: list[int] = result.scalars().all()
     for event_id in pending_ids:
         await queue.put(event_id)
@@ -49,15 +47,6 @@ async def lifespan(app: FastAPI):
         hours=6,
         args=[queue],
         next_run_time=datetime.now(_TZ),
-    )
-    # No next_run_time override here (unlike poll_prices above) — this shouldn't
-    # fire immediately on every app restart, only on its normal daily cadence.
-    # Recycles Patchright's browser context for long-uptime resilience (#40);
-    # a no-op if the browser was never launched in the first place (lazy init).
-    scheduler.add_job(
-        PatchrightScraper.recycle_browser,
-        "interval",
-        hours=24,
     )
     scheduler.start()
 

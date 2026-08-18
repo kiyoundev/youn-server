@@ -17,6 +17,7 @@ from app.core.db import AsyncSessionLocal, get_db
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
+from app.scheduler.jobs import process_item
 from app.schemas.listing import ListingCreate, ListingResponse, ListingUpdate
 from app.schemas.price_history import PriceHistoryResponse
 from app.schemas.product import (
@@ -26,10 +27,10 @@ from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
 )
-from app.scheduler.jobs import process_item
 from app.services.product_status import compute_last_checked, compute_status
 from app.services.scraper.base import USER_AGENTS, _build_headers
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
+from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.router import (
     RETAILER_DISPLAY_NAMES,
     RETAILER_MAP,
@@ -89,9 +90,7 @@ async def _resolve_final_url(url: str) -> str:
     as a per-URL failure, not a whole-request one."""
     try:
         ua = random.choice(USER_AGENTS)
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS, http2=True
-        ) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS, http2=True) as client:
             try:
                 resp = await client.head(url, headers=_build_headers(ua))
                 if resp.status_code >= 400:
@@ -114,9 +113,7 @@ async def _resolve_final_url(url: str) -> str:
         raise HTTPException(status_code=400, detail="URL could not be resolved") from e
 
 
-async def _resolve_retailer_and_scraper_type(
-    url: str, retailer: str | None, scraper_type: str | None
-) -> tuple[str, str, str | None]:
+async def _resolve_retailer_and_scraper_type(url: str, retailer: str | None, scraper_type: str | None) -> tuple[str, str, str | None]:
     """Shared by both POST endpoints: resolve `url` to its final destination
     first (#39 — following any redirects, e.g. a.co/amzn.to shortlinks), then
     derive `retailer` from the resolved hostname unless explicitly given, and
@@ -138,9 +135,7 @@ async def _resolve_retailer_and_scraper_type(
     try:
         detected = await detect_scraper_type(resolved_url)
     except ValueError:
-        raise HTTPException(
-            status_code=400, detail="URL could not be scraped by any available method"
-        )
+        raise HTTPException(status_code=400, detail="URL could not be scraped by any available method")
     return resolved_url, resolved_retailer, detected
 
 
@@ -157,9 +152,7 @@ async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
     just its own URL, defeating the point of the concurrent-batch design."""
     async with semaphore:
         try:
-            resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
-                url, None, None
-            )
+            resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(url, None, None)
             return _ProbeResult(url=resolved_url, retailer=retailer, scraper_type=scraper_type)
         except HTTPException as e:
             return _ProbeResult(url=url, error=str(e.detail))
@@ -168,9 +161,7 @@ async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
             return _ProbeResult(url=url, error="Unexpected error while probing this URL")
 
 
-async def _fetch_last_checked_map(
-    db: AsyncSession, listing_ids: list[int] | None = None
-) -> dict[int, datetime]:
+async def _fetch_last_checked_map(db: AsyncSession, listing_ids: list[int] | None = None) -> dict[int, datetime]:
     query = select(PriceHistory.watch_item_id, func.max(PriceHistory.checked_at))
     if listing_ids is not None:
         query = query.where(PriceHistory.watch_item_id.in_(listing_ids))
@@ -178,9 +169,7 @@ async def _fetch_last_checked_map(
     return dict(result.all())
 
 
-def _build_listing_response(
-    listing: Listing, last_checked_map: dict[int, datetime]
-) -> ListingResponse:
+def _build_listing_response(listing: Listing, last_checked_map: dict[int, datetime]) -> ListingResponse:
     return ListingResponse(
         id=listing.id,
         retailer=listing.retailer,
@@ -194,12 +183,8 @@ def _build_listing_response(
     )
 
 
-def _build_product_response(
-    product: Product, last_checked_map: dict[int, datetime]
-) -> ProductResponse:
-    listing_responses = [
-        _build_listing_response(listing, last_checked_map) for listing in product.listings
-    ]
+def _build_product_response(product: Product, last_checked_map: dict[int, datetime]) -> ProductResponse:
+    listing_responses = [_build_listing_response(listing, last_checked_map) for listing in product.listings]
     return ProductResponse(
         id=product.id,
         name=product.name,
@@ -212,9 +197,7 @@ def _build_product_response(
     )
 
 
-async def _bounded_process_item(
-    listing_id: int, semaphore: asyncio.Semaphore, queue: asyncio.Queue
-) -> None:
+async def _bounded_process_item(listing_id: int, semaphore: asyncio.Semaphore, queue: asyncio.Queue) -> None:
     """Runs process_item under the first-scrape concurrency bound, called via
     spawn() so it outlives the request/response cycle that triggered it — see
     .doc/keynotes.md's asyncio concurrency section for why spawn() itself
@@ -255,12 +238,26 @@ async def _bounded_process_item(
                 )
 
 
+async def _dispatch_first_scrapes(listing_ids: list[int], semaphore: asyncio.Semaphore, queue: asyncio.Queue) -> None:
+    """One background task per *request* (not one per listing) — spawned by
+    create_item/create_listing to gather() every listing in this request's own
+    batch, then close the shared Patchright browser once it's confirmed idle.
+    _bounded_process_item never raises (see its own docstring), so no
+    return_exceptions=True is needed here. close_if_idle() (not
+    close_browser() directly) checks the *global* _active_scrapes, not a
+    per-request count — that's what makes this safe against an unrelated
+    request's own batch, or a poll_prices cycle, still running concurrently on
+    the same event loop: its scrapes keep the shared counter above 0, so this
+    call correctly skips closing. No debounce/timer needed — gather() only
+    returns once every listing in this specific batch has finished, so
+    there's no "maybe one more from the same request" case left to guard
+    against."""
+    await asyncio.gather(*(_bounded_process_item(lid, semaphore, queue) for lid in listing_ids))
+    await PatchrightScraper.close_if_idle()
+
+
 async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
-    result = await db.execute(
-        select(Product)
-        .options(selectinload(Product.listings))
-        .where(Product.id == product_id)
-    )
+    result = await db.execute(select(Product).options(selectinload(Product.listings)).where(Product.id == product_id))
     product = result.scalar_one_or_none()
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -294,9 +291,7 @@ async def list_items(db: AsyncSession = Depends(get_db)) -> list[ProductResponse
 )
 async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     product = await _get_product_or_404(product_id, db)
-    last_checked_map = await _fetch_last_checked_map(
-        db, [listing.id for listing in product.listings]
-    )
+    last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
     return _build_product_response(product, last_checked_map)
 
 
@@ -318,9 +313,7 @@ async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> Produ
         "successful listing are still created."
     ),
 )
-async def create_item(
-    request: Request, body: ProductCreate, db: AsyncSession = Depends(get_db)
-) -> ProductCreateResponse:
+async def create_item(request: Request, body: ProductCreate, db: AsyncSession = Depends(get_db)) -> ProductCreateResponse:
     product = Product(name=body.name, target_price=body.target_price)
     # Materialize the relationship in-memory now, even if it stays empty —
     # otherwise, when every URL fails validation (or urls=[]) and .append()
@@ -370,9 +363,7 @@ async def create_item(
         succeeded_resolved = [r.url for r in results if r.error is None]
         resolved_existing: set[str] = set()
         if succeeded_resolved:
-            existing_resolved = await db.execute(
-                select(Listing.url).where(Listing.url.in_(succeeded_resolved))
-            )
+            existing_resolved = await db.execute(select(Listing.url).where(Listing.url.in_(succeeded_resolved)))
             resolved_existing = {row[0] for row in existing_resolved.all()}
 
         seen_resolved: set[str] = set()
@@ -380,14 +371,10 @@ async def create_item(
             if result.error is not None:
                 failed.append(ListingFailure(url=original_url, detail=result.error))
             elif result.url in resolved_existing or result.url in seen_resolved:
-                failed.append(
-                    ListingFailure(url=original_url, detail="An item with this URL already exists")
-                )
+                failed.append(ListingFailure(url=original_url, detail="An item with this URL already exists"))
             else:
                 seen_resolved.add(result.url)
-                product.listings.append(
-                    Listing(url=result.url, retailer=result.retailer, scraper_type=result.scraper_type)
-                )
+                product.listings.append(Listing(url=result.url, retailer=result.retailer, scraper_type=result.scraper_type))
 
     db.add(product)
     try:
@@ -401,18 +388,19 @@ async def create_item(
         # just covering the window this route's single existing-URL query
         # can't close on its own.
         await db.rollback()
-        raise HTTPException(
-            status_code=409, detail="One or more URLs were claimed by another request — try again"
-        )
+        raise HTTPException(status_code=409, detail="One or more URLs were claimed by another request — try again")
 
     # Fire-and-forget — not awaited, so the response below builds and returns
     # while these scrapes run in the background. Only successfully-created
     # listings are here (product.listings never got the failed ones
-    # appended), so nothing extra to filter.
-    for listing in product.listings:
+    # appended), so nothing extra to filter. One task for the whole request's
+    # batch, not one per listing — see _dispatch_first_scrapes.
+    if product.listings:
         spawn(
-            _bounded_process_item(
-                listing.id, _first_scrape_semaphore, request.app.state.event_queue
+            _dispatch_first_scrapes(
+                [listing.id for listing in product.listings],
+                _first_scrape_semaphore,
+                request.app.state.event_queue,
             )
         )
 
@@ -426,9 +414,7 @@ async def create_item(
     summary="Add a retailer listing to an existing product",
     description="Same retailer-derivation and `scraper_type` auto-detection as `POST /api/items`.",
 )
-async def create_listing(
-    request: Request, product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)
-) -> ListingResponse:
+async def create_listing(request: Request, product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
     await _get_product_or_404(product_id, db)
 
     existing = await db.execute(select(Listing.id).where(Listing.url == body.url))
@@ -442,13 +428,9 @@ async def create_listing(
     # at an already-tracked destination) still gets caught, just later: the
     # IntegrityError → 409 handler below fires at commit, same message
     # either way.
-    resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
-        body.url, body.retailer, body.scraper_type
-    )
+    resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(body.url, body.retailer, body.scraper_type)
 
-    listing = Listing(
-        url=resolved_url, retailer=retailer, scraper_type=scraper_type, product_id=product_id
-    )
+    listing = Listing(url=resolved_url, retailer=retailer, scraper_type=scraper_type, product_id=product_id)
     db.add(listing)
     try:
         await db.commit()
@@ -456,10 +438,10 @@ async def create_listing(
         await db.rollback()
         raise HTTPException(status_code=409, detail="An item with this URL already exists")
 
-    # Fire-and-forget, same as create_item above — not awaited.
-    spawn(
-        _bounded_process_item(listing.id, _first_scrape_semaphore, request.app.state.event_queue)
-    )
+    # Fire-and-forget, same as create_item above — not awaited. Single-element
+    # batch, unifying both call sites on the same _dispatch_first_scrapes
+    # mechanism instead of diverging.
+    spawn(_dispatch_first_scrapes([listing.id], _first_scrape_semaphore, request.app.state.event_queue))
 
     return _build_listing_response(listing, {})
 
@@ -470,9 +452,7 @@ async def create_listing(
     summary="Update a wishlist product",
     description="Partial update — omitted fields are left unchanged. Applies to all listings.",
 )
-async def update_item(
-    product_id: int, body: ProductUpdate, db: AsyncSession = Depends(get_db)
-) -> ProductResponse:
+async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     product = await _get_product_or_404(product_id, db)
 
     if body.name is not None:
@@ -481,9 +461,7 @@ async def update_item(
         product.target_price = body.target_price
 
     await db.commit()
-    last_checked_map = await _fetch_last_checked_map(
-        db, [listing.id for listing in product.listings]
-    )
+    last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
     return _build_product_response(product, last_checked_map)
 
 
@@ -512,27 +490,21 @@ async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> No
         "price history, unlike delete-and-recreate."
     ),
 )
-async def update_listing(
-    product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)
-) -> ListingResponse:
+async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
     listing = await _get_listing_or_404(product_id, listing_id, db)
 
     if body.active is not None:
         listing.active = body.active
 
     if body.url is not None and body.url != listing.url:
-        existing = await db.execute(
-            select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id)
-        )
+        existing = await db.execute(select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id))
         if existing.scalar_one_or_none() is not None:
             raise HTTPException(status_code=409, detail="An item with this URL already exists")
 
         # Same as create_listing above — a resolved-URL collision not caught
         # by this raw-URL pre-check still gets caught at commit's
         # IntegrityError → 409 handler below.
-        resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(
-            body.url, body.retailer, None
-        )
+        resolved_url, retailer, scraper_type = await _resolve_retailer_and_scraper_type(body.url, body.retailer, None)
         listing.url = resolved_url
         listing.retailer = retailer
         listing.scraper_type = scraper_type
@@ -552,18 +524,13 @@ async def update_listing(
     status_code=204,
     summary="Delete a listing",
     description=(
-        "Cascades to that listing's price history. If it was the product's last "
-        "remaining listing, the now-empty product is deleted too."
+        "Cascades to that listing's price history. If it was the product's last remaining listing, the now-empty product is deleted too."
     ),
 )
 async def delete_listing(product_id: int, listing_id: int, db: AsyncSession = Depends(get_db)) -> None:
     listing = await _get_listing_or_404(product_id, listing_id, db)
 
-    sibling_count = await db.execute(
-        select(func.count(Listing.id)).where(
-            Listing.product_id == product_id, Listing.id != listing_id
-        )
-    )
+    sibling_count = await db.execute(select(func.count(Listing.id)).where(Listing.product_id == product_id, Listing.id != listing_id))
     is_last_listing = sibling_count.scalar_one() == 0
 
     if is_last_listing:

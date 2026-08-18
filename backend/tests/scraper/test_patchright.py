@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.result import ScraperResult
 
@@ -48,9 +47,7 @@ async def test_get_price_launches_lazily_when_context_missing() -> None:
     async def fake_start_browser() -> None:
         PatchrightScraper._context = mock_context
 
-    with patch.object(
-        PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start_browser)
-    ) as mock_start:
+    with patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start_browser)) as mock_start:
         result = await PatchrightScraper().get_price("https://example.com/product")
 
     mock_start.assert_awaited_once()
@@ -92,9 +89,7 @@ async def test_start_browser_concurrent_callers_launch_once() -> None:
         return MagicMock()
 
     mock_playwright_instance = MagicMock()
-    mock_playwright_instance.chromium.launch_persistent_context = AsyncMock(
-        side_effect=fake_launch_persistent_context
-    )
+    mock_playwright_instance.chromium.launch_persistent_context = AsyncMock(side_effect=fake_launch_persistent_context)
     mock_playwright_cm = AsyncMock()
     mock_playwright_cm.start = AsyncMock(return_value=mock_playwright_instance)
 
@@ -115,9 +110,7 @@ async def test_start_browser_cleans_up_playwright_on_launch_failure() -> None:
     silently overwrite (see .plan/40-.../review.md Major #3)."""
     mock_playwright_instance = MagicMock()
     mock_playwright_instance.stop = AsyncMock()
-    mock_playwright_instance.chromium.launch_persistent_context = AsyncMock(
-        side_effect=RuntimeError("launch failed")
-    )
+    mock_playwright_instance.chromium.launch_persistent_context = AsyncMock(side_effect=RuntimeError("launch failed"))
     mock_playwright_cm = AsyncMock()
     mock_playwright_cm.start = AsyncMock(return_value=mock_playwright_instance)
 
@@ -134,40 +127,41 @@ async def test_start_browser_cleans_up_playwright_on_launch_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recycle_browser_noop_when_never_launched() -> None:
-    await PatchrightScraper.recycle_browser()
-    assert PatchrightScraper._context is None
+async def test_close_if_idle_closes_when_no_active_scrapes() -> None:
+    PatchrightScraper._context = object()  # type: ignore[assignment]
+    PatchrightScraper._active_scrapes = 0
+    with patch.object(PatchrightScraper, "close_browser", AsyncMock()) as mock_close:
+        await PatchrightScraper.close_if_idle()
+    mock_close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_recycle_browser_skips_when_scrape_in_flight() -> None:
+async def test_close_if_idle_skips_when_scrape_in_flight() -> None:
     sentinel = object()
     PatchrightScraper._context = sentinel  # type: ignore[assignment]
     PatchrightScraper._active_scrapes = 1
     with patch.object(PatchrightScraper, "close_browser", AsyncMock()) as mock_close:
-        await PatchrightScraper.recycle_browser()
+        await PatchrightScraper.close_if_idle()
     mock_close.assert_not_awaited()
     assert PatchrightScraper._context is sentinel
 
 
 @pytest.mark.asyncio
-async def test_recycle_browser_closes_and_relaunches_when_idle() -> None:
+async def test_close_if_idle_serializes_concurrent_callers_against_double_close() -> None:
+    """Two independent callers (e.g. poll_prices and a #41 ad-hoc batch)
+    finishing at nearly the same moment must not both call close_browser()
+    on the same context — close_browser()'s own await on _context.close()
+    leaves _context non-None until it returns, so without _start_lock
+    serializing the check-and-close sequence, a second concurrent caller
+    could see the same still-truthy _context and close it a second time."""
     PatchrightScraper._context = object()  # type: ignore[assignment]
     PatchrightScraper._active_scrapes = 0
-    new_context = object()
 
-    async def fake_close() -> None:
+    async def fake_close_browser() -> None:
+        await asyncio.sleep(0.01)  # widen the race window, as in test_start_browser_concurrent_callers_launch_once
         PatchrightScraper._context = None
 
-    async def fake_start() -> None:
-        PatchrightScraper._context = new_context
-
-    with (
-        patch.object(PatchrightScraper, "close_browser", AsyncMock(side_effect=fake_close)) as mock_close,
-        patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start)) as mock_start,
-    ):
-        await PatchrightScraper.recycle_browser()
+    with patch.object(PatchrightScraper, "close_browser", AsyncMock(side_effect=fake_close_browser)) as mock_close:
+        await asyncio.gather(*(PatchrightScraper.close_if_idle() for _ in range(5)))
 
     mock_close.assert_awaited_once()
-    mock_start.assert_awaited_once()
-    assert PatchrightScraper._context is new_context

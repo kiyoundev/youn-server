@@ -84,6 +84,43 @@ async def test_poll_prices_processes_all_active_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_poll_prices_closes_browser_once_after_full_cycle() -> None:
+    """close_if_idle() fires once, after the whole sequential loop over
+    item_ids — not per-listing — so non-adjacent Patchright-routed listings
+    within one cycle don't thrash open/close mid-cycle (#47)."""
+    result = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = [1, 2, 3]
+    result.scalars.return_value = scalars
+
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+
+    call_order: list[str] = []
+
+    async def fake_process_item(item_id, router, queue):
+        call_order.append(f"process:{item_id}")
+
+    async def fake_close_if_idle():
+        call_order.append("close")
+
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.RetailerRouter"),
+        patch("app.scheduler.jobs.process_item", new=AsyncMock(side_effect=fake_process_item)),
+        patch(
+            "app.scheduler.jobs.PatchrightScraper.close_if_idle",
+            new=AsyncMock(side_effect=fake_close_if_idle),
+        ) as mock_close,
+    ):
+        queue = asyncio.Queue()
+        await jobs.poll_prices(queue)
+
+    mock_close.assert_awaited_once()
+    assert call_order == ["process:1", "process:2", "process:3", "close"]
+
+
+@pytest.mark.asyncio
 async def test_poll_prices_skips_when_lock_already_held() -> None:
     with (
         patch("app.scheduler.jobs.RetailerRouter") as router_cls,

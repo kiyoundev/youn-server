@@ -9,6 +9,7 @@ from app.models.event import Event
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
+from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.router import RetailerRouter
 from app.services.sse import broadcast
 from app.services.stocks import FinnhubClient
@@ -41,6 +42,13 @@ async def poll_prices(queue: asyncio.Queue) -> None:
                 await process_item(item_id, router, queue)
             except Exception:
                 _log.error("poll_prices: unhandled error for item %d", item_id, exc_info=True)
+
+        # End-of-cycle close, not per-listing — Patchright-routed listings
+        # within item_ids aren't guaranteed adjacent, so closing reactively
+        # per-listing would thrash open/close mid-cycle. close_if_idle()
+        # (not close_browser() directly) since an ad-hoc #41 add-time batch
+        # can genuinely be running concurrently on the same event loop.
+        await PatchrightScraper.close_if_idle()
 
         _log.info("poll_prices: cycle complete")
 
@@ -88,7 +96,8 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         if scrape.price is None:
             _log.warning(
                 "scraper returned ok with None price for listing %d (%s), skipping",
-                listing.id, listing.retailer,
+                listing.id,
+                listing.retailer,
             )
             return
 
@@ -109,9 +118,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         # make it permanently block future alerts (it can never be beaten,
         # so alerted_at would never clear even after it recovers elsewhere).
         # The just-scraped `listing` is always "ok" here, so this is never empty.
-        available_listings = [
-            l for l in active_listings if l.last_price is not None and l.last_scrape_status == "ok"
-        ]
+        available_listings = [l for l in active_listings if l.last_price is not None and l.last_scrape_status == "ok"]
         winning = min(available_listings, key=lambda l: l.last_price)
         cheapest = winning.last_price
 
@@ -133,7 +140,11 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             await queue.put(event.id)
             _log.info(
                 "PRICE_DROP: product %d (%s) @ %.2f (target %.2f) via %s",
-                product.id, product.name, cheapest, product.target_price, winning.retailer,
+                product.id,
+                product.name,
+                cheapest,
+                product.target_price,
+                winning.retailer,
             )
         elif cheapest > product.target_price and product.alerted_at is not None:
             product.alerted_at = None

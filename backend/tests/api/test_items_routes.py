@@ -27,14 +27,16 @@ def _stub_resolve_final_url():
 
 @pytest.fixture(autouse=True)
 def _stub_first_scrape_dispatch():
-    """create_item/create_listing now spawn() a background first-scrape per
-    listing (#41) — not what most of this file's route-behavior tests are
-    about, and a real _bounded_process_item would open its own
-    AsyncSessionLocal() and hit a real network, unrelated to this file's
-    mocked `db`. Stubbed so every test in this file gets an inert spawn()
-    target for free; yields the mock so the two dispatch-specific tests
-    below can assert on it directly."""
-    with patch("app.api.items._bounded_process_item", new=AsyncMock()) as mock:
+    """create_item/create_listing each spawn() one background
+    _dispatch_first_scrapes() call per request (#47 — grouped gather() over
+    that request's own listings, was one _bounded_process_item spawn per
+    listing) — not what most of this file's route-behavior tests are about,
+    and a real dispatch would open its own AsyncSessionLocal(), hit a real
+    network, and touch PatchrightScraper, unrelated to this file's mocked
+    `db`. Stubbed so every test in this file gets an inert spawn() target for
+    free; yields the mock so the two dispatch-specific tests below can
+    assert on it directly."""
+    with patch("app.api.items._dispatch_first_scrapes", new=AsyncMock()) as mock:
         yield mock
 
 
@@ -48,10 +50,11 @@ def _request() -> SimpleNamespace:
 
 
 # Captured at import time, before the autouse fixture above ever patches
-# app.api.items._bounded_process_item — this stays bound to the real
-# implementation regardless, so the tests below can exercise its own
-# exception-guard behavior directly instead of the stub.
+# app.api.items._bounded_process_item/_dispatch_first_scrapes — these stay
+# bound to the real implementations regardless, so the tests below can
+# exercise their own behavior directly instead of the stub.
 _real_bounded_process_item = items._bounded_process_item
+_real_dispatch_first_scrapes = items._dispatch_first_scrapes
 
 # Same pattern, for _resolve_final_url (#39) — the autouse
 # _stub_resolve_final_url fixture below patches this name for every other
@@ -508,9 +511,7 @@ async def test_create_item_resolved_url_matches_existing_listing_reported_in_fai
     # can't catch this either; must be re-checked post-resolve.
     request = _request()
     db = MagicMock()
-    db.execute = AsyncMock(
-        side_effect=[_rows_result([]), _rows_result([("https://www.amazon.ca/dp/B0X",)])]
-    )
+    db.execute = AsyncMock(side_effect=[_rows_result([]), _rows_result([("https://www.amazon.ca/dp/B0X",)])])
     db.add = MagicMock(side_effect=_assign_persisted_defaults)
     db.commit = AsyncMock()
 
@@ -546,9 +547,7 @@ async def test_resolve_final_url_head_success_returns_final_url() -> None:
 async def test_resolve_final_url_falls_back_to_get_on_head_error_status() -> None:
     head_resp = SimpleNamespace(status_code=405, url="https://a.co/d/abc")
     get_resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0X")
-    client = _FakeHTTPClient(
-        head=AsyncMock(return_value=head_resp), get=AsyncMock(return_value=get_resp)
-    )
+    client = _FakeHTTPClient(head=AsyncMock(return_value=head_resp), get=AsyncMock(return_value=get_resp))
 
     with patch("app.api.items.httpx.AsyncClient", return_value=client):
         result = await _real_resolve_final_url("https://a.co/d/abc")
@@ -617,9 +616,11 @@ async def test_resolve_final_url_non_http_error_propagates_uncaught() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_item_spawns_first_scrape_per_created_listing(
+async def test_create_item_spawns_one_dispatch_for_whole_batch(
     _stub_first_scrape_dispatch: AsyncMock,
 ) -> None:
+    """One _dispatch_first_scrapes() call per *request*, covering every
+    created listing — not one spawn per listing (#47)."""
     request = _request()
     db = MagicMock()
     db.execute = AsyncMock(return_value=_rows_result([]))
@@ -636,11 +637,11 @@ async def test_create_item_spawns_first_scrape_per_created_listing(
         result = await items.create_item(request, body, db)
 
     listing_ids = {listing.id for listing in result.product.listings}
-    dispatched_ids = {call.args[0] for call in _stub_first_scrape_dispatch.call_args_list}
-    assert dispatched_ids == listing_ids
-    for call in _stub_first_scrape_dispatch.call_args_list:
-        assert call.args[1] is items._first_scrape_semaphore
-        assert call.args[2] is request.app.state.event_queue
+    _stub_first_scrape_dispatch.assert_called_once()
+    call = _stub_first_scrape_dispatch.call_args
+    assert set(call.args[0]) == listing_ids
+    assert call.args[1] is items._first_scrape_semaphore
+    assert call.args[2] is request.app.state.event_queue
 
 
 @pytest.mark.asyncio
@@ -681,9 +682,55 @@ async def test_create_listing_spawns_first_scrape(
     with patch.dict("app.api.items.RETAILER_MAP", {"bestbuy.ca": object()}):
         result = await items.create_listing(request, 5, body, db)
 
-    _stub_first_scrape_dispatch.assert_called_once_with(
-        result.id, items._first_scrape_semaphore, request.app.state.event_queue
-    )
+    _stub_first_scrape_dispatch.assert_called_once_with([result.id], items._first_scrape_semaphore, request.app.state.event_queue)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_first_scrapes_closes_browser_once_batch_drains() -> None:
+    """_dispatch_first_scrapes() waits for every listing in its own batch to
+    finish, then closes the shared Patchright browser once close_if_idle()
+    confirms the global _active_scrapes is back to 0 — proving a real
+    teardown, not a no-op, via a changed _context identity on next use."""
+    call_order: list[str] = []
+
+    async def fake_bounded(listing_id, semaphore, queue):
+        call_order.append(f"process:{listing_id}")
+
+    async def fake_close_if_idle():
+        call_order.append("close")
+
+    with (
+        patch("app.api.items._bounded_process_item", new=AsyncMock(side_effect=fake_bounded)),
+        patch(
+            "app.api.items.PatchrightScraper.close_if_idle",
+            new=AsyncMock(side_effect=fake_close_if_idle),
+        ) as mock_close,
+    ):
+        await _real_dispatch_first_scrapes([1, 2, 3], asyncio.Semaphore(3), asyncio.Queue())
+
+    mock_close.assert_awaited_once()
+    assert call_order[-1] == "close"  # only after every listing in the batch finished
+    assert {"process:1", "process:2", "process:3"} == set(call_order[:-1])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_first_scrapes_does_not_close_when_other_scrape_still_in_flight() -> None:
+    """A second, unrelated batch still holding the global _active_scrapes
+    above 0 must survive this batch's own drain-and-check — close_if_idle()
+    checks the shared counter, not a per-request local one."""
+    from app.services.scraper.patchright_scraper import PatchrightScraper
+
+    original_active_scrapes = PatchrightScraper._active_scrapes
+    PatchrightScraper._active_scrapes = 1  # simulate an unrelated in-flight scrape
+    try:
+        with (
+            patch("app.api.items._bounded_process_item", new=AsyncMock()),
+            patch.object(PatchrightScraper, "close_browser", new=AsyncMock()) as mock_close,
+        ):
+            await _real_dispatch_first_scrapes([1], asyncio.Semaphore(1), asyncio.Queue())
+        mock_close.assert_not_awaited()
+    finally:
+        PatchrightScraper._active_scrapes = original_active_scrapes
 
 
 @pytest.mark.asyncio

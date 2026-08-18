@@ -5,8 +5,6 @@ import tempfile
 
 from patchright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
-_log = logging.getLogger(__name__)
-
 from app.services.scraper.base import BaseScraper, _parse_price
 from app.services.scraper.config import (
     AMAZON_MAX_RETRIES,
@@ -15,6 +13,8 @@ from app.services.scraper.config import (
     PRICE_LOCATOR_TIMEOUT_MS,
 )
 from app.services.scraper.result import ScraperResult
+
+_log = logging.getLogger(__name__)
 
 _USER_DATA_DIR = os.path.join(tempfile.gettempdir(), "patchright-profile")
 
@@ -29,7 +29,7 @@ class PatchrightScraper(BaseScraper):
     # only lazily on first real use inside a running loop.
     _start_lock: asyncio.Lock = asyncio.Lock()
     # Counts scrapes currently mid-flight (between new_page() and page.close()),
-    # incremented/decremented around every get_price() call site. recycle_browser()
+    # incremented/decremented around every get_price() call site. close_if_idle()
     # checks this to avoid closing the context out from under an in-flight scrape.
     _active_scrapes: int = 0
 
@@ -75,20 +75,28 @@ class PatchrightScraper(BaseScraper):
         cls._playwright = None
 
     @classmethod
-    async def recycle_browser(cls) -> None:
-        """Closes and relaunches the browser context, for long-uptime resilience
-        (this app runs 24/7, so once launched the context otherwise never gets a
-        fresh start). Shares _start_lock with start_browser() — serializes recycle
-        against a concurrent launch, so a recycle tick landing mid-launch can't
-        close a context that's still being constructed."""
+    async def close_if_idle(cls) -> None:
+        """Closes the browser only if nothing is using it *anywhere* — checked
+        against the global _active_scrapes, not a per-caller local count. Both
+        poll_prices (jobs.py) and #41's ad-hoc add-time batches (items.py) call
+        this instead of close_browser() directly, since they run on the same
+        event loop and can genuinely overlap: whichever caller's own batch
+        finishes last is the one that actually closes it, while an earlier
+        caller correctly sees non-zero (the other's scrapes still in flight)
+        and skips closing.
+
+        Shares _start_lock with start_browser() — without it, two callers
+        finishing at nearly the same moment could both pass the
+        _active_scrapes == 0 check and both call close_browser(), and since
+        close_browser()'s own await on _context.close() leaves _context
+        non-None until it returns, the second caller could call .close() on
+        the same context a second time before the first caller ever nulls it
+        out. Holding the lock across the whole check-and-close sequence
+        (same pattern the old recycle_browser() used) makes the two callers'
+        attempts serialize instead of overlapping."""
         async with cls._start_lock:
-            if cls._context is None:
-                return  # never launched — nothing to recycle
-            if cls._active_scrapes > 0:
-                _log.info("recycle_browser: scrape in flight, skipping — retry next tick")
-                return
-            await cls.close_browser()
-        await cls.start_browser()
+            if cls._active_scrapes == 0 and cls._context is not None:
+                await cls.close_browser()
 
     async def get_price(self, url: str) -> ScraperResult:
         try:
@@ -103,9 +111,7 @@ class PatchrightScraper(BaseScraper):
                     await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
                     # Wait for Cloudflare challenge to clear (title changes from "Just a moment...")
                     try:
-                        await page.wait_for_function(
-                            "document.title !== 'Just a moment...'", timeout=CLOUDFLARE_CHALLENGE_TIMEOUT_MS
-                        )
+                        await page.wait_for_function("document.title !== 'Just a moment...'", timeout=CLOUDFLARE_CHALLENGE_TIMEOUT_MS)
                     except Exception:
                         pass
                     html = await page.content()
@@ -127,12 +133,7 @@ class AmazonCAScraper(PatchrightScraper):
         #    stable across redesigns because Amazon's JS depends on it internally.
         try:
             if await page.locator("[data-pricetopay-label]").count():
-                text = (
-                    await page.locator("[data-pricetopay-label]").first.text_content(
-                        timeout=PRICE_LOCATOR_TIMEOUT_MS
-                    )
-                    or ""
-                ).strip()
+                text = (await page.locator("[data-pricetopay-label]").first.text_content(timeout=PRICE_LOCATOR_TIMEOUT_MS) or "").strip()
                 if text:
                     return text
         except Exception:
@@ -160,16 +161,14 @@ class AmazonCAScraper(PatchrightScraper):
             return ScraperResult(price=None, status="error")
         # Counts as one in-flight scrape for the whole retry loop below, not once
         # per attempt — matches PatchrightScraper.get_price()'s tracking, which
-        # recycle_browser() checks before closing the shared context.
+        # close_if_idle() checks before closing the shared context.
         PatchrightScraper._active_scrapes += 1
         try:
             for _ in range(self.MAX_RETRIES):
                 try:
                     page = await PatchrightScraper._context.new_page()
                     try:
-                        await page.goto(
-                            "https://www.amazon.ca", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS
-                        )
+                        await page.goto("https://www.amazon.ca", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
                         await page.goto(url, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
                         raw = await self._find_price_text(page)
                     finally:
