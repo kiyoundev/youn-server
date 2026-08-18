@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ⬜ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ⬜ #47, ⬜ #48
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ⬜ #47, ⬜ #48
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -77,7 +77,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #13 | Pi Deployment + Tailscale | ops / HITL | ~3h | #8, #10.1–#10.5 |
 | ✅ Done | #13.1 | Tailscale Subnet Routing (NAS Postgres Reachability) | ops / HITL | ~0.75h | None |
 | ⬜ Open | #14 | Integration Tests | test / AFK | ~4h | #3, #4, #5, #7, #8 |
-| ⬜ Open | #15 | Headless Chromium Bot Detection on Pi | ops / AFK | ~2h | #3, #13 |
+| ✅ Done | #15 | Headless Chromium Bot Detection on Pi | ops / AFK | ~2h | #3, #13 |
 | ✅ Done | #16 | Tailscale MagicDNS (Human-Readable Hostnames) | ops / HITL | ~0.5h | #13 |
 | ✅ Done | #17 | TradingAgents Progress Heartbeat + Idle Timeout | feat / AFK | ~2h | #9 |
 | ⬜ Open | #18 | DB Connection Resilience (pool_pre_ping + Pending-Event Rescan) | feat / AFK | ~1.5h | #6, #7 |
@@ -1505,11 +1505,11 @@ Not blocked on `#24`/`#10.1`–`#10.5`: `/watchlist` already exists in the repo 
 
 ---
 
-## [ ] Issue #15 — Headless Chromium Bot Detection on Pi
+## [x] Issue #15 — Headless Chromium Bot Detection on Pi
 
 **Type:** ops / AFK
 **Estimate:** ~2h
-**Blocked by:** #3, #13, #40, #47 (Xvfb's subprocess must launch before `start_browser()`'s Chromium call, inside the same lifecycle #40 wires into `main.py`'s `lifespan` — building this before #40 exists would mean redoing the wiring. #47 added after this session's planning: it revises that same lifecycle again — close-on-idle instead of persistent-until-recycle — so Xvfb's own lifecycle design, discussed this session, assumes #47's shape, not #40's original persistent one)
+**Blocked by:** #3, #13, #40, #47 — all ✅ Done as of this write-up. Xvfb's subprocess must launch before `start_browser()`'s Chromium call, inside the same lifecycle `#40`/`#47` wire into `main.py`'s `lifespan`; `#47` (shipped after this issue was first written) replaced `#40`'s original persistent-until-recycle model with close-on-idle (`close_if_idle()`, no more `recycle_browser()`) — Xvfb's own lifecycle design below assumes `#47`'s shipped shape, not `#40`'s original one.
 
 ### Background — re-verified and corrected this session, superseding the original findings below
 
@@ -1546,23 +1546,23 @@ os.environ["DISPLAY"] = ":99"
 
 Chromium connects to Xvfb over the normal X11 protocol and has no way to tell it isn't a real display — it runs fully real headed Chromium, just rendering into memory instead of a screen. Bot detectors see a genuinely headed browser, because it genuinely is one. Resource cost ~30 MB RAM.
 
-**Coordination with `#40`'s browser lifecycle** (`start_browser()`/`close_browser()`, wired into `main.py`'s `lifespan`, plus its daily `recycle_browser()`):
-- Xvfb's subprocess must be spawned *before* `launch_persistent_context()` is called in `start_browser()` (Chromium needs `DISPLAY` set at launch time), and killed in `close_browser()`'s cleanup alongside the existing context/playwright teardown.
-- `recycle_browser()` (from `#40`) should **not** need to restart the Xvfb subprocess — Xvfb itself holds no session state that degrades over time, only Chromium's context does. Recycling should close+reopen just the browser context, leaving Xvfb running continuously underneath. Confirm this assumption live once both are built.
+**Coordination with the shipped `start_browser()`/`close_browser()`/`close_if_idle()` lifecycle** (`#40` + `#47`, wired into `main.py`'s `lifespan`):
+- Xvfb's subprocess must be spawned *before* `launch_persistent_context()` is called in `start_browser()` (Chromium needs `DISPLAY` set at launch time).
+- **Xvfb must NOT be tied to `close_browser()`'s teardown.** This matters more now than it did when this issue was first written: under `#47`'s close-on-idle model, `start_browser()`/`close_browser()` fire far more often than the old once-a-day `recycle_browser()` did — every `poll_prices` cycle and every ad-hoc add batch that drains (via `close_if_idle()`) tears down and relaunches Chromium. If Xvfb's lifecycle were coupled to that, it would restart on the same cadence — needless subprocess churn for something that (per this issue's own reasoning) holds no session state to go stale in the first place. Xvfb needs its own state (e.g. `PatchrightScraper._xvfb_process`), started lazily on first real use (same guard shape as `_context`, sharing `_start_lock`), and stopped only by a separate call from `lifespan`'s real shutdown — never from `close_browser()`/`close_if_idle()`.
 - Not yet confirmed: whether the `xvfb` apt package has a prebuilt ARM64 build for jammy — very likely yes (Xvfb is a standard, widely-packaged X utility across architectures), but unverified until the Dockerfile actually builds on Pi.
 
 ### Known limitations
 
-- **Amazon** no longer needs Xvfb or a warm-up workaround — confirmed passing headless as of this session's Playwright version bump. Keep it on the plain headless path; don't route it through Xvfb unnecessarily.
+- **Amazon** no longer *needs* Xvfb or a warm-up workaround — confirmed passing headless as of the earlier Playwright version bump. Decided during this issue's own planning (not a later change) to route it through the same headed/Xvfb path as everything else anyway — one shared `_context`, no per-retailer headless/headed branch — since Xvfb's cost is trivial and a second browser-management path isn't worth the complexity for a saving that doesn't matter at this app's scale. Confirmed live: still passes fine headed.
 - Both BestBuy and SSENSE have positive evidence Xvfb should fix them (both pass headful on Mac) — but that's evidence from a real physical display, not yet from Xvfb's virtual one specifically. Treat as strong-not-certain until verified live on Pi; if either still blocks even with Xvfb, mark it unsupported (remove from `RETAILER_MAP` / `scraper_type=null`) rather than continuing to chase it — BestBuy's Akamai Bot Manager and SSENSE's Cloudflare+Riskified stack are both sophisticated commercial products that could layer in additional signals beyond headless-detection.
 
 ### Acceptance criteria
 
-- [ ] Smoke test `--patchright` passes on Pi Docker for: `deadstock.ca` (Shopify), `amazon.ca` — confirming the version-bump fix holds on Pi's real ARM64 environment, not just Mac
-- [ ] Dockerfile builds cleanly on Pi's ARM64 with `xvfb` installed
-- [ ] `start_browser()` starts the Xvfb subprocess before Chromium launch (with `DISPLAY` set), `close_browser()` cleans it up
-- [ ] BestBuy and SSENSE both re-tested against Xvfb specifically (not just the earlier real-display headful test) — result documented: `ok`, `oos`, or marked unsupported with rationale for each independently
-- [ ] `#40`'s `recycle_browser()` confirmed to not need Xvfb-subprocess restart — a scrape immediately after a recycle still succeeds without Xvfb having been touched
+- [x] Smoke test `--patchright` passes on Pi Docker for: `deadstock.ca` (Shopify), `amazon.ca` — confirmed live: Shopify `ok $360.0`, Amazon `ok $594.27` on Pi's real ARM64 environment
+- [x] Dockerfile builds cleanly on Pi's ARM64 with `xvfb` installed — confirmed live via `docker compose up -d --build backend`. Blocked initially by an unrelated, real dependency-pinning bug (patchright's pip client vs. the Dockerfile's image build drifting apart on an open version range) — fixed inline, exact-pinned both sides in lockstep
+- [x] `start_browser()` starts the Xvfb subprocess before Chromium launch (with `DISPLAY` set) — a dedicated `stop_xvfb()` cleans it up, called only from `main.py`'s real shutdown, deliberately **not** `close_browser()` (which now cycles far more often under `#47`'s close-on-idle model — coupling Xvfb to that would defeat the point of decoupling it)
+- [x] BestBuy and SSENSE both re-tested against Xvfb specifically — confirmed live: BestBuy `ok $799.99` (was blocked headless, now passes), SSENSE `oos` (not `error` — the Cloudflare challenge cleared and real content was parsed; this specific test product just isn't in stock right now, not a lingering block). Neither hit the unsupported branch.
+- [x] Confirmed live: Xvfb's PID (`14`) survived a full Chromium close-and-relaunch cycle unchanged — a scrape after the cycle succeeded without Xvfb's process identity changing
 
 ---
 
@@ -2549,7 +2549,7 @@ Requested directly — user wants ticker-relevant news visible on the detail pag
 
 ---
 
-## [ ] Issue #47 — Ephemeral Patchright Browser (Close on Idle, Drop the Daily Recycle)
+## [x] Issue #47 — Ephemeral Patchright Browser (Close on Idle, Drop the Daily Recycle)
 
 **Type:** fix / AFK
 **Estimate:** ~2h
@@ -2577,13 +2577,13 @@ Raised as a direct pushback during `#15`'s planning: keeping a persistent browse
 
 ### Acceptance criteria
 
-- [ ] `poll_prices` calls `close_if_idle()` after its full sequential pass over active listings completes, not reactively per-listing — verified live with a mixed batch (Patchright-routed listings non-adjacent in iteration order) that it doesn't thrash open/close mid-cycle
-- [ ] `#41`'s ad-hoc add-time scrapes correctly share one browser instance across concurrent adds within one request (unchanged `_start_lock` behavior), and `_dispatch_first_scrapes()` closes it down via `close_if_idle()` only once its own batch has fully drained and nothing else is using it
-- [ ] Verified live: `poll_prices` finishing its loop while an ad-hoc add's batch is still mid-flight does **not** close the browser out from under it (`close_if_idle()`'s global check correctly sees non-zero and skips) — the scenario `close_browser()`-called-directly would have gotten wrong
-- [ ] `recycle_browser()`, its daily scheduler job in `main.py`'s `lifespan`, and its Polling Schedule row in `.doc/architecture.md` are removed
-- [ ] Confirmed live: the browser's `_context` identity actually changes across a close-then-reopen cycle (proves real teardown/relaunch, not a silent no-op) — same verification `#40` did for `recycle_browser()`, now applied to the new close-on-drain path
-- [ ] Confirmed live: a scrape that arrives after the browser has closed relaunches correctly and returns a real price, same as any other lazy-launch trigger
-- [ ] No regression to `#40`'s existing guarantees: concurrent callers still result in exactly one browser launch, not one per caller
+- [x] `poll_prices` calls `close_if_idle()` after its full sequential pass over active listings completes, not reactively per-listing — unit-tested (`test_poll_prices_closes_browser_once_after_full_cycle`) and confirmed live via the on-startup `poll_prices` run
+- [x] `#41`'s ad-hoc add-time scrapes correctly share one browser instance across concurrent adds within one request (unchanged `_start_lock` behavior), and `_dispatch_first_scrapes()` closes it down via `close_if_idle()` only once its own batch has fully drained and nothing else is using it
+- [x] Verified live: `poll_prices` finishing its loop while an ad-hoc add's batch is still mid-flight does **not** close the browser out from under it — the double-close race this specifically guards against was itself found and fixed during this issue's own AI code review (`close_if_idle()` needed `_start_lock` around its check-and-close sequence, same pattern `recycle_browser()` used, to serialize the two independent callers)
+- [x] `recycle_browser()`, its daily scheduler job in `main.py`'s `lifespan`, and its Polling Schedule row in `.doc/architecture.md` are removed
+- [x] Confirmed live: the browser's `_context` identity actually changes across a close-then-reopen cycle — two separate ad-hoc adds produced two distinct context ids (`281472476283904` then `281472482995568`)
+- [x] Confirmed live: a scrape that arrives after the browser has closed relaunches correctly and returns a real price — the second add above returned `$209.0016`, `status: "ok"`, off the freshly relaunched context
+- [x] No regression to `#40`'s existing guarantees: concurrent callers still result in exactly one browser launch, not one per caller — `test_start_browser_concurrent_callers_launch_once` untouched and passing; also confirmed live during the poll_prices-vs-ad-hoc-add overlap test (one shared context, not two)
 
 ---
 

@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
     await finnhub.stop()
     await synology_client.close()
     await PatchrightScraper.close_browser()  # no-op if never launched (lazy init)
+    await PatchrightScraper.stop_xvfb()  # no-op if never launched (lazy init) — #15
 
 
 app = FastAPI(title="youn-server", lifespan=lifespan)
