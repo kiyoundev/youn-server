@@ -346,13 +346,12 @@ function ProductRow({
                   disabled={product.status === "processing"}
                   aria-label={product.status !== "paused" ? "Pause item" : "Resume item"}
                   onCheckedChange={async (active) => {
-                    const results = await Promise.allSettled(product.listings.map((l) => updateListing(product.id, l.id, { active })));
-                    await mutate("/api/proxy/items");
-                    const failedCount = results.filter((r) => r.status === "rejected").length;
-                    if (failedCount === 0) {
+                    try {
+                      await updateProduct(product.id, { active });
+                      await mutate("/api/proxy/items");
                       toast.success(active ? "Resumed" : "Paused");
-                    } else {
-                      toast.error(`${failedCount} of ${results.length} retailer(s) failed to update`, { persist: true });
+                    } catch (err) {
+                      toast.error(err instanceof ApiError ? err.detail : "Failed to update");
                     }
                   }}
                 />

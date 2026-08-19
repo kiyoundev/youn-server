@@ -4,57 +4,49 @@ from types import SimpleNamespace
 from app.services.product_status import compute_last_checked, compute_status
 
 
-def _listing(*, active: bool = True, last_scrape_status: str | None = "ok") -> SimpleNamespace:
-    return SimpleNamespace(active=active, last_scrape_status=last_scrape_status)
+def _listing(*, last_scrape_status: str | None = "ok") -> SimpleNamespace:
+    return SimpleNamespace(last_scrape_status=last_scrape_status)
 
 
-def test_compute_status_all_inactive_is_paused() -> None:
-    listings = [_listing(active=False), _listing(active=False)]
+def test_compute_status_product_inactive_is_paused() -> None:
+    listings = [_listing(), _listing()]
 
-    assert compute_status(listings, alerted_at=None) == "paused"
+    assert compute_status(listings, product_active=False, alerted_at=None) == "paused"
 
 
 def test_compute_status_no_listings_is_paused() -> None:
-    assert compute_status([], alerted_at=None) == "paused"
+    assert compute_status([], product_active=False, alerted_at=None) == "paused"
 
 
 def test_compute_status_active_listing_errored_is_failed() -> None:
     listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="error")]
 
-    assert compute_status(listings, alerted_at=None) == "failed"
-
-
-def test_compute_status_inactive_listing_error_does_not_count() -> None:
-    """An errored listing that's paused shouldn't drag the product into
-    'failed' — only active listings' scrape health matters."""
-    listings = [_listing(active=True, last_scrape_status="ok"), _listing(active=False, last_scrape_status="error")]
-
-    assert compute_status(listings, alerted_at=None) == "watching"
+    assert compute_status(listings, product_active=True, alerted_at=None) == "failed"
 
 
 def test_compute_status_alerted_is_triggered() -> None:
     listings = [_listing(last_scrape_status="ok")]
 
-    assert compute_status(listings, alerted_at=dt.datetime.now(dt.timezone.utc)) == "triggered"
+    assert compute_status(listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc)) == "triggered"
 
 
 def test_compute_status_failed_outranks_triggered() -> None:
     """Priority order: paused > failed > triggered > watching."""
     listings = [_listing(last_scrape_status="error")]
 
-    assert compute_status(listings, alerted_at=dt.datetime.now(dt.timezone.utc)) == "failed"
+    assert compute_status(listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc)) == "failed"
 
 
 def test_compute_status_default_watching() -> None:
     listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
 
-    assert compute_status(listings, alerted_at=None) == "watching"
+    assert compute_status(listings, product_active=True, alerted_at=None) == "watching"
 
 
 def test_compute_status_never_scraped_listing_is_processing() -> None:
     listings = [_listing(last_scrape_status=None)]
 
-    assert compute_status(listings, alerted_at=None) == "processing"
+    assert compute_status(listings, product_active=True, alerted_at=None) == "processing"
 
 
 def test_compute_status_processing_outranks_failed() -> None:
@@ -62,7 +54,7 @@ def test_compute_status_processing_outranks_failed() -> None:
     error — see .plan/41-immediate-first-scrape's acceptance criteria."""
     listings = [_listing(last_scrape_status="error"), _listing(last_scrape_status=None)]
 
-    assert compute_status(listings, alerted_at=None) == "processing"
+    assert compute_status(listings, product_active=True, alerted_at=None) == "processing"
 
 
 def test_compute_status_processing_outranks_triggered() -> None:
@@ -70,26 +62,16 @@ def test_compute_status_processing_outranks_triggered() -> None:
     as processing until it reports, not stay stuck on stale 'triggered'."""
     listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status=None)]
 
-    assert compute_status(listings, alerted_at=dt.datetime.now(dt.timezone.utc)) == "processing"
+    assert compute_status(listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc)) == "processing"
 
 
 def test_compute_status_paused_outranks_processing() -> None:
-    """All-inactive still wins even if the sole listing was never scraped —
-    'paused' short-circuits before the processing check ever runs."""
-    listings = [_listing(active=False, last_scrape_status=None)]
+    """Product-inactive still wins even if the sole listing was never
+    scraped — 'paused' short-circuits before the processing check ever
+    runs."""
+    listings = [_listing(last_scrape_status=None)]
 
-    assert compute_status(listings, alerted_at=None) == "paused"
-
-
-def test_compute_status_inactive_never_scraped_does_not_count() -> None:
-    """Only active listings' scrape state matters — same scoping as the
-    existing 'failed' check, mirrored for 'processing'."""
-    listings = [
-        _listing(active=True, last_scrape_status="ok"),
-        _listing(active=False, last_scrape_status=None),
-    ]
-
-    assert compute_status(listings, alerted_at=None) == "watching"
+    assert compute_status(listings, product_active=False, alerted_at=None) == "paused"
 
 
 def test_compute_last_checked_returns_stalest() -> None:

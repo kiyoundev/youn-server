@@ -32,6 +32,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: str | None = None
     target_price: float | None = None
+    active: bool | None = None
 
     _strip_name = field_validator("name")(strip_whitespace)
 

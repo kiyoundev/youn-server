@@ -9,8 +9,7 @@
 // must never reach the browser.
 
 // Matches backend/app/schemas — GET /api/items response shape. Mirrors
-// watchlist/page.tsx's local Product/Listing interfaces (schema.md: no
-// backend response shape changes in this issue, only new request payloads).
+// watchlist/page.tsx's local Product/Listing interfaces.
 export type WatchStatus = "watching" | "triggered" | "paused" | "failed" | "processing";
 
 export interface Listing {
@@ -19,7 +18,6 @@ export interface Listing {
   url: string;
   last_price: number | null;
   last_scrape_status: "ok" | "oos" | "error" | null;
-  active: boolean;
   last_checked: string | null;
   product_id: number;
   created_at: string;
@@ -55,10 +53,13 @@ export interface ListingCreatePayload {
 export interface ProductUpdatePayload {
   name?: string;
   target_price?: number;
+  // Pause/resume for the whole product — cascades to every listing (none
+  // are scraped while false), not settable per listing (see
+  // ListingUpdatePayload).
+  active?: boolean;
 }
 
 export interface ListingUpdatePayload {
-  active?: boolean;
   url?: string;
 }
 

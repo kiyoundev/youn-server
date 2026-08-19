@@ -15,11 +15,12 @@ class ListingCreate(BaseModel):
 
 
 class ListingUpdate(BaseModel):
-    active: bool | None = None
     # Optional URL edit — preserves the listing's id and price_history rows,
     # unlike delete+recreate. retailer is an explicit override (same
     # semantics as ListingCreate.retailer); scraper_type has no override
     # field here and is always re-detected when url changes (items.py).
+    # No `active` here — pause/resume is product-level only (issue #48), a
+    # single Product.active flag, not settable per listing.
     url: str | None = None
     retailer: str | None = None
 
@@ -32,7 +33,6 @@ class ListingResponse(BaseModel):
     url: str
     last_price: float | None
     last_scrape_status: Literal["ok", "oos", "error"] | None
-    active: bool
     last_checked: datetime | None
     product_id: int
     created_at: datetime

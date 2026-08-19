@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ⬜ #47, ⬜ #48
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ✅ #47, ✅ #48
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2587,7 +2587,7 @@ Raised as a direct pushback during `#15`'s planning: keeping a persistent browse
 
 ---
 
-## [ ] Issue #48 — Per-Product Concurrent Polling + Fix the Latent Double-Alert Race
+## [x] Issue #48 — Per-Product Concurrent Polling + Fix the Latent Double-Alert Race
 
 **Type:** fix / AFK
 **Estimate:** ~2.5h
@@ -2610,15 +2610,17 @@ If two listings of the *same* product are scraped concurrently and both come bac
 
 This isn't new — it already exists **today** in shipped `#41` (bulk-add a product with several URLs where 2+ are already under target price on first scrape, and it fires) — but it's a rare coincidence on a one-time user action there. Extending the same concurrent-per-product shape to `poll_prices`, a job that runs every 6h forever across every multi-listing product, turns a rare coincidence into something that will eventually happen for real, unattended, with a duplicate push notification as the visible symptom. Needs a real fix landing in the same change — e.g. re-checking `product.alerted_at` inside the same transaction that commits the alert (SELECT ... FOR UPDATE or an equivalent guard against the read-then-write race), not a follow-up.
 
+**Status (2026-08-19):** Done — scope grew during planning (see `.plan/48-per-product-concurrent-polling/`) to also fold in a `Product.active` schema consolidation (dropped `Listing.active`, which turned out to be granularity nothing in the app ever exercised independently). Shipped and deployed to both Mac and Pi (NAS Postgres migrated to `0012`). The actual race fix (`SELECT ... FOR UPDATE`) was verified live against real Postgres with two genuinely concurrent listings — exactly one `Event` fired, not two. Not separately live-retested: the `#41` bulk-add path specifically (structurally covered — both call sites funnel through the same fixed `process_item`, not two separate guards) and the before/after cycle-timing measurement (AC below left unchecked, deprioritized after finding the app has no logging configuration at all, unrelated pre-existing gap — see `.plan/48-.../challenges.md`).
+
 ### Why (context)
 
 Raised as a direct pushback during `#47`'s planning, after confirming `poll_prices` has no concurrency at all today (single-listing-at-a-time, flat unordered list) and `#41`'s ad-hoc path already proved the gather-with-semaphore pattern works safely for sharing Patchright's browser across concurrent scrapes of one product. The double-alert race was found while reasoning through what concurrent-per-product scraping would actually do to `process_item`'s existing alert logic — not observed as a live bug, but confirmed as a genuine, currently-latent one via code inspection (`process_item`'s independent-session-per-listing pattern, `.doc/issues.md` cross-reference to `#41`).
 
 ### Acceptance criteria
 
-- [ ] `poll_prices`'s query groups active listings by product (not the current flat `select(Listing.id)` with no ordering/grouping)
-- [ ] A product's own listings are scraped concurrently (bounded, reusing `#47`'s semaphore-gather shape), products themselves still processed one at a time (preserves `_prices_lock`'s whole-cycle serialization guarantee)
-- [ ] The `product.alerted_at` read-then-write race is fixed as part of this change — verified live with a product having 2+ listings that both cross target price in the same cycle, confirming exactly one `Event`/notification fires, not two
-- [ ] Regression check: the same fix doesn't reintroduce the double-alert race for `#41`'s existing concurrent bulk-add path either — both call sites end up protected by the same guard, not two different ones
-- [ ] No change to `poll_prices`'s external behavior for single-listing products (the common case) — same result, just correctly ordered/grouped for multi-listing ones
-- [ ] Total `poll_prices` cycle wall-clock time measured before/after on a real multi-product, multi-listing dataset — confirms the concurrency actually helps, not just theoretically
+- [x] `poll_prices`'s query groups active listings by product (not the current flat `select(Listing.id)` with no ordering/grouping)
+- [x] A product's own listings are scraped concurrently (bounded, reusing `#47`'s semaphore-gather shape), products themselves still processed one at a time (preserves `_prices_lock`'s whole-cycle serialization guarantee)
+- [x] The `product.alerted_at` read-then-write race is fixed as part of this change — verified live with a product having 2+ listings that both cross target price in the same cycle, confirming exactly one `Event`/notification fires, not two
+- [x] Regression check: the same fix doesn't reintroduce the double-alert race for `#41`'s existing concurrent bulk-add path either — both call sites end up protected by the same guard, not two different ones (structural — one fix site inside `process_item`, both callers route through it; not separately live-retested against #41's own bulk-add flow)
+- [x] No change to `poll_prices`'s external behavior for single-listing products (the common case) — same result, just correctly ordered/grouped for multi-listing ones — verified live
+- [ ] Total `poll_prices` cycle wall-clock time measured before/after on a real multi-product, multi-listing dataset — confirms the concurrency actually helps, not just theoretically (deferred — not blocking)

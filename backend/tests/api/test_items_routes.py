@@ -49,13 +49,6 @@ def _request() -> SimpleNamespace:
     return SimpleNamespace(app=app)
 
 
-# Captured at import time, before the autouse fixture above ever patches
-# app.api.items._bounded_process_item/_dispatch_first_scrapes — these stay
-# bound to the real implementations regardless, so the tests below can
-# exercise their own behavior directly instead of the stub.
-_real_bounded_process_item = items._bounded_process_item
-_real_dispatch_first_scrapes = items._dispatch_first_scrapes
-
 # Same pattern, for _resolve_final_url (#39) — the autouse
 # _stub_resolve_final_url fixture below patches this name for every other
 # test in this file, so _resolve_final_url's own unit tests need the
@@ -63,22 +56,12 @@ _real_dispatch_first_scrapes = items._dispatch_first_scrapes
 _real_resolve_final_url = items._resolve_final_url
 
 
-class _AsyncCM:
-    def __init__(self, value):
-        self._value = value
-
-    async def __aenter__(self):
-        return self._value
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
 class _FakeHTTPClient:
     """Stand-in for `httpx.AsyncClient` used only by `_resolve_final_url`'s
     unit tests below — a real client's `async with ... as client:` needs
     `.head`/`.get` to be independently awaitable mocks, not a single
-    `_AsyncCM`-wrapped value."""
+    context-manager-wrapped value (that pattern moved to test_jobs.py
+    alongside the code it tested — see `_AsyncCM` there)."""
 
     def __init__(self, *, head: AsyncMock | None = None, get: AsyncMock | None = None):
         self.head = head or AsyncMock()
@@ -98,7 +81,6 @@ def _listing(
     retailer: str = "amazon_ca",
     last_price: float | None = None,
     last_scrape_status: str | None = None,
-    active: bool = True,
     product_id: int = 1,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -107,7 +89,6 @@ def _listing(
         retailer=retailer,
         last_price=last_price,
         last_scrape_status=last_scrape_status,
-        active=active,
         product_id=product_id,
         created_at=datetime.now(timezone.utc),
     )
@@ -118,6 +99,7 @@ def _product(
     *,
     name: str = "Product",
     target_price: float = 100.0,
+    active: bool = True,
     alerted_at: datetime | None = None,
     listings: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
@@ -125,6 +107,7 @@ def _product(
         id=product_id,
         name=name,
         target_price=target_price,
+        active=active,
         alerted_at=alerted_at,
         listings=listings if listings is not None else [_listing(product_id=product_id)],
         created_at=datetime.now(timezone.utc),
@@ -686,106 +669,6 @@ async def test_create_listing_spawns_first_scrape(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_first_scrapes_closes_browser_once_batch_drains() -> None:
-    """_dispatch_first_scrapes() waits for every listing in its own batch to
-    finish, then closes the shared Patchright browser once close_if_idle()
-    confirms the global _active_scrapes is back to 0 — proving a real
-    teardown, not a no-op, via a changed _context identity on next use."""
-    call_order: list[str] = []
-
-    async def fake_bounded(listing_id, semaphore, queue):
-        call_order.append(f"process:{listing_id}")
-
-    async def fake_close_if_idle():
-        call_order.append("close")
-
-    with (
-        patch("app.api.items._bounded_process_item", new=AsyncMock(side_effect=fake_bounded)),
-        patch(
-            "app.api.items.PatchrightScraper.close_if_idle",
-            new=AsyncMock(side_effect=fake_close_if_idle),
-        ) as mock_close,
-    ):
-        await _real_dispatch_first_scrapes([1, 2, 3], asyncio.Semaphore(3), asyncio.Queue())
-
-    mock_close.assert_awaited_once()
-    assert call_order[-1] == "close"  # only after every listing in the batch finished
-    assert {"process:1", "process:2", "process:3"} == set(call_order[:-1])
-
-
-@pytest.mark.asyncio
-async def test_dispatch_first_scrapes_does_not_close_when_other_scrape_still_in_flight() -> None:
-    """A second, unrelated batch still holding the global _active_scrapes
-    above 0 must survive this batch's own drain-and-check — close_if_idle()
-    checks the shared counter, not a per-request local one."""
-    from app.services.scraper.patchright_scraper import PatchrightScraper
-
-    original_active_scrapes = PatchrightScraper._active_scrapes
-    PatchrightScraper._active_scrapes = 1  # simulate an unrelated in-flight scrape
-    try:
-        with (
-            patch("app.api.items._bounded_process_item", new=AsyncMock()),
-            patch.object(PatchrightScraper, "close_browser", new=AsyncMock()) as mock_close,
-        ):
-            await _real_dispatch_first_scrapes([1], asyncio.Semaphore(1), asyncio.Queue())
-        mock_close.assert_not_awaited()
-    finally:
-        PatchrightScraper._active_scrapes = original_active_scrapes
-
-
-@pytest.mark.asyncio
-async def test_bounded_process_item_marks_error_on_unhandled_exception() -> None:
-    listing = _listing(listing_id=7, last_scrape_status=None)
-    session = MagicMock()
-    session.get = AsyncMock(return_value=listing)
-    session.commit = AsyncMock()
-
-    with (
-        patch("app.api.items.process_item", new=AsyncMock(side_effect=RuntimeError("boom"))),
-        patch("app.api.items.AsyncSessionLocal", return_value=_AsyncCM(session)),
-    ):
-        await _real_bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())
-
-    assert listing.last_scrape_status == "error"
-    session.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_bounded_process_item_does_not_overwrite_already_persisted_status() -> None:
-    """A failure after process_item's own successful commit (e.g. in the
-    trailing broadcast() call) must not stomp a real result back to
-    'error'."""
-    listing = _listing(listing_id=7, last_scrape_status="ok")
-    session = MagicMock()
-    session.get = AsyncMock(return_value=listing)
-    session.commit = AsyncMock()
-
-    with (
-        patch("app.api.items.process_item", new=AsyncMock(side_effect=RuntimeError("boom"))),
-        patch("app.api.items.AsyncSessionLocal", return_value=_AsyncCM(session)),
-    ):
-        await _real_bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())
-
-    assert listing.last_scrape_status == "ok"
-    session.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_bounded_process_item_missing_listing_does_not_raise() -> None:
-    session = MagicMock()
-    session.get = AsyncMock(return_value=None)
-    session.commit = AsyncMock()
-
-    with (
-        patch("app.api.items.process_item", new=AsyncMock(side_effect=RuntimeError("boom"))),
-        patch("app.api.items.AsyncSessionLocal", return_value=_AsyncCM(session)),
-    ):
-        await _real_bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())  # must not raise
-
-    session.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_update_item_not_found_returns_404() -> None:
     db = MagicMock()
     db.execute = AsyncMock(return_value=_scalar_result(None))
@@ -841,7 +724,7 @@ async def test_update_listing_not_found_returns_404() -> None:
     db.get = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await items.update_listing(1, 1, ListingUpdate(active=False), db)
+        await items.update_listing(1, 1, ListingUpdate(url="https://example.com/new"), db)
 
     assert exc_info.value.status_code == 404
 
@@ -853,23 +736,34 @@ async def test_update_listing_mismatched_product_returns_404() -> None:
     db.get = AsyncMock(return_value=listing)
 
     with pytest.raises(HTTPException) as exc_info:
-        await items.update_listing(1, 1, ListingUpdate(active=False), db)
+        await items.update_listing(1, 1, ListingUpdate(url="https://example.com/new"), db)
 
     assert exc_info.value.status_code == 404
 
 
+def test_listing_update_silently_ignores_active_field() -> None:
+    """Pause/resume moved to Product.active (issue #48) — ListingUpdate no
+    longer declares `active`. Pydantic's default extra="ignore" means a
+    caller still sending it (a stale client, a leftover integration) doesn't
+    422, it's just a no-op — confirmed here rather than assumed."""
+    body = ListingUpdate(active=False)  # type: ignore[call-arg]
+
+    assert not hasattr(body, "active")
+
+
 @pytest.mark.asyncio
-async def test_update_listing_pauses() -> None:
-    listing = _listing(listing_id=1, product_id=1, active=True)
+async def test_update_item_toggles_active() -> None:
+    """Pause/resume is product-level only now — PATCH /api/items/{id}'s
+    `active` field is the sole control surface (was N per-listing calls)."""
+    product = _product(product_id=1, active=True)
     db = MagicMock()
-    db.get = AsyncMock(return_value=listing)
+    db.execute = AsyncMock(side_effect=[_scalar_result(product), _rows_result([])])
     db.commit = AsyncMock()
-    db.execute = AsyncMock(return_value=_rows_result([]))
 
-    result = await items.update_listing(1, 1, ListingUpdate(active=False), db)
+    result = await items.update_item(1, ProductUpdate(active=False), db)
 
-    assert listing.active is False
-    assert result.active is False
+    assert product.active is False
+    assert result.status == "paused"
     db.commit.assert_awaited_once()
 
 

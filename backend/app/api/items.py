@@ -17,7 +17,7 @@ from app.core.db import AsyncSessionLocal, get_db
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
-from app.scheduler.jobs import process_item
+from app.scheduler.jobs import _dispatch_first_scrapes, process_item
 from app.schemas.listing import ListingCreate, ListingResponse, ListingUpdate
 from app.schemas.price_history import PriceHistoryResponse
 from app.schemas.product import (
@@ -30,11 +30,9 @@ from app.schemas.product import (
 from app.services.product_status import compute_last_checked, compute_status
 from app.services.scraper.base import USER_AGENTS, _build_headers
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
-from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.router import (
     RETAILER_DISPLAY_NAMES,
     RETAILER_MAP,
-    RetailerRouter,
     detect_scraper_type,
 )
 
@@ -176,7 +174,6 @@ def _build_listing_response(listing: Listing, last_checked_map: dict[int, dateti
         url=listing.url,
         last_price=listing.last_price,
         last_scrape_status=listing.last_scrape_status,
-        active=listing.active,
         last_checked=last_checked_map.get(listing.id),
         product_id=listing.product_id,
         created_at=listing.created_at,
@@ -190,70 +187,11 @@ def _build_product_response(product: Product, last_checked_map: dict[int, dateti
         name=product.name,
         target_price=product.target_price,
         alerted_at=product.alerted_at,
-        status=compute_status(product.listings, product.alerted_at),
+        status=compute_status(product.listings, product.active, product.alerted_at),
         last_checked=compute_last_checked([lr.last_checked for lr in listing_responses]),
         listings=listing_responses,
         created_at=product.created_at,
     )
-
-
-async def _bounded_process_item(listing_id: int, semaphore: asyncio.Semaphore, queue: asyncio.Queue) -> None:
-    """Runs process_item under the first-scrape concurrency bound, called via
-    spawn() so it outlives the request/response cycle that triggered it — see
-    .doc/keynotes.md's asyncio concurrency section for why spawn() itself
-    needs no reference-holding help here (it already keeps one via
-    _background_tasks). A fresh RetailerRouter per call is deliberate, not a
-    corner cut — it's stateless (no __init__), so there's nothing to share by
-    reusing one across concurrent calls.
-
-    Must never let an exception escape — this runs inside a detached
-    asyncio.Task (see spawn()); an unhandled exception here doesn't crash
-    anything visibly, it just becomes an "exception was never retrieved"
-    warning while the listing is stuck at last_scrape_status=None (reads as
-    permanently "Processing" in the UI) until the next scheduled poll_prices
-    cycle happens to retry it, up to 6h later, same failure mode
-    trading_agents.py's run_analysis already guards against for the same
-    reason. process_item's own scraper calls already catch realistic
-    failures and return status="error" — this is the backstop for what's
-    left (a DB hiccup, an unexpected bug), so it only writes "error" if the
-    listing is still unscraped, never stomping a status process_item itself
-    already committed (e.g. if the failure were in the trailing broadcast()
-    call, after a real successful scrape+commit)."""
-    async with semaphore:
-        try:
-            await process_item(listing_id, RetailerRouter(), queue)
-        except Exception:
-            _log.error("first-scrape failed for listing %d", listing_id, exc_info=True)
-            try:
-                async with AsyncSessionLocal() as session:
-                    listing = await session.get(Listing, listing_id)
-                    if listing is not None and listing.last_scrape_status is None:
-                        listing.last_scrape_status = "error"
-                        await session.commit()
-            except Exception:
-                _log.error(
-                    "first-scrape: failed to persist error status for listing %d",
-                    listing_id,
-                    exc_info=True,
-                )
-
-
-async def _dispatch_first_scrapes(listing_ids: list[int], semaphore: asyncio.Semaphore, queue: asyncio.Queue) -> None:
-    """One background task per *request* (not one per listing) — spawned by
-    create_item/create_listing to gather() every listing in this request's own
-    batch, then close the shared Patchright browser once it's confirmed idle.
-    _bounded_process_item never raises (see its own docstring), so no
-    return_exceptions=True is needed here. close_if_idle() (not
-    close_browser() directly) checks the *global* _active_scrapes, not a
-    per-request count — that's what makes this safe against an unrelated
-    request's own batch, or a poll_prices cycle, still running concurrently on
-    the same event loop: its scrapes keep the shared counter above 0, so this
-    call correctly skips closing. No debounce/timer needed — gather() only
-    returns once every listing in this specific batch has finished, so
-    there's no "maybe one more from the same request" case left to guard
-    against."""
-    await asyncio.gather(*(_bounded_process_item(lid, semaphore, queue) for lid in listing_ids))
-    await PatchrightScraper.close_if_idle()
 
 
 async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
@@ -450,7 +388,12 @@ async def create_listing(request: Request, product_id: int, body: ListingCreate,
     "/api/items/{product_id}",
     response_model=ProductResponse,
     summary="Update a wishlist product",
-    description="Partial update — omitted fields are left unchanged. Applies to all listings.",
+    description=(
+        "Partial update — omitted fields are left unchanged. `active` "
+        "toggles pause/resume for the whole product — while false, none of "
+        "its listings are scraped by poll_prices, regardless of their own "
+        "state."
+    ),
 )
 async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     product = await _get_product_or_404(product_id, db)
@@ -459,6 +402,8 @@ async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = D
         product.name = body.name
     if body.target_price is not None:
         product.target_price = body.target_price
+    if body.active is not None:
+        product.active = body.active
 
     await db.commit()
     last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
@@ -480,21 +425,20 @@ async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> No
 @router.patch(
     "/api/items/{product_id}/listings/{listing_id}",
     response_model=ListingResponse,
-    summary="Update a listing — pause/unpause, and/or change its URL",
+    summary="Update a listing — change its URL",
     description=(
-        "Partial update. `active` toggles pause/resume. `url`, when given and "
-        "different from the current value, re-derives `retailer` (unless "
-        "overridden via `retailer`) and re-detects `scraper_type` the same way "
-        "`POST /api/items/{id}/listings` does — a URL change is treated as a "
-        "new page, not just a cosmetic edit. Preserves the listing's `id` and "
-        "price history, unlike delete-and-recreate."
+        "Changes a listing's URL (optionally with a `retailer` override) — "
+        "the only mutable field left here. When `url` differs from the "
+        "current value, `retailer` is re-derived (unless overridden) and "
+        "`scraper_type` re-detected the same way `POST "
+        "/api/items/{id}/listings` does — a URL change is treated as a new "
+        "page, not just a cosmetic edit. Preserves the listing's `id` and "
+        "price history, unlike delete-and-recreate. Pause/resume is "
+        "product-level only — see `PATCH /api/items/{id}`'s `active` field."
     ),
 )
 async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
     listing = await _get_listing_or_404(product_id, listing_id, db)
-
-    if body.active is not None:
-        listing.active = body.active
 
     if body.url is not None and body.url != listing.url:
         existing = await db.execute(select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id))
