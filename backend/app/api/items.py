@@ -3,7 +3,6 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -31,8 +30,9 @@ from app.services.product_status import compute_last_checked, compute_status
 from app.services.scraper.base import USER_AGENTS, _build_headers
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
 from app.services.scraper.router import (
-    RETAILER_DISPLAY_NAMES,
     RETAILER_MAP,
+    _derive_retailer,
+    _hostname_of,
     detect_scraper_type,
 )
 
@@ -65,14 +65,6 @@ class _ProbeResult(NamedTuple):
     retailer: str | None = None
     scraper_type: str | None = None
     error: str | None = None
-
-
-def _hostname_of(url: str) -> str:
-    return (urlparse(url).hostname or "").removeprefix("www.")
-
-
-def _derive_retailer(hostname: str) -> str:
-    return RETAILER_DISPLAY_NAMES.get(hostname, hostname.replace(".", "_"))
 
 
 async def _resolve_final_url(url: str) -> str:
@@ -271,7 +263,7 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
     candidates: list[str] = []
     for url in body.urls:
         if url in seen:
-            failed.append(ListingFailure(url=url, detail="Duplicate URL within this request"))
+            failed.append(ListingFailure(url=url, detail="Duplicate URL within this request", retailer=_derive_retailer(_hostname_of(url))))
             continue
         seen.add(url)
         candidates.append(url)
@@ -282,7 +274,7 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
         existing_urls = {row[0] for row in existing.all()}
         for url in candidates:
             if url in existing_urls:
-                failed.append(ListingFailure(url=url, detail="An item with this URL already exists"))
+                failed.append(ListingFailure(url=url, detail="An item with this URL already exists", retailer=_derive_retailer(_hostname_of(url))))
 
     to_probe = [url for url in candidates if url not in existing_urls]
     if to_probe:
@@ -307,9 +299,14 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
         seen_resolved: set[str] = set()
         for original_url, result in zip(to_probe, results):
             if result.error is not None:
-                failed.append(ListingFailure(url=original_url, detail=result.error))
+                # result.retailer is always None here — resolution itself
+                # failed, so no successful hostname resolution to derive
+                # from; fall back to the original (possibly unresolved) URL.
+                failed.append(ListingFailure(url=original_url, detail=result.error, retailer=_derive_retailer(_hostname_of(original_url))))
             elif result.url in resolved_existing or result.url in seen_resolved:
-                failed.append(ListingFailure(url=original_url, detail="An item with this URL already exists"))
+                # result.retailer is already populated here (resolution
+                # succeeded) — more accurate than re-deriving from the URL.
+                failed.append(ListingFailure(url=original_url, detail="An item with this URL already exists", retailer=result.retailer or _derive_retailer(_hostname_of(original_url))))
             else:
                 seen_resolved.add(result.url)
                 product.listings.append(Listing(url=result.url, retailer=result.retailer, scraper_type=result.scraper_type))

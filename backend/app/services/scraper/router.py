@@ -18,9 +18,17 @@ RETAILER_DISPLAY_NAMES: dict[str, str] = {
 }
 
 
+def _hostname_of(url: str) -> str:
+    return (urlparse(url).hostname or "").removeprefix("www.")
+
+
+def _derive_retailer(hostname: str) -> str:
+    return RETAILER_DISPLAY_NAMES.get(hostname, hostname.replace(".", "_"))
+
+
 class RetailerRouter:
     async def get_price(self, url: str, scraper_type: str | None = None) -> ScraperResult:
-        hostname = (urlparse(url).hostname or "").removeprefix("www.")
+        hostname = _hostname_of(url)
 
         if hostname in RETAILER_MAP:
             return await RETAILER_MAP[hostname]().get_price(url)

@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import random
 import re
@@ -60,23 +61,27 @@ def _parse_price(raw: str) -> float | None:
         return None
 
 
-def _find_jsonld_product(data: Any) -> dict | None:
+def _find_jsonld_type(data: Any, target_types: set[str]) -> dict | None:
     if isinstance(data, list):
         for item in data:
-            found = _find_jsonld_product(item)
+            found = _find_jsonld_type(item, target_types)
             if found:
                 return found
     elif isinstance(data, dict):
         types = data.get("@type", "")
         if isinstance(types, str):
             types = [types]
-        if "Product" in types:
+        if target_types.intersection(types):
             return data
         if "@graph" in data:
-            found = _find_jsonld_product(data["@graph"])
+            found = _find_jsonld_type(data["@graph"], target_types)
             if found:
                 return found
     return None
+
+
+def _find_jsonld_product(data: Any) -> dict | None:
+    return _find_jsonld_type(data, {"Product"})
 
 
 def _price_from_offer(offers: Any) -> ScraperResult | None:
@@ -119,6 +124,111 @@ def _search_price_recursive(data: Any) -> float | None:
             result = _search_price_recursive(item)
             if result is not None:
                 return result
+    return None
+
+
+# Issue #44 — <title> heuristic fallback for site_name/product_title, used
+# only when og tags and JSON-LD both come up empty. Many sites format
+# <title> as "Product – Site Name" or "Product | Site Name"; deliberately
+# conservative — only one recognized separator *character* may appear
+# (checking membership, not counting how many times each occurs), and it
+# must split into exactly two non-empty halves, or this returns None rather
+# than risk a wrong guess on an ambiguous title.
+_TITLE_SEPARATORS = ("–", "—", "|", "-")
+
+
+def _split_title(title: str) -> tuple[str, str] | None:
+    title = title.strip()
+    found = [sep for sep in _TITLE_SEPARATORS if sep in title]
+    if len(found) != 1:
+        return None
+    parts = [p.strip() for p in title.split(found[0])]
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], parts[1]
+
+
+def _first_title_segment(title: str) -> str | None:
+    split = _split_title(title)
+    return split[0] if split else None
+
+
+def _last_title_segment(title: str) -> str | None:
+    split = _split_title(title)
+    return split[1] if split else None
+
+
+def _strip_trailing_site_name(product_title: str, site_name: str | None) -> str:
+    """Cleans a product_title that carries its own trailing site-name
+    suffix — common with og:title (e.g. "Product – Site Name"), since it's
+    the page's <title>-adjacent tag, not a dedicated product-name field the
+    way JSON-LD's Product.name is. Only strips when the tail actually
+    matches the already-known site_name (case-insensitive) — not a blind
+    split on every og:title, since a "-"/"|" can legitimately be part of a
+    real product name (e.g. "Air Force 1 - Low"); stripping on a guess
+    would risk truncating those. No-op (returns product_title unchanged)
+    if site_name is unknown, or the split doesn't match it."""
+    if not site_name:
+        return product_title
+    split = _split_title(product_title)
+    if split and split[1].strip().lower() == site_name.strip().lower():
+        return split[0]
+    return product_title
+
+
+def _parse_jsonld_scripts(soup: BeautifulSoup) -> list[Any]:
+    """Parses every ld+json <script> tag on the page once. _extract_jsonld
+    (price), _extract_site_name, and _extract_product_title all need to
+    scan the same JSON-LD blocks for different @types — without this,
+    _run_hierarchy calling all three would re-parse identical script tags
+    up to 3 times per scrape. Callers that already have a parsed list (e.g.
+    _run_hierarchy, which needs all three) pass it in; direct/standalone
+    calls (e.g. tests calling one of these functions in isolation) get it
+    computed on demand via each function's own default."""
+    parsed = []
+    for script_tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            parsed.append(json.loads(script_tag.string or ""))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return parsed
+
+
+def _extract_site_name(soup: BeautifulSoup, jsonld_scripts: list[Any] | None = None) -> str | None:
+    """Feeds Listing.retailer (issue #44). Priority: og:site_name meta ->
+    JSON-LD Organization/Brand -> <title> tail-segment heuristic."""
+    tag = soup.find("meta", property="og:site_name")
+    if tag and tag.get("content"):
+        return tag["content"].strip()
+    scripts = jsonld_scripts if jsonld_scripts is not None else _parse_jsonld_scripts(soup)
+    for data in scripts:
+        org = _find_jsonld_type(data, {"Organization", "Brand"})
+        name = org.get("name") if org else None
+        # JSON-LD comes from the scraped page itself, untrusted content —
+        # spec says `name` should be a string, but nothing enforces that;
+        # malformed JSON-LD (e.g. name as a nested object) shouldn't turn
+        # into a garbage str(...)-coerced display value.
+        if isinstance(name, str) and name:
+            return name.strip()
+    if soup.title and soup.title.string:
+        return _last_title_segment(soup.title.string)
+    return None
+
+
+def _extract_product_title(soup: BeautifulSoup, jsonld_scripts: list[Any] | None = None) -> str | None:
+    """Feeds Product.name (issue #44). Priority: og:title meta -> JSON-LD
+    Product.name -> <title> lead-segment heuristic."""
+    tag = soup.find("meta", property="og:title")
+    if tag and tag.get("content"):
+        return tag["content"].strip()
+    scripts = jsonld_scripts if jsonld_scripts is not None else _parse_jsonld_scripts(soup)
+    for data in scripts:
+        product = _find_jsonld_product(data)
+        name = product.get("name") if product else None
+        if isinstance(name, str) and name:
+            return name.strip()
+    if soup.title and soup.title.string:
+        return _first_title_segment(soup.title.string)
     return None
 
 
@@ -167,12 +277,9 @@ class BaseScraper(ABC):
         except Exception:
             return None
 
-    def _extract_jsonld(self, soup: BeautifulSoup) -> ScraperResult | None:
-        for tag in soup.find_all("script", type="application/ld+json"):
-            try:
-                data = json.loads(tag.string or "")
-            except (json.JSONDecodeError, TypeError):
-                continue
+    def _extract_jsonld(self, soup: BeautifulSoup, jsonld_scripts: list[Any] | None = None) -> ScraperResult | None:
+        scripts = jsonld_scripts if jsonld_scripts is not None else _parse_jsonld_scripts(soup)
+        for data in scripts:
             product = _find_jsonld_product(data)
             if product and "offers" in product:
                 result = _price_from_offer(product["offers"])
@@ -218,16 +325,28 @@ class BaseScraper(ABC):
 
     async def _run_hierarchy(self, html: str, url: str) -> ScraperResult:
         result = await self._extract_shopify(html, url)
-        if result is not None:
-            return result
+        # soup is parsed unconditionally now (issue #44) — even on the
+        # Shopify success path, which doesn't need it for price but does
+        # need it for the name-extraction pass below, run independently of
+        # which of these 4 price methods ends up winning.
         soup = BeautifulSoup(html, "html.parser")
-        result = self._extract_jsonld(soup)
-        if result is not None:
+        # Parsed once, shared by _extract_jsonld (price) and both name
+        # extractors below — otherwise each would independently re-parse
+        # the same <script type="application/ld+json"> tags (review finding).
+        jsonld_scripts = _parse_jsonld_scripts(soup)
+        if result is None:
+            result = self._extract_jsonld(soup, jsonld_scripts)
+        if result is None:
+            result = self._extract_og_price(soup)
+        if result is None:
+            result = self._extract_nextdata(soup, url)
+        if result is None:
+            result = ScraperResult(price=None, status="error")
+
+        site_name = _extract_site_name(soup, jsonld_scripts)
+        product_title = _extract_product_title(soup, jsonld_scripts)
+        if product_title:
+            product_title = _strip_trailing_site_name(product_title, site_name)
+        if site_name is None and product_title is None:
             return result
-        result = self._extract_og_price(soup)
-        if result is not None:
-            return result
-        result = self._extract_nextdata(soup, url)
-        if result is not None:
-            return result
-        return ScraperResult(price=None, status="error")
+        return dataclasses.replace(result, site_name=site_name, product_title=product_title)

@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ⬜ #44, ⬜ #45, ✅ #47, ✅ #48
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ⬜ #45, ✅ #47, ✅ #48
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2440,7 +2440,7 @@ Fixing this surfaced a second, unrelated bug in `docker-compose.local.yml` (Mac 
 
 ---
 
-## [ ] Issue #44 — Infer Retailer Display Name & Item Name from Scrape Metadata
+## [x] Issue #44 — Infer Retailer Display Name & Item Name from Scrape Metadata
 
 **Type:** feat
 **Estimate:** ~3.5h
@@ -2473,14 +2473,16 @@ Concretely:
 
 Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add showed the retailer badge as `muddygeorge_com` instead of a real brand name, and separately noted `Product.name` has no inference path at all if a user just pastes a URL without typing a name. Both point at the same root gap (no page-metadata extraction anywhere in the scraper layer), so scoped as one issue rather than two independent small ones. The bulk-add failure toast's long-raw-URL problem surfaced testing `#41` too (4-URL Airpods Max add, 3 failures) — same underlying fix, added as a sequenced task on this issue rather than a third one.
 
+**Status (2026-08-19):** Done — see `.plan/44-infer-retailer-item-name/`. One design change from the original write-up, settled during grilling: no new `Listing.retailer_display_name` column — `Listing.retailer` itself is overwritten in place once inference succeeds (guarded: only while it still equals the deterministic hostname fallback, so a manual edit via `PATCH .../listings/{id}` survives a later scheduled poll). `ScraperResult` gained two fields (`site_name` for the retailer badge, `product_title` for `Product.name` — the original text implied one field could cover both; grilling split them, since they're different signals from different parts of a page). `Product.name` is nullable now (migration `0013`) rather than always-required. `/code-reviewer:review` ran on the diff — 1 Major (`ProductUpdate.name` missing the same empty-string-to-`NULL` coercion `ProductCreate.name` got) + 3 Minor findings, all fixed. Full backend suite: 339 passed. Manual live verification (blank-name add, Amazon-URL inference, manual-edit-survives-rescrape, bulk-add toast) still left to run against the real deployment, not blocking.
+
 ### Acceptance criteria
 
-- [ ] Adding an item without a name gets a sensible inferred `Product.name` once the first scrape completes, without blocking creation
-- [ ] Retailer badge shows a human-readable name (e.g. "Muddy George") instead of the raw hostname-derived fallback, for domains not already in `RETAILER_DISPLAY_NAMES`
-- [ ] User-provided `Product.name` and any already-set `retailer_display_name` are never overwritten by inference
-- [ ] Inference failure (no extractable title/site name) degrades gracefully to today's existing fallback behavior — never blocks creation or scraping
-- [ ] `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) unaffected — static override still takes priority
-- [ ] Bulk-add failure toast shows each failed URL's retailer display name, not the raw URL
+- [x] Adding an item without a name gets a sensible inferred `Product.name` once the first scrape completes, without blocking creation — code done, unit-tested; live check still pending
+- [x] Retailer badge shows a human-readable name (e.g. "Muddy George") instead of the raw hostname-derived fallback, for domains not already in `RETAILER_DISPLAY_NAMES` — code done, unit-tested; live check still pending
+- [x] User-provided `Product.name` and a manually-edited `Listing.retailer` are never overwritten by inference (design change: no separate `retailer_display_name` column — `retailer` itself is guarded instead, see Status above)
+- [x] Inference failure (no extractable title/site name) degrades gracefully to today's existing fallback behavior — never blocks creation or scraping
+- [x] `RETAILER_MAP`-mapped retailers (`amazon.ca` → `"Amazon"`) unaffected — static override still takes priority; Amazon listings still get `product_title` inference via a dedicated `AmazonCAScraper` extraction
+- [x] Bulk-add failure toast shows each failed URL's retailer display name, not the raw URL — unit-tested across all failure paths; live check still pending
 
 ---
 

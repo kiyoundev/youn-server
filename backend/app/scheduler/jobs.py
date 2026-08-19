@@ -10,7 +10,7 @@ from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
 from app.services.scraper.patchright_scraper import PatchrightScraper
-from app.services.scraper.router import RetailerRouter
+from app.services.scraper.router import RetailerRouter, _derive_retailer, _hostname_of
 from app.services.sse import broadcast
 from app.services.stocks import FinnhubClient
 
@@ -152,6 +152,18 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         listing.last_price = scrape.price
         listing.last_scrape_status = "ok"
 
+        # Retailer-name inference (issue #44) — guarded: only overwrite while
+        # listing.retailer still equals what _derive_retailer(hostname) would
+        # produce right now, i.e. untouched since creation. A user's manual
+        # edit (PATCH .../listings/{id}) no longer matches that deterministic
+        # fallback, so it's left alone — this is what stops a scheduled poll
+        # 6h later from silently stomping it. Doesn't need `product` at all,
+        # so it happens here rather than at the locked read below.
+        if scrape.site_name:
+            hostname = _hostname_of(listing.url)
+            if listing.retailer == _derive_retailer(hostname):
+                listing.retailer = scrape.site_name
+
         # Locked read (issue #48) — two listings of the same product scraped
         # concurrently (see _poll_concurrency_semaphore / #41's own
         # concurrent add-time dispatch) each open their own session here.
@@ -165,6 +177,15 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         product = (
             await session.execute(select(Product).where(Product.id == listing.product_id).with_for_update())
         ).scalar_one()
+
+        # Product-name inference (issue #44) — guarded: only while still
+        # NULL (the user left it blank at creation and nothing has filled it
+        # yet). Piggybacks on the locked read just above rather than a
+        # separate query — this fill isn't itself race-sensitive, but the
+        # row's already open here for #48's alert-dedup fix, so no reason to
+        # pay for a second fetch.
+        if scrape.product_title and product.name is None:
+            product.name = scrape.product_title
 
         product_listings_result = await session.execute(select(Listing).where(Listing.product_id == product.id))
         product_listings = list(product_listings_result.scalars().all())

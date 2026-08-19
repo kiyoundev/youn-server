@@ -35,3 +35,15 @@ def strip_whitespace(value: str | None) -> str | None:
     if value is None:
         return value
     return value.strip()
+
+
+def strip_name_or_none(value: str | None) -> str | None:
+    """Same as strip_whitespace, plus: an explicit "" (not just an omitted
+    field) also maps to None, not an empty string. Shared by
+    ProductCreate.name and ProductUpdate.name (issue #44) — both need "" and
+    omitted to mean the same thing (Product.name stays/becomes NULL, so
+    process_item's `if product.name is None:` inference guard can still fill
+    it later), not two different call sites drifting out of sync on which
+    one actually coerces "" and which doesn't."""
+    stripped = strip_whitespace(value)
+    return stripped or None

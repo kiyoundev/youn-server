@@ -18,7 +18,11 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String)
+    # Nullable (issue #44) — optional at creation, filled in from the first
+    # successful scrape's inferred product_title if the user left it blank.
+    # NULL, not a placeholder string, distinguishes "not yet named" from any
+    # real (even coincidentally short) user-provided name.
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
     target_price: Mapped[float] = mapped_column(Float)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -258,6 +258,9 @@ async def test_create_item_probe_failure_reported_in_failed_not_raised() -> None
     assert result.product.listings == []
     assert result.failed[0].url == "https://shop.example.com/p"
     assert result.failed[0].detail == "URL could not be scraped by any available method"
+    # Issue #44 — hostname-derived, same fallback a real listing would get;
+    # no scrape happened here to infer anything better from.
+    assert result.failed[0].retailer == "shop_example_com"
     db.commit.assert_awaited_once()
 
 
@@ -280,6 +283,7 @@ async def test_create_item_precheck_duplicate_url_reported_in_failed_not_raised(
     assert result.product.listings == []
     assert result.failed[0].url == "https://www.amazon.ca/dp/B0X"
     assert result.failed[0].detail == "An item with this URL already exists"
+    assert result.failed[0].retailer == "Amazon"  # issue #44 — RETAILER_DISPLAY_NAMES override
     db.add.assert_called_once()
     db.commit.assert_awaited_once()
 
@@ -306,6 +310,7 @@ async def test_create_item_inbatch_duplicate_url_reported_in_failed() -> None:
     assert len(result.product.listings) == 1
     assert result.failed[0].url == "https://www.amazon.ca/dp/B0X"
     assert result.failed[0].detail == "Duplicate URL within this request"
+    assert result.failed[0].retailer == "Amazon"  # issue #44
 
 
 @pytest.mark.asyncio
@@ -482,6 +487,10 @@ async def test_create_item_resolved_url_collision_within_batch_reported_in_faile
     # Failure still echoes the URL the user actually pasted, not the
     # resolved one — same shape as every other failed[] entry.
     assert result.failed[0].url in ("https://a.co/d/one", "https://amzn.to/two")
+    # Issue #44 — derived from the *resolved* destination (result.retailer,
+    # already populated by successful resolution), not re-derived from the
+    # raw pasted shortlink's own (unrelated) hostname.
+    assert result.failed[0].retailer == "Amazon"
     db.commit.assert_awaited_once()
 
 
@@ -511,6 +520,7 @@ async def test_create_item_resolved_url_matches_existing_listing_reported_in_fai
     assert result.product.listings == []
     assert result.failed[0].url == "https://a.co/d/one"
     assert result.failed[0].detail == "An item with this URL already exists"
+    assert result.failed[0].retailer == "Amazon"  # issue #44 — from the resolved destination
     db.commit.assert_awaited_once()
 
 
@@ -691,6 +701,17 @@ async def test_update_item_applies_only_provided_fields() -> None:
     assert product.name == "Old"
     assert product.target_price == 75.0
     db.commit.assert_awaited_once()
+
+
+def test_product_update_empty_name_coerces_to_none() -> None:
+    """Review finding (issue #44) — ProductUpdate.name must coerce "" to
+    None the same way ProductCreate.name already does. An empty string
+    (not None) would never satisfy process_item's `is None` inference
+    guard again, and the frontend's `?? "Untitled"` fallback only catches
+    null/undefined, not ""."""
+    body = ProductUpdate(name="")
+
+    assert body.name is None
 
 
 @pytest.mark.asyncio

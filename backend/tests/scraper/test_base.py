@@ -8,7 +8,16 @@ import pytest
 import respx
 from bs4 import BeautifulSoup
 
-from app.services.scraper.base import BaseScraper, _parse_price
+from app.services.scraper.base import (
+    BaseScraper,
+    _extract_product_title,
+    _extract_site_name,
+    _first_title_segment,
+    _last_title_segment,
+    _parse_price,
+    _split_title,
+    _strip_trailing_site_name,
+)
 from app.services.scraper.http_scraper import HTTPScraper
 from app.services.scraper.result import ScraperResult
 
@@ -329,3 +338,184 @@ async def test_http_scraper_connection_error_returns_error() -> None:
     respx.get("http://localhost:9999/nope").mock(side_effect=httpx.ConnectError("refused"))
     result = await HTTPScraper().get_price("http://localhost:9999/nope")
     assert result == ScraperResult(price=None, status="error")
+
+
+# ---------------------------------------------------------------------------
+# _split_title / _first_title_segment / _last_title_segment (issue #44)
+# ---------------------------------------------------------------------------
+
+def test_split_title_dash_separator() -> None:
+    assert _split_title("Cayl Cap Black - Muddy George") == ("Cayl Cap Black", "Muddy George")
+
+
+def test_split_title_pipe_separator() -> None:
+    assert _split_title("Cayl Cap Black | Muddy George") == ("Cayl Cap Black", "Muddy George")
+
+
+def test_split_title_en_dash_separator() -> None:
+    assert _split_title("Cayl Cap Black – Muddy George") == ("Cayl Cap Black", "Muddy George")
+
+
+def test_split_title_no_separator_returns_none() -> None:
+    assert _split_title("Cayl Cap Black") is None
+
+
+def test_split_title_ambiguous_multiple_separator_types_returns_none() -> None:
+    # Both "-" and "|" appear — too ambiguous to guess which one is the
+    # real product/site boundary.
+    assert _split_title("Cayl Cap - Black | Muddy George") is None
+
+
+def test_split_title_empty_segment_returns_none() -> None:
+    assert _split_title("- Muddy George") is None
+    assert _split_title("Cayl Cap Black -") is None
+
+
+def test_first_and_last_title_segment() -> None:
+    title = "Cayl Cap Black - Muddy George"
+    assert _first_title_segment(title) == "Cayl Cap Black"
+    assert _last_title_segment(title) == "Muddy George"
+
+
+def test_first_and_last_title_segment_no_separator_return_none() -> None:
+    assert _first_title_segment("Cayl Cap Black") is None
+    assert _last_title_segment("Cayl Cap Black") is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_site_name (issue #44)
+# ---------------------------------------------------------------------------
+
+def test_extract_site_name_og_tag() -> None:
+    html = '<html><head><meta property="og:site_name" content="Muddy George"></head></html>'
+    assert _extract_site_name(_soup(html)) == "Muddy George"
+
+
+def test_extract_site_name_jsonld_organization() -> None:
+    html = _jsonld_page({"@type": "Organization", "name": "Muddy George"})
+    assert _extract_site_name(_soup(html)) == "Muddy George"
+
+
+def test_extract_site_name_jsonld_brand() -> None:
+    html = _jsonld_page({"@type": "Brand", "name": "Muddy George"})
+    assert _extract_site_name(_soup(html)) == "Muddy George"
+
+
+def test_extract_site_name_title_fallback() -> None:
+    html = "<html><head><title>Cayl Cap Black - Muddy George</title></head></html>"
+    assert _extract_site_name(_soup(html)) == "Muddy George"
+
+
+def test_extract_site_name_og_tag_wins_over_jsonld() -> None:
+    html = (
+        '<html><head><meta property="og:site_name" content="Muddy George">'
+        '<script type="application/ld+json">{"@type": "Organization", "name": "Wrong Name"}</script>'
+        "</head></html>"
+    )
+    assert _extract_site_name(_soup(html)) == "Muddy George"
+
+
+def test_extract_site_name_no_signal_returns_none() -> None:
+    assert _extract_site_name(_soup("<html><body>nothing</body></html>")) is None
+
+
+def test_extract_site_name_ambiguous_title_returns_none() -> None:
+    html = "<html><head><title>No separator here</title></head></html>"
+    assert _extract_site_name(_soup(html)) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_product_title (issue #44)
+# ---------------------------------------------------------------------------
+
+def test_extract_product_title_og_tag() -> None:
+    html = '<html><head><meta property="og:title" content="Cayl Cap Black"></head></html>'
+    assert _extract_product_title(_soup(html)) == "Cayl Cap Black"
+
+
+def test_extract_product_title_jsonld_product() -> None:
+    html = _jsonld_page({"@type": "Product", "name": "Cayl Cap Black"})
+    assert _extract_product_title(_soup(html)) == "Cayl Cap Black"
+
+
+def test_extract_product_title_title_fallback() -> None:
+    html = "<html><head><title>Cayl Cap Black - Muddy George</title></head></html>"
+    assert _extract_product_title(_soup(html)) == "Cayl Cap Black"
+
+
+def test_extract_product_title_no_signal_returns_none() -> None:
+    assert _extract_product_title(_soup("<html><body>nothing</body></html>")) is None
+
+
+# ---------------------------------------------------------------------------
+# _run_hierarchy attaches site_name/product_title independently of which
+# price method wins (issue #44)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_attaches_name_metadata_alongside_jsonld_price() -> None:
+    html = (
+        '<html><head><meta property="og:site_name" content="Muddy George">'
+        '<meta property="og:title" content="Cayl Cap Black">'
+        '<script type="application/ld+json">{"@type": "Product", "offers": {"price": "52.00"}}</script>'
+        "</head></html>"
+    )
+    s = DummyScraper()
+    result = await s._run_hierarchy(html, "https://muddygeorge.com/products/cayl-cap")
+    assert result == ScraperResult(price=52.0, status="ok", site_name="Muddy George", product_title="Cayl Cap Black")
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_no_name_metadata_found_leaves_fields_none() -> None:
+    html = _jsonld_page({"@type": "Product", "offers": {"price": "89.99"}})
+    s = DummyScraper()
+    result = await s._run_hierarchy(html, "https://example.com/product")
+    assert result.site_name is None
+    assert result.product_title is None
+
+
+# ---------------------------------------------------------------------------
+# _strip_trailing_site_name (issue #44 follow-up — og:title often carries
+# its own trailing "- Site Name" suffix, e.g. goyowear.kr's real page:
+# og:title="ENDURE GOOSE DOWN JACKET (DARK GREY) - GOYOWEAR",
+# og:site_name="GOYOWEAR")
+# ---------------------------------------------------------------------------
+
+def test_strip_trailing_site_name_matching_suffix_removed() -> None:
+    assert _strip_trailing_site_name("Endure Jacket - GOYOWEAR", "GOYOWEAR") == "Endure Jacket"
+
+
+def test_strip_trailing_site_name_case_insensitive() -> None:
+    assert _strip_trailing_site_name("Endure Jacket - goyowear", "GOYOWEAR") == "Endure Jacket"
+
+
+def test_strip_trailing_site_name_no_site_name_is_noop() -> None:
+    assert _strip_trailing_site_name("Endure Jacket - GOYOWEAR", None) == "Endure Jacket - GOYOWEAR"
+
+
+def test_strip_trailing_site_name_non_matching_tail_is_noop() -> None:
+    # The dash here is part of the real product name, not a site-name
+    # suffix — since the tail doesn't match the known site_name, must not
+    # get truncated on a blind guess.
+    assert _strip_trailing_site_name("Air Force 1 - Low", "Nike") == "Air Force 1 - Low"
+
+
+def test_strip_trailing_site_name_no_separator_is_noop() -> None:
+    assert _strip_trailing_site_name("Endure Jacket", "GOYOWEAR") == "Endure Jacket"
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_strips_matching_site_name_from_og_title() -> None:
+    """The actual goyowear.kr regression — og:title carries a trailing
+    "- GOYOWEAR" that matches og:site_name, so the saved product_title
+    should be the clean product-only name, not the raw og:title."""
+    html = (
+        '<html><head><meta property="og:site_name" content="GOYOWEAR">'
+        '<meta property="og:title" content="Endure Goose Down Jacket - GOYOWEAR">'
+        '<script type="application/ld+json">{"@type": "Product", "offers": {"price": "388000"}}</script>'
+        "</head></html>"
+    )
+    s = DummyScraper()
+    result = await s._run_hierarchy(html, "https://goyowear.kr/product/endure-jacket")
+    assert result.site_name == "GOYOWEAR"
+    assert result.product_title == "Endure Goose Down Jacket"

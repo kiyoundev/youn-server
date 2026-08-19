@@ -25,7 +25,9 @@ export interface Listing {
 
 export interface Product {
   id: number;
-  name: string;
+  // Nullable (issue #44) — blank until process_item infers it from the
+  // first successful scrape's product_title, if the user left it blank.
+  name: string | null;
   target_price: number;
   alerted_at: string | null;
   status: WatchStatus;
@@ -37,7 +39,9 @@ export interface Product {
 // Request payloads — mirror the backend's ProductCreate/ProductUpdate/
 // ListingCreate/ListingUpdate schemas (schema.md).
 export interface ProductCreatePayload {
-  name: string;
+  // Optional (issue #44) — omitted or blank, Product.name stays NULL until
+  // inferred from the first successful scrape.
+  name?: string;
   target_price: number;
   // Zero or more listing URLs, created in the same request (bulk, not
   // chained) — backend probes retailer/scraper_type for each concurrently
@@ -69,6 +73,10 @@ export interface ListingUpdatePayload {
 export interface ListingFailure {
   url: string;
   detail: string;
+  // Hostname-derived (issue #44) — same fallback a real listing gets at
+  // creation, not real inference (a failed-to-scrape URL has no successful
+  // scrape to infer a display name from).
+  retailer: string;
 }
 
 export interface ProductCreateResult {

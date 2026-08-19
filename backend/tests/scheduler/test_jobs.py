@@ -234,6 +234,97 @@ async def test_process_item_writes_history_and_price_drop_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_item_fills_retailer_when_still_hostname_fallback() -> None:
+    """Issue #44 — _listing()'s URL is always https://example.com/item-N, so
+    _derive_retailer(hostname) for it is always "example_com". Constructing
+    the listing with exactly that value simulates "untouched since
+    creation" — the guard should fire."""
+    listing = _listing(item_id=7, product_id=1, retailer="example_com")
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", site_name="Muddy George"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert listing.retailer == "Muddy George"
+
+
+@pytest.mark.asyncio
+async def test_process_item_does_not_overwrite_manually_edited_retailer() -> None:
+    """A retailer that no longer matches the deterministic hostname fallback
+    is treated as manually edited (PATCH .../listings/{id}) — must survive a
+    scheduled poll finding a site_name, not get silently stomped."""
+    listing = _listing(item_id=7, product_id=1, retailer="My Custom Name")
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", site_name="Muddy George"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert listing.retailer == "My Custom Name"
+
+
+@pytest.mark.asyncio
+async def test_process_item_fills_product_name_when_null() -> None:
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, name=None, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", product_title="Cayl Cap Black"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert product.name == "Cayl Cap Black"
+
+
+@pytest.mark.asyncio
+async def test_process_item_does_not_overwrite_existing_product_name() -> None:
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, name="User's Own Name", target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", product_title="Cayl Cap Black"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert product.name == "User's Own Name"
+
+
+@pytest.mark.asyncio
 async def test_process_item_blocks_duplicate_drop_when_alerted() -> None:
     alerted = dt.datetime.now(dt.timezone.utc)
     listing = _listing(item_id=8, product_id=1)

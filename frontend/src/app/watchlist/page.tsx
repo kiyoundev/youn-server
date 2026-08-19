@@ -209,7 +209,7 @@ function ProductRow({
       ))}
       <Sheet open={openId === product.id} onOpenChange={(open) => setOpenId(open ? product.id : null)}>
         <TableRow className="cursor-pointer" onClick={() => setOpenId(product.id)}>
-          <TableCell className="font-medium">{product.name}</TableCell>
+          <TableCell className="font-medium">{product.name ?? "Untitled"}</TableCell>
           <TableCell>
             <div className="flex gap-1">
               {product.listings.map((listing) => (
@@ -261,7 +261,7 @@ function ProductRow({
             <div className="flex items-center gap-2 pr-10">
               {editState.type === "name" ? (
                 <div className="min-w-0 flex-1">
-                  <SheetTitle className="sr-only">{product.name}</SheetTitle>
+                  <SheetTitle className="sr-only">{product.name ?? "Untitled"}</SheetTitle>
                   <Input
                     autoFocus
                     value={editState.draft}
@@ -286,9 +286,9 @@ function ProductRow({
                   />
                 </div>
               ) : (
-                <SheetTitle>{product.name}</SheetTitle>
+                <SheetTitle>{product.name ?? "Untitled"}</SheetTitle>
               )}
-              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => dispatchEdit({ type: "editName", name: product.name })}>
+              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => dispatchEdit({ type: "editName", name: product.name ?? "" })}>
                 <Pencil size={16} strokeWidth={1.5} />
               </Button>
             </div>
@@ -482,7 +482,7 @@ function ProductRow({
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete &quot;{product.name}&quot;?</DialogTitle>
+            <DialogTitle>Delete &quot;{product.name ?? "Untitled"}&quot;?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">This removes all retailer listings and their price history.</p>
           <DialogFooter>
@@ -534,8 +534,10 @@ export default function WatchlistPage() {
     .map((line) => line.trim())
     .filter(Boolean);
 
+  // name is optional now (issue #44) — left blank, Product.name stays NULL
+  // until the first successful scrape infers it. Not required to submit.
   const canSubmitNewItem =
-    newItem.name.trim() !== "" && Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
+    Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
 
   // Bulk, single request — backend probes every URL's retailer/scraper_type
   // concurrently (bounded), so this doesn't need the chained-per-URL or
@@ -546,18 +548,26 @@ export default function WatchlistPage() {
     if (!canSubmitNewItem || isSubmitting) return;
     setIsSubmitting(true);
     try {
+      const trimmedName = newItem.name.trim();
       const { product, failed } = await createProduct({
-        name: newItem.name.trim(),
+        // Omitted (not sent as "") when blank — the backend also treats an
+        // explicit "" as "not provided", but the frontend form shouldn't
+        // rely on that backend leniency when it's this cheap to just not
+        // send the key at all.
+        name: trimmedName || undefined,
         target_price: Number(newItem.targetPrice),
         urls: newItemUrlLines,
       });
       await mutate("/api/proxy/items");
       closeAddDialog();
+      // product.name may still be null here — inference runs async on the
+      // first scrape (#41's dispatch), not before this response returns.
+      const displayName = product.name ?? "item";
       if (failed.length === 0) {
-        toast.success(`Added "${product.name}"`);
+        toast.success(`Added "${displayName}"`);
       } else {
-        const detail = failed.map((f) => `${f.url} (${f.detail})`).join(", ");
-        toast.error(`"${product.name}": ${failed.length} of ${newItemUrlLines.length} URL(s) failed — ${detail}`, { persist: true });
+        const detail = failed.map((f) => `${f.retailer} (${f.detail})`).join(", ");
+        toast.error(`"${displayName}": ${failed.length} of ${newItemUrlLines.length} URL(s) failed — ${detail}`, { persist: true });
       }
     } catch (e) {
       // Nothing committed server-side in this case (createProduct itself
@@ -625,7 +635,7 @@ export default function WatchlistPage() {
   const products = data ?? [];
 
   const filtered = products
-    .filter((product) => product.name.toLowerCase().includes(search.toLowerCase()))
+    .filter((product) => (product.name ?? "").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   const totalBestPrice = products.reduce((sum, product) => sum + (bestPrice(product) ?? 0), 0);

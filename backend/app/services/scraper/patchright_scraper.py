@@ -269,6 +269,21 @@ class AmazonCAScraper(PatchrightScraper):
             }
         """)
 
+    async def _find_product_title(self, page) -> str | None:
+        """Feeds Product.name (issue #44) — AmazonCAScraper bypasses
+        BaseScraper._run_hierarchy entirely (own Playwright-locator price
+        extraction, never parses soup), so it needs its own title read.
+        #productTitle is Amazon's own stable element id for this, same
+        "semantic attribute over generic parsing" preference as
+        _find_price_text's own first choice. Non-fatal on failure — a
+        missing/unreadable title just means product_title stays None,
+        exactly like every other extraction path in this feature."""
+        try:
+            text = (await page.locator("#productTitle").first.text_content(timeout=PRICE_LOCATOR_TIMEOUT_MS) or "").strip()
+            return text or None
+        except Exception:
+            return None
+
     async def get_price(self, url: str) -> ScraperResult:
         try:
             # Same lazy-launch call as the base class — explicit PatchrightScraper
@@ -289,11 +304,18 @@ class AmazonCAScraper(PatchrightScraper):
                         await page.goto("https://www.amazon.ca", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
                         await page.goto(url, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
                         raw = await self._find_price_text(page)
+                        price = _parse_price(raw or "")
+                        # Only fetched on the attempt that's actually going
+                        # to succeed — an extra Playwright DOM round-trip on
+                        # every failed retry (page didn't load right, price
+                        # element missing, etc.) would be wasted anyway,
+                        # since that attempt's whole result gets discarded
+                        # (review finding).
+                        title = await self._find_product_title(page) if price is not None else None
                     finally:
                         await page.close()
-                    price = _parse_price(raw or "")
                     if price is not None:
-                        return ScraperResult(price=price, status="ok")
+                        return ScraperResult(price=price, status="ok", product_title=title)
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
             _log.warning("AmazonCAScraper exhausted retries for %s", url)

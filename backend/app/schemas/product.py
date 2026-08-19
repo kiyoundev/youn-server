@@ -4,11 +4,16 @@ from pydantic import BaseModel, field_validator
 
 from app.models.product import ProductStatus
 from app.schemas.listing import ListingResponse
-from app.schemas.validators import strip_whitespace, validate_http_url
+from app.schemas.validators import strip_name_or_none, validate_http_url
 
 
 class ProductCreate(BaseModel):
-    name: str
+    # Optional (issue #44) — left blank, Product.name stays NULL until
+    # process_item fills it from the first successful scrape's inferred
+    # product_title. An explicit "" (not just an omitted field) also maps to
+    # None here, not stored as an empty string — a caller hitting the API
+    # directly, not just the relaxed frontend form, gets the same treatment.
+    name: str | None = None
     target_price: float
     # Zero or more listing URLs, created in the same request as the product
     # (bulk, not chained) — auto-detect only, no per-URL retailer/scraper_type
@@ -19,7 +24,7 @@ class ProductCreate(BaseModel):
     # way to reach a listingless product.
     urls: list[str] = []
 
-    _strip_name = field_validator("name")(strip_whitespace)
+    _strip_name = field_validator("name")(strip_name_or_none)
 
     @field_validator("urls")
     @classmethod
@@ -34,12 +39,18 @@ class ProductUpdate(BaseModel):
     target_price: float | None = None
     active: bool | None = None
 
-    _strip_name = field_validator("name")(strip_whitespace)
+    # Same coercion as ProductCreate.name (issue #44 review finding) — an
+    # explicit "" via PATCH must also map to None, not stay "". Without this,
+    # product.name = "" would never satisfy process_item's `is None`
+    # inference guard again (stuck, worse than staying NULL), and the
+    # frontend's `product.name ?? "Untitled"` fallback wouldn't catch "" —
+    # only null/undefined trigger `??`.
+    _strip_name = field_validator("name")(strip_name_or_none)
 
 
 class ProductResponse(BaseModel):
     id: int
-    name: str
+    name: str | None
     target_price: float
     alerted_at: datetime | None
     status: ProductStatus
@@ -53,6 +64,10 @@ class ProductResponse(BaseModel):
 class ListingFailure(BaseModel):
     url: str
     detail: str
+    # Hostname-derived (issue #44) — same _derive_retailer() fallback a real
+    # listing gets at creation time, not real inference (a failed-to-scrape
+    # URL has no successful scrape to infer a display name from).
+    retailer: str
 
 
 class ProductCreateResponse(BaseModel):
