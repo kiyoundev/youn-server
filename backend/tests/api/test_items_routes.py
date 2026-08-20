@@ -8,8 +8,19 @@ import pytest
 from app.api import items
 from app.schemas.listing import ListingCreate, ListingUpdate
 from app.schemas.product import ProductCreate, ProductUpdate
+from app.services import scrape_tracking
 from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import IntegrityError
+
+
+@pytest.fixture(autouse=True)
+def reset_in_flight_tracking():
+    """Isolates every test in this file from scrape_tracking's module-level
+    global set (issue #45 follow-up) — same reasoning as
+    tests/scheduler/test_jobs.py's identically-named fixture."""
+    scrape_tracking._in_flight_listing_ids.clear()
+    yield
+    scrape_tracking._in_flight_listing_ids.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +110,7 @@ def _product(
     *,
     name: str = "Product",
     target_price: float = 100.0,
+    currency: str | None = None,
     active: bool = True,
     alerted_at: datetime | None = None,
     listings: list[SimpleNamespace] | None = None,
@@ -107,6 +119,7 @@ def _product(
         id=product_id,
         name=name,
         target_price=target_price,
+        currency=currency,
         active=active,
         alerted_at=alerted_at,
         listings=listings if listings is not None else [_listing(product_id=product_id)],
@@ -191,6 +204,26 @@ async def test_get_item_returns_product() -> None:
     result = await items.get_item(7, db)
 
     assert result.id == 7
+
+
+@pytest.mark.asyncio
+async def test_get_item_reflects_in_flight_scrape_as_processing() -> None:
+    """Issue #45 follow-up — GET /api/items/{id} (and list_items) must
+    report "processing" while a re-scrape is actually in flight (scheduled
+    poll_prices, or a manual POST /api/poll/prices), not just for a
+    brand-new never-scraped listing. Exercises the real
+    api/items.py -> compute_status wiring, not just compute_status/
+    process_item in isolation (already covered by
+    tests/services/test_product_status.py and tests/scheduler/test_jobs.py)."""
+    listing = _listing(listing_id=20, last_price=90.0, last_scrape_status="ok", product_id=7)
+    product = _product(product_id=7, listings=[listing])
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[_scalar_result(product), _rows_result([])])
+
+    scrape_tracking.mark_in_flight(20)
+    result = await items.get_item(7, db)
+
+    assert result.status == "processing"
 
 
 @pytest.mark.asyncio
@@ -350,6 +383,23 @@ async def test_create_item_without_urls_creates_product_with_no_listings() -> No
     assert result.failed == []
     db.execute.assert_not_called()
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_item_with_explicit_currency() -> None:
+    """Issue #45 — currency is settable at creation time, not just
+    left to auto-detect from the first scrape."""
+    request = _request()
+    db = MagicMock()
+    db.add = MagicMock(side_effect=_assign_persisted_defaults)
+    db.commit = AsyncMock()
+
+    body = ProductCreate(name="Bare Product", target_price=10.0, currency="USD")
+
+    with patch("app.api.items.detect_scraper_type", new=AsyncMock()):
+        result = await items.create_item(request, body, db)
+
+    assert result.product.currency == "USD"
 
 
 @pytest.mark.asyncio
@@ -701,6 +751,22 @@ async def test_update_item_applies_only_provided_fields() -> None:
     assert product.name == "Old"
     assert product.target_price == 75.0
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_item_currency_overwrites_unconditionally() -> None:
+    """Issue #45 — manual currency override via PATCH always wins, even
+    over an already-set (auto-detected or previously overridden) value —
+    unlike the fill-only-if-null pattern process_item uses for inference."""
+    product = _product(product_id=1, currency="USD", target_price=50.0)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[_scalar_result(product), _rows_result([])])
+    db.commit = AsyncMock()
+
+    result = await items.update_item(1, ProductUpdate(currency="KRW"), db)
+
+    assert product.currency == "KRW"
+    assert result.currency == "KRW"
 
 
 def test_product_update_empty_name_coerces_to_none() -> None:

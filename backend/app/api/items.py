@@ -27,6 +27,7 @@ from app.schemas.product import (
     ProductUpdate,
 )
 from app.services.product_status import compute_last_checked, compute_status
+from app.services.scrape_tracking import in_flight_snapshot
 from app.services.scraper.base import USER_AGENTS, _build_headers
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
 from app.services.scraper.router import (
@@ -172,14 +173,17 @@ def _build_listing_response(listing: Listing, last_checked_map: dict[int, dateti
     )
 
 
-def _build_product_response(product: Product, last_checked_map: dict[int, datetime]) -> ProductResponse:
+def _build_product_response(
+    product: Product, last_checked_map: dict[int, datetime], in_flight: set[int]
+) -> ProductResponse:
     listing_responses = [_build_listing_response(listing, last_checked_map) for listing in product.listings]
     return ProductResponse(
         id=product.id,
         name=product.name,
         target_price=product.target_price,
+        currency=product.currency,
         alerted_at=product.alerted_at,
-        status=compute_status(product.listings, product.active, product.alerted_at),
+        status=compute_status(product.listings, product.active, product.alerted_at, in_flight),
         last_checked=compute_last_checked([lr.last_checked for lr in listing_responses]),
         listings=listing_responses,
         created_at=product.created_at,
@@ -211,7 +215,11 @@ async def list_items(db: AsyncSession = Depends(get_db)) -> list[ProductResponse
     result = await db.execute(select(Product).options(selectinload(Product.listings)))
     products = list(result.scalars().unique().all())
     last_checked_map = await _fetch_last_checked_map(db)
-    return [_build_product_response(product, last_checked_map) for product in products]
+    # One snapshot for the whole list (issue #45 review follow-up), not one
+    # per product — in_flight_snapshot() copies the tracked set, and this
+    # loop previously paid for that copy N times for the same instant.
+    in_flight = in_flight_snapshot()
+    return [_build_product_response(product, last_checked_map, in_flight) for product in products]
 
 
 @router.get(
@@ -222,7 +230,7 @@ async def list_items(db: AsyncSession = Depends(get_db)) -> list[ProductResponse
 async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     product = await _get_product_or_404(product_id, db)
     last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
-    return _build_product_response(product, last_checked_map)
+    return _build_product_response(product, last_checked_map, in_flight_snapshot())
 
 
 @router.post(
@@ -244,7 +252,7 @@ async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> Produ
     ),
 )
 async def create_item(request: Request, body: ProductCreate, db: AsyncSession = Depends(get_db)) -> ProductCreateResponse:
-    product = Product(name=body.name, target_price=body.target_price)
+    product = Product(name=body.name, target_price=body.target_price, currency=body.currency)
     # Materialize the relationship in-memory now, even if it stays empty —
     # otherwise, when every URL fails validation (or urls=[]) and .append()
     # below never runs, the very first access to product.listings happens
@@ -339,7 +347,7 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
             )
         )
 
-    return ProductCreateResponse(product=_build_product_response(product, {}), failed=failed)
+    return ProductCreateResponse(product=_build_product_response(product, {}, in_flight_snapshot()), failed=failed)
 
 
 @router.post(
@@ -401,10 +409,12 @@ async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = D
         product.target_price = body.target_price
     if body.active is not None:
         product.active = body.active
+    if body.currency is not None:
+        product.currency = body.currency
 
     await db.commit()
     last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
-    return _build_product_response(product, last_checked_map)
+    return _build_product_response(product, last_checked_map, in_flight_snapshot())
 
 
 @router.delete(

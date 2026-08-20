@@ -5,7 +5,7 @@ import re
 from abc import ABC, abstractmethod
 from functools import reduce
 from operator import getitem
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -232,6 +232,61 @@ def _extract_product_title(soup: BeautifulSoup, jsonld_scripts: list[Any] | None
     return None
 
 
+# Issue #45 — currency detection. Priority: explicit metadata/symbol for
+# USD/KRW -> .kr TLD for KRW -> CAD default. Deliberately *not* symmetric
+# between USD and CAD: an earlier draft TLD-split bare "$" into CAD (.ca)
+# vs USD (else), but the real motivating counterexample (muddygeorge.com,
+# a Canadian retailer on a plain .com domain) proved TLD can't reliably
+# separate USD from CAD, so CAD - the common case for this app's users -
+# is just the flat default absent an explicit USD signal. KRW keeps a TLD
+# tier because the real KRW site in this codebase (goyowear.kr) doesn't
+# mark currency on-page at all (see its regression fixture in
+# test_base.py) - metadata/symbol alone would silently mis-default it to
+# CAD, off by ~1000x in magnitude terms.
+_SUPPORTED_CURRENCIES = {"USD", "CAD", "KRW"}
+
+
+def _extract_currency(
+    soup: BeautifulSoup, url: str, jsonld_scripts: list[Any] | None = None
+) -> Literal["USD", "CAD", "KRW"]:
+    tag = soup.find("meta", property="og:price:currency") or soup.find(
+        "meta", property="product:price:currency"
+    )
+    if tag and tag.get("content"):
+        code = tag["content"].strip().upper()
+        if code in _SUPPORTED_CURRENCIES:
+            return code  # type: ignore[return-value]
+
+    scripts = jsonld_scripts if jsonld_scripts is not None else _parse_jsonld_scripts(soup)
+    for data in scripts:
+        product = _find_jsonld_product(data)
+        offers = product.get("offers") if product else None
+        if isinstance(offers, list):
+            offers = offers[0] if offers else None
+        if isinstance(offers, dict):
+            code = offers.get("priceCurrency")
+            if isinstance(code, str) and code.strip().upper() in _SUPPORTED_CURRENCIES:
+                return code.strip().upper()  # type: ignore[return-value]
+
+    # Symbol/text scan across the full rendered page text — the price
+    # extractors above only ever hand back a parsed float, not the raw
+    # text it came from, so there's no single "price-adjacent" node to
+    # anchor to; a page-wide scan is the practical alternative and these
+    # markers are distinctive enough that a false positive elsewhere on
+    # the page is very unlikely.
+    text = soup.get_text(" ", strip=True)
+    if "₩" in text or "원" in text:
+        return "KRW"
+    if "US$" in text or re.search(r"\bUSD\b", text):
+        return "USD"
+
+    hostname = urlparse(url).hostname or ""
+    if hostname.endswith(".kr"):
+        return "KRW"
+
+    return "CAD"
+
+
 class BaseScraper(ABC):
     @abstractmethod
     async def get_price(self, url: str) -> ScraperResult:
@@ -347,6 +402,10 @@ class BaseScraper(ABC):
         product_title = _extract_product_title(soup, jsonld_scripts)
         if product_title:
             product_title = _strip_trailing_site_name(product_title, site_name)
-        if site_name is None and product_title is None:
-            return result
-        return dataclasses.replace(result, site_name=site_name, product_title=product_title)
+        # Unlike site_name/product_title, currency always resolves to a
+        # concrete value (CAD default) — no "both None, skip the replace"
+        # short-circuit possible here, dataclasses.replace always runs.
+        currency = _extract_currency(soup, url, jsonld_scripts)
+        return dataclasses.replace(
+            result, site_name=site_name, product_title=product_title, currency=currency
+        )

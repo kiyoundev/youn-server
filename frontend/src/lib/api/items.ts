@@ -12,6 +12,12 @@
 // watchlist/page.tsx's local Product/Listing interfaces.
 export type WatchStatus = "watching" | "triggered" | "paused" | "failed" | "processing";
 
+// Issue #45 — mirrors backend's Currency = Literal["USD","CAD","KRW"]
+// (schemas/product.py). Product-level, not per-Listing — a single product
+// never mixes currencies across its retailer listings (see
+// .plan/45-multi-currency-support/context.md).
+export type Currency = "USD" | "CAD" | "KRW";
+
 export interface Listing {
   id: number;
   retailer: string;
@@ -29,6 +35,10 @@ export interface Product {
   // first successful scrape's product_title, if the user left it blank.
   name: string | null;
   target_price: number;
+  // Nullable (issue #45) — NULL until process_item infers it from the
+  // first successful scrape, unless the user's already set it manually
+  // (manual override always wins over re-detection).
+  currency: Currency | null;
   alerted_at: string | null;
   status: WatchStatus;
   last_checked: string | null;
@@ -61,6 +71,9 @@ export interface ProductUpdatePayload {
   // are scraped while false), not settable per listing (see
   // ListingUpdatePayload).
   active?: boolean;
+  // Issue #45 — present-and-non-null always overwrites; manual override
+  // always wins over prior/future auto-detection from a scrape.
+  currency?: Currency;
 }
 
 export interface ListingUpdatePayload {
@@ -82,6 +95,16 @@ export interface ListingFailure {
 export interface ProductCreateResult {
   product: Product;
   failed: ListingFailure[];
+}
+
+// Matches backend's FxRatesResponse (schemas/fx.py). rates: e.g.
+// {"USD": 1.35, "KRW": 0.00098} — CAD is implicit 1.0, never a key here.
+// Read-only, served from a table refreshed daily server-side — this call
+// never touches the upstream FX source directly.
+export interface FxRates {
+  rates: Record<string, number>;
+  stale: boolean;
+  fetched_at: string | null;
 }
 
 // Thrown on any non-2xx response so callers can branch on status (e.g. 409
@@ -142,4 +165,11 @@ export function deleteProduct(productId: number): Promise<void> {
 
 export function deleteListing(productId: number, listingId: number): Promise<void> {
   return request<void>(`${BASE}/${productId}/listings/${listingId}`, { method: "DELETE" });
+}
+
+// Not under BASE ("/api/proxy/items") — the proxy is a generic [...path]
+// catch-all (route.ts), so "/api/proxy/fx-rates" relays straight to the
+// backend's GET /api/fx-rates with no new proxy code needed.
+export function getFxRates(): Promise<FxRates> {
+  return request<FxRates>("/api/proxy/fx-rates");
 }

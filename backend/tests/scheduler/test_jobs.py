@@ -5,7 +5,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.scheduler import jobs
+from app.services import scrape_tracking
+from app.services.scrape_tracking import in_flight_snapshot
 from app.services.scraper.result import ScraperResult
+
+
+@pytest.fixture(autouse=True)
+def reset_in_flight_tracking():
+    """Isolates every test in this file from scrape_tracking's module-level
+    global set — a test that fails mid-assertion (before process_item's own
+    finally would've run) could otherwise leak a marked listing id into the
+    next test."""
+    scrape_tracking._in_flight_listing_ids.clear()
+    yield
+    scrape_tracking._in_flight_listing_ids.clear()
 
 
 class _AsyncCM:
@@ -43,9 +56,12 @@ def _product(
     *,
     name="Item",
     target_price: float = 100.0,
+    currency: str | None = None,
     alerted_at: dt.datetime | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(id=product_id, name=name, target_price=target_price, alerted_at=alerted_at)
+    return SimpleNamespace(
+        id=product_id, name=name, target_price=target_price, currency=currency, alerted_at=alerted_at
+    )
 
 
 def _active_listings_result(listings: list[SimpleNamespace]) -> MagicMock:
@@ -322,6 +338,126 @@ async def test_process_item_does_not_overwrite_existing_product_name() -> None:
         await jobs.process_item(7, router, queue)
 
     assert product.name == "User's Own Name"
+
+
+@pytest.mark.asyncio
+async def test_process_item_fills_product_currency_when_null() -> None:
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, currency=None, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", currency="KRW"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert product.currency == "KRW"
+
+
+@pytest.mark.asyncio
+async def test_process_item_does_not_overwrite_existing_product_currency() -> None:
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, currency="USD", target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    router = MagicMock()
+    # A re-scrape inferring a different currency (e.g. a flaky page read)
+    # must never clobber a currency the user already has set/confirmed.
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok", currency="KRW"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert product.currency == "USD"
+
+
+@pytest.mark.asyncio
+async def test_process_item_marks_listing_in_flight_during_scrape() -> None:
+    """Issue #45 follow-up — a re-scrape of an already-scraped listing
+    previously had no "processing" signal at all (compute_status only knew
+    about last_scrape_status is None, i.e. never-scraped-since-creation).
+    Checked from inside the mocked scrape call itself, since that's the
+    only window where it should be true — by the time process_item returns,
+    it must be cleared again (asserted below)."""
+    listing = _listing(item_id=7, product_id=1)
+    product = _product(product_id=1, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+
+    seen_in_flight_during_scrape = False
+
+    async def fake_get_price(*args, **kwargs) -> ScraperResult:
+        nonlocal seen_in_flight_during_scrape
+        seen_in_flight_during_scrape = 7 in in_flight_snapshot()
+        return ScraperResult(price=90.0, status="ok")
+
+    router = MagicMock()
+    router.get_price = AsyncMock(side_effect=fake_get_price)
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert seen_in_flight_during_scrape is True
+    assert in_flight_snapshot() == set()
+
+
+@pytest.mark.asyncio
+async def test_process_item_clears_in_flight_even_when_scraper_raises() -> None:
+    """try/finally, not just the explicit oos/error/success returns — an
+    unexpected exception from the scraper itself must not leave a listing
+    permanently stuck showing "processing"."""
+    listing = _listing(item_id=7, product_id=1)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.execute = AsyncMock(side_effect=[_scalar_result(True)])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(side_effect=RuntimeError("scraper blew up"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        with pytest.raises(RuntimeError):
+            await jobs.process_item(7, router, queue)
+
+    assert in_flight_snapshot() == set()
+
+
+@pytest.mark.asyncio
+async def test_process_item_clears_in_flight_on_oos() -> None:
+    listing = _listing(item_id=7, product_id=1)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True)])
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status="oos"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert in_flight_snapshot() == set()
 
 
 @pytest.mark.asyncio

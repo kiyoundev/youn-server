@@ -315,7 +315,13 @@ class AmazonCAScraper(PatchrightScraper):
                     finally:
                         await page.close()
                     if price is not None:
-                        return ScraperResult(price=price, status="ok", product_title=title)
+                        # Issue #45 — amazon.ca is a fixed single site, and
+                        # this scraper never calls _run_hierarchy /
+                        # _extract_currency (own Playwright-locator price
+                        # extraction, never parses soup), so it needs its
+                        # own hardcoded currency same as its own title read
+                        # above.
+                        return ScraperResult(price=price, status="ok", product_title=title, currency="CAD")
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
             _log.warning("AmazonCAScraper exhausted retries for %s", url)

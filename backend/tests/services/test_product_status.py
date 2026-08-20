@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from app.services.product_status import compute_last_checked, compute_status
 
 
-def _listing(*, last_scrape_status: str | None = "ok") -> SimpleNamespace:
-    return SimpleNamespace(last_scrape_status=last_scrape_status)
+def _listing(*, last_scrape_status: str | None = "ok", id: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(last_scrape_status=last_scrape_status, id=id)
 
 
 def test_compute_status_product_inactive_is_paused() -> None:
@@ -72,6 +72,64 @@ def test_compute_status_paused_outranks_processing() -> None:
     listings = [_listing(last_scrape_status=None)]
 
     assert compute_status(listings, product_active=False, alerted_at=None) == "paused"
+
+
+# ---------------------------------------------------------------------------
+# in_flight_listing_ids (issue #45 follow-up) — a re-scrape of an
+# already-scraped listing (scheduled poll_prices, or a manual
+# POST /api/poll/prices) previously had no "processing" signal at all,
+# unlike a brand-new never-scraped listing.
+# ---------------------------------------------------------------------------
+
+def test_compute_status_in_flight_listing_is_processing() -> None:
+    listings = [_listing(last_scrape_status="ok", id=7)]
+
+    assert compute_status(listings, product_active=True, alerted_at=None, in_flight_listing_ids={7}) == "processing"
+
+
+def test_compute_status_in_flight_outranks_failed() -> None:
+    listings = [_listing(last_scrape_status="error", id=7)]
+
+    assert compute_status(listings, product_active=True, alerted_at=None, in_flight_listing_ids={7}) == "processing"
+
+
+def test_compute_status_in_flight_outranks_triggered() -> None:
+    listings = [_listing(last_scrape_status="ok", id=7)]
+
+    assert (
+        compute_status(
+            listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc), in_flight_listing_ids={7}
+        )
+        == "processing"
+    )
+
+
+def test_compute_status_paused_outranks_in_flight() -> None:
+    listings = [_listing(last_scrape_status="ok", id=7)]
+
+    assert compute_status(listings, product_active=False, alerted_at=None, in_flight_listing_ids={7}) == "paused"
+
+
+def test_compute_status_unrelated_in_flight_id_has_no_effect() -> None:
+    """A different listing (e.g. a sibling on another product) being
+    in-flight must not falsely mark this one as processing."""
+    listings = [_listing(last_scrape_status="ok", id=7)]
+
+    assert compute_status(listings, product_active=True, alerted_at=None, in_flight_listing_ids={999}) == "watching"
+
+
+def test_compute_status_empty_in_flight_set_never_touches_listing_id() -> None:
+    """Regression guard: the empty/None default must short-circuit before
+    ever reading listing.id — a bare SimpleNamespace(last_scrape_status=...)
+    with no id attribute (the shape every pre-#45 test here used) must not
+    raise."""
+    listing_without_id = SimpleNamespace(last_scrape_status="ok")
+
+    assert compute_status([listing_without_id], product_active=True, alerted_at=None) == "watching"
+    assert (
+        compute_status([listing_without_id], product_active=True, alerted_at=None, in_flight_listing_ids=set())
+        == "watching"
+    )
 
 
 def test_compute_last_checked_returns_stalest() -> None:

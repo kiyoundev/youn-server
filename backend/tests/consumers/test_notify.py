@@ -60,7 +60,7 @@ async def test_format_price_drop_uses_normal_priority():
     session = SimpleNamespace()
 
     async def _get(model, row_id):
-        return SimpleNamespace(id=row_id, name="Shoes", target_price=100.0)
+        return SimpleNamespace(id=row_id, name="Shoes", target_price=100.0, currency=None)
 
     session.get = _get
     event = SimpleNamespace(
@@ -78,10 +78,40 @@ async def test_format_price_drop_uses_normal_priority():
 
     assert title == "Price Drop: Shoes"
     assert "amazon_ca" in body
-    assert "89.99" in body
-    assert "100.00" in body
+    assert "$89.99" in body
+    assert "$100.00" in body
     assert url == "https://example.com/item"
     assert priority == notify._PRIORITY_NORMAL
+
+
+@pytest.mark.asyncio
+async def test_format_price_drop_uses_product_currency_not_hardcoded_dollar():
+    """Issue #45 follow-up — the notification body previously hardcoded
+    "$" regardless of product.currency (surfaced live: a KRW product's
+    push notification would have read "Now $388000.00", implying
+    ~$388k USD/CAD instead of ~₩388,000, off by ~1000x in perceived
+    value)."""
+    session = SimpleNamespace()
+
+    async def _get(model, row_id):
+        return SimpleNamespace(id=row_id, name="Endure Jacket", target_price=300000.0, currency="KRW")
+
+    session.get = _get
+    event = SimpleNamespace(
+        id=5,
+        payload={
+            "product_id": 11,
+            "listing_id": 22,
+            "retailer": "GOYOWEAR",
+            "price": 388000.0,
+            "url": "https://goyowear.kr/product/endure-jacket",
+        },
+    )
+
+    title, body, url, priority = await notify._format_price_drop(event, session)
+
+    assert body == "Now ₩388,000 at GOYOWEAR (target ₩300,000)"
+    assert "$" not in body
 
 
 @pytest.mark.asyncio

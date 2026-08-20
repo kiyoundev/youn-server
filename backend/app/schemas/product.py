@@ -1,10 +1,14 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
 from app.models.product import ProductStatus
 from app.schemas.listing import ListingResponse
 from app.schemas.validators import strip_name_or_none, validate_http_url
+
+# Issue #45 — ISO 4217 codes this app actually supports.
+Currency = Literal["USD", "CAD", "KRW"]
 
 
 class ProductCreate(BaseModel):
@@ -15,6 +19,10 @@ class ProductCreate(BaseModel):
     # directly, not just the relaxed frontend form, gets the same treatment.
     name: str | None = None
     target_price: float
+    # Optional at creation (issue #45) — usually left to auto-detect from
+    # the first successful scrape (see process_item, jobs.py); settable
+    # here for a caller who already knows it.
+    currency: Currency | None = None
     # Zero or more listing URLs, created in the same request as the product
     # (bulk, not chained) — auto-detect only, no per-URL retailer/scraper_type
     # override here (those live on ListingCreate, where they're meaningful
@@ -38,6 +46,9 @@ class ProductUpdate(BaseModel):
     name: str | None = None
     target_price: float | None = None
     active: bool | None = None
+    # Present-and-non-null always overwrites (issue #45) — manual override
+    # always wins over prior/future auto-detection from a scrape.
+    currency: Currency | None = None
 
     # Same coercion as ProductCreate.name (issue #44 review finding) — an
     # explicit "" via PATCH must also map to None, not stay "". Without this,
@@ -52,6 +63,7 @@ class ProductResponse(BaseModel):
     id: int
     name: str | None
     target_price: float
+    currency: Currency | None
     alerted_at: datetime | None
     status: ProductStatus
     last_checked: datetime | None

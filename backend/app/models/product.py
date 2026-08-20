@@ -24,6 +24,12 @@ class Product(Base):
     # real (even coincidentally short) user-provided name.
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     target_price: Mapped[float] = mapped_column(Float)
+    # Nullable (issue #45) — same fill-only-if-null pattern as `name`: set
+    # from the first successful scrape's inferred currency, unless the user
+    # has already set it manually via PATCH (manual override always wins).
+    # ISO 4217 code, app-constrained to Literal["USD","CAD","KRW"] at the
+    # Pydantic layer only, no DB CHECK constraint.
+    currency: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

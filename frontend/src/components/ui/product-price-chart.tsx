@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import {
   CartesianGrid,
   Line,
@@ -14,6 +15,7 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
+import { fmtPrice } from "@/lib/format";
 
 interface Listing {
   retailer: string;
@@ -23,6 +25,11 @@ interface Listing {
 interface ProductPriceChartProps {
   listings: Listing[];
   targetPrice?: number;
+  // Issue #45 — currency is product-level (one value for the whole chart,
+  // not per-listing/series) — fixes the tooltip's pre-existing missing-`$`
+  // bug as a side effect. Native currency, never FX-converted (see
+  // fmtPrice in lib/format.ts).
+  currency?: string | null;
   height?: number;
   className?: string;
 }
@@ -35,6 +42,7 @@ const seriesKey = (retailer: string) => retailer.replace(/[^a-zA-Z0-9_-]/g, "_")
 function ProductPriceChart({
   listings,
   targetPrice,
+  currency = null,
   height = 200,
   className,
 }: ProductPriceChartProps) {
@@ -108,6 +116,35 @@ function ProductPriceChart({
                   year: "numeric",
                 })
               }
+              // ChartTooltipContent's `formatter`, when supplied, replaces
+              // the *entire* row (indicator dot + name + value), not just
+              // the value text (see chart.tsx) — this mirrors its default
+              // "dot" indicator row exactly (the only indicator variant
+              // this chart ever uses), just with fmtPrice() for the value
+              // instead of a bare .toLocaleString() (issue #45 — fixes the
+              // tooltip's pre-existing missing-`$` bug).
+              formatter={(value, name, item) => {
+                const indicatorColor = item.payload?.fill ?? item.color;
+                return (
+                  <>
+                    <div
+                      className="h-2.5 w-2.5 shrink-0 rounded-[2px] border-(--color-border) bg-(--color-bg)"
+                      style={
+                        {
+                          "--color-bg": indicatorColor,
+                          "--color-border": indicatorColor,
+                        } as React.CSSProperties
+                      }
+                    />
+                    <div className="flex flex-1 items-center justify-between leading-none">
+                      <span className="text-muted-foreground">{name}</span>
+                      <span className="font-mono font-medium text-foreground tabular-nums">
+                        {fmtPrice(Number(value), currency)}
+                      </span>
+                    </div>
+                  </>
+                );
+              }}
             />
           }
         />

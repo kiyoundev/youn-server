@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ⬜ #45, ✅ #47, ✅ #48
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2486,7 +2486,7 @@ Surfaced live-testing `#41`'s "Processing" UI states — a `muddygeorge.com` add
 
 ---
 
-## [ ] Issue #45 — Multi-Currency Support (Detection, Display, Cross-Currency Comparison)
+## [x] Issue #45 — Multi-Currency Support (Detection, Display, Cross-Currency Comparison)
 
 **Type:** feat
 **Estimate:** ~5h
@@ -2506,16 +2506,42 @@ Concretely:
 
 ### Why (context)
 
-Surfaced live-testing `#41` — a `muddygeorge.com` (Korean retailer, prices in KRW) listing displayed its price as `$52` with no conversion or currency indication, and the price-history chart tooltip doesn't even show a currency symbol at all today. Scoped separately from `#44` (which also extends `ScraperResult` with inferred metadata) because the cross-currency comparison design — FX source, staleness handling, what currency alerts are expressed in — is a materially bigger decision than a display-name fallback, not just another field to infer.
+Surfaced live-testing `#41` — a `goyowear.kr` (Korean retailer, prices in KRW) listing displayed its price as a bare number with no conversion or currency indication, and the price-history chart tooltip doesn't even show a currency symbol at all today. (`muddygeorge.com`, also surfaced during that same session, is a Canadian/CAD retailer — not the KRW example; corrected here after being misattributed during initial write-up.) Scoped separately from `#44` (which also extends `ScraperResult` with inferred metadata) because the cross-currency comparison design — FX source, staleness handling, what currency alerts are expressed in — is a materially bigger decision than a display-name fallback, not just another field to infer.
+
+**Status (2026-08-20):** Done — see `.plan/45-multi-currency-support/`. Two rounds of scope
+revision via grill-me: (1) currency moved from per-`Listing` to per-`Product` — a single product
+never mixes currencies across its retailer listings, which removed the per-listing FX comparison
+this issue originally scoped for the alert path entirely; (2) FX conversion came back narrower —
+the watchlist header total sums *across products* (which can be mixed-currency), so that alone
+gets converted to CAD, while table rows/target price/alerts stay native-currency (so a price
+notification is legible as "the price changed," not entangled with FX movement). Detection
+priority also simplified from the original write-up: explicit metadata/symbol (`₩`/`원`/`US$`) →
+`.kr` TLD (not `.co.kr` — matches the real `goyowear.kr` regression case) → flat `CAD` default,
+after live-testing showed a TLD-based USD/CAD split was unreliable (`muddygeorge.com`, a real
+Canadian retailer, hosted on a plain `.com`). The sheet-panel manual currency override was built,
+then deliberately removed after review — real usage showed auto-detection alone was sufficient
+for every product actually watched; the `PATCH /api/items/{id}` API field it used stays in place
+as a still-reachable escape hatch, just not surfaced in the UI. Also fixed along the way: a real
+production incident (`api.frankfurter.app` migrated to `api.frankfurter.dev`, silently breaking
+every scheduled FX refresh via an unfollowed redirect), retailer-badge dedup, in-flight-scrape
+"processing" status tracking, PRICE_DROP notification currency-aware formatting, and a
+batched-draft Cancel/Save refactor of the sheet panel's name/target_price/active fields.
+`/code-reviewer:review` ran on the diff — 3 Major + 3 Minor findings, all fixed (most notably: a
+name-clear/Save false-success bug, and hoisting a redundant in-flight-set copy out of a
+list-response loop). Backend: 390 tests passing. Frontend: no automated tests (no test framework
+exists in this repo; judged not worth standing one up for 3 pure functions, a deliberate,
+discussed decision). Manual live verification: KRW display and the FX-converted header total
+both confirmed live (after the frankfurter.dev fix); sheet-panel CAD-equivalent display, currency
+override persistence, and the zero-listings edge case still unverified live, not blocking.
 
 ### Acceptance criteria
 
-- [ ] Listing prices display with the correct currency symbol (not hardcoded `$`) across the table, sheet panel, and chart tooltip
-- [ ] Currency auto-detected from the scraped page on first scrape, stored per-`Listing`
-- [ ] Sheet panel lets a user manually set/override a listing's currency; override always wins over re-detection
-- [ ] "Cheapest"/target-price alert comparison across listings in different currencies uses real FX conversion, not raw-number comparison
-- [ ] FX rate staleness/unavailability has a defined, non-silent fallback — never alerts (or fails to alert) based on a stale/missing rate without it being knowable from logs
-- [ ] Existing single-currency products (the common case today) are unaffected — no behavior change when every listing on a product shares one currency
+- [x] Listing prices display with the correct currency symbol (not hardcoded `$`) across the table, sheet panel, and chart tooltip
+- [x] Currency auto-detected from the scraped page on first scrape, stored per-`Product` (design change: per-`Listing` → per-`Product`, see Status above)
+- [x] Manual currency override always wins over re-detection (design change: API-only now, `PATCH /api/items/{id}` — the sheet-panel UI control was built then deliberately removed, see Status above)
+- [x] Cross-currency FX conversion where it's actually needed (design change: narrowed to the watchlist header total, which sums *across* mixed-currency products — the "cheapest"/alert comparison this criterion originally targeted turned out not to need FX at all once currency became product-level, since one product never mixes currencies across its own listings; see Status above)
+- [x] FX rate staleness/unavailability has a defined, non-silent fallback — never alerts (or fails to alert) based on a stale/missing rate without it being knowable from logs
+- [x] Existing single-currency products (the common case today) are unaffected — no behavior change when every listing on a product shares one currency
 
 ---
 

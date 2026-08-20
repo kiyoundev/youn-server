@@ -9,6 +9,8 @@ from app.models.event import Event
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
+from app.services.fx import refresh_fx_rates
+from app.services.scrape_tracking import clear_in_flight, mark_in_flight
 from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.router import RetailerRouter, _derive_retailer, _hostname_of
 from app.services.sse import broadcast
@@ -18,6 +20,7 @@ _log = logging.getLogger(__name__)
 
 _prices_lock = asyncio.Lock()
 _stocks_lock = asyncio.Lock()
+_fx_lock = asyncio.Lock()
 
 # Bounds how many of poll_prices's per-product listings scrape concurrently.
 # Same value as items.py's _FIRST_SCRAPE_CONCURRENCY (#41), deliberately a
@@ -105,6 +108,23 @@ async def poll_stocks(finnhub: FinnhubClient) -> None:
         _log.info("poll_stocks: cycle complete")
 
 
+async def refresh_fx_rates_job() -> None:
+    """Issue #45 — scheduled wrapper around services.fx.refresh_fx_rates,
+    opening its own session same as poll_prices/poll_stocks (the scheduler
+    doesn't hand jobs a session). Registered `"interval", hours=24,
+    next_run_time=datetime.now(_TZ)` in main.py's lifespan — fires
+    immediately at every boot, then every 24h from that boot time, not
+    anchored to midnight (matches poll_prices's existing registration, the
+    only other scheduled job in this codebase)."""
+    if _fx_lock.locked():
+        _log.warning("refresh_fx_rates_job: skipping — previous run still in progress")
+        return
+
+    async with _fx_lock:
+        async with AsyncSessionLocal() as session:
+            await refresh_fx_rates(session)
+
+
 async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
     async with AsyncSessionLocal() as session:
         listing = await session.get(Listing, item_id)
@@ -125,117 +145,140 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         if product_active is not True:
             return
 
-        scrape = await router.get_price(listing.url, scraper_type=listing.scraper_type)
+        # Marked in flight (issue #45 follow-up) from right before the scrape
+        # itself through every exit path below (try/finally, not just the
+        # explicit returns — an unexpected exception anywhere in here must
+        # still clear it, or this listing would show "processing" forever).
+        # compute_status() checks this so a re-scrape of an already-scraped
+        # listing (scheduled poll_prices, or a manual POST /api/poll/prices)
+        # shows "processing" too — previously only "never scraped since
+        # creation" (last_scrape_status is None) had any processing signal
+        # at all, so re-scraping an existing listing looked identical to
+        # doing nothing until the new result landed.
+        mark_in_flight(listing.id)
+        try:
+            scrape = await router.get_price(listing.url, scraper_type=listing.scraper_type)
 
-        if scrape.status == "oos":
-            _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
-            listing.last_scrape_status = "oos"
-            await session.commit()
-            return
+            if scrape.status == "oos":
+                _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
+                listing.last_scrape_status = "oos"
+                await session.commit()
+                return
 
-        if scrape.status == "error":
-            _log.warning("scraper error for listing %d (%s)", listing.id, listing.retailer)
-            listing.last_scrape_status = "error"
-            await session.commit()
-            return
+            if scrape.status == "error":
+                _log.warning("scraper error for listing %d (%s)", listing.id, listing.retailer)
+                listing.last_scrape_status = "error"
+                await session.commit()
+                return
 
-        if scrape.price is None:
-            _log.warning(
-                "scraper returned ok with None price for listing %d (%s), skipping",
-                listing.id,
-                listing.retailer,
-            )
-            return
+            if scrape.price is None:
+                _log.warning(
+                    "scraper returned ok with None price for listing %d (%s), skipping",
+                    listing.id,
+                    listing.retailer,
+                )
+                return
 
-        now = datetime.now(timezone.utc)
-        session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
-        listing.last_price = scrape.price
-        listing.last_scrape_status = "ok"
+            now = datetime.now(timezone.utc)
+            session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
+            listing.last_price = scrape.price
+            listing.last_scrape_status = "ok"
 
-        # Retailer-name inference (issue #44) — guarded: only overwrite while
-        # listing.retailer still equals what _derive_retailer(hostname) would
-        # produce right now, i.e. untouched since creation. A user's manual
-        # edit (PATCH .../listings/{id}) no longer matches that deterministic
-        # fallback, so it's left alone — this is what stops a scheduled poll
-        # 6h later from silently stomping it. Doesn't need `product` at all,
-        # so it happens here rather than at the locked read below.
-        if scrape.site_name:
-            hostname = _hostname_of(listing.url)
-            if listing.retailer == _derive_retailer(hostname):
-                listing.retailer = scrape.site_name
+            # Retailer-name inference (issue #44) — guarded: only overwrite while
+            # listing.retailer still equals what _derive_retailer(hostname) would
+            # produce right now, i.e. untouched since creation. A user's manual
+            # edit (PATCH .../listings/{id}) no longer matches that deterministic
+            # fallback, so it's left alone — this is what stops a scheduled poll
+            # 6h later from silently stomping it. Doesn't need `product` at all,
+            # so it happens here rather than at the locked read below.
+            if scrape.site_name:
+                hostname = _hostname_of(listing.url)
+                if listing.retailer == _derive_retailer(hostname):
+                    listing.retailer = scrape.site_name
 
-        # Locked read (issue #48) — two listings of the same product scraped
-        # concurrently (see _poll_concurrency_semaphore / #41's own
-        # concurrent add-time dispatch) each open their own session here.
-        # Without the lock, both could read alerted_at as None before either
-        # commits, and both fire — a double alert for one price drop. Postgres
-        # blocks the second transaction at this line until the first commits,
-        # so the second one's read below is guaranteed fresh, not raced.
-        # Acquired after the scrape (network I/O) already completed, so this
-        # only serializes the short tail (this read through the commit
-        # below), not the slow part #48's concurrency exists to speed up.
-        product = (
-            await session.execute(select(Product).where(Product.id == listing.product_id).with_for_update())
-        ).scalar_one()
+            # Locked read (issue #48) — two listings of the same product scraped
+            # concurrently (see _poll_concurrency_semaphore / #41's own
+            # concurrent add-time dispatch) each open their own session here.
+            # Without the lock, both could read alerted_at as None before either
+            # commits, and both fire — a double alert for one price drop. Postgres
+            # blocks the second transaction at this line until the first commits,
+            # so the second one's read below is guaranteed fresh, not raced.
+            # Acquired after the scrape (network I/O) already completed, so this
+            # only serializes the short tail (this read through the commit
+            # below), not the slow part #48's concurrency exists to speed up.
+            product = (
+                await session.execute(select(Product).where(Product.id == listing.product_id).with_for_update())
+            ).scalar_one()
 
-        # Product-name inference (issue #44) — guarded: only while still
-        # NULL (the user left it blank at creation and nothing has filled it
-        # yet). Piggybacks on the locked read just above rather than a
-        # separate query — this fill isn't itself race-sensitive, but the
-        # row's already open here for #48's alert-dedup fix, so no reason to
-        # pay for a second fetch.
-        if scrape.product_title and product.name is None:
-            product.name = scrape.product_title
+            # Product-name inference (issue #44) — guarded: only while still
+            # NULL (the user left it blank at creation and nothing has filled it
+            # yet). Piggybacks on the locked read just above rather than a
+            # separate query — this fill isn't itself race-sensitive, but the
+            # row's already open here for #48's alert-dedup fix, so no reason to
+            # pay for a second fetch.
+            if scrape.product_title and product.name is None:
+                product.name = scrape.product_title
 
-        product_listings_result = await session.execute(select(Listing).where(Listing.product_id == product.id))
-        product_listings = list(product_listings_result.scalars().all())
-        # Only listings confirmed available ("ok") are eligible — an "oos"
-        # listing's last_price is frozen at whatever it was before it
-        # disappeared, and letting that stale price win the comparison would
-        # make it permanently block future alerts (it can never be beaten,
-        # so alerted_at would never clear even after it recovers elsewhere).
-        # The just-scraped `listing` is always "ok" here, so this is never empty.
-        available_listings = [l for l in product_listings if l.last_price is not None and l.last_scrape_status == "ok"]
-        winning = min(available_listings, key=lambda l: l.last_price)
-        cheapest = winning.last_price
+            # Currency inference (issue #45) — same guard as product-name
+            # inference just above, same locked row, no extra query. In
+            # practice this fires on a product's first successful scrape:
+            # _extract_currency always resolves to a concrete value (CAD
+            # default) rather than None, so scrape.currency is truthy on
+            # essentially every status="ok" scrape reaching this point.
+            if scrape.currency and product.currency is None:
+                product.currency = scrape.currency
 
-        if cheapest <= product.target_price and product.alerted_at is None:
-            event = Event(
-                type="PRICE_DROP",
-                payload={
-                    "product_id": product.id,
-                    "listing_id": winning.id,
-                    "retailer": winning.retailer,
-                    "price": cheapest,
-                    "url": winning.url,
-                },
-                status="pending",
-            )
-            session.add(event)
-            product.alerted_at = now
-            await session.commit()
-            await queue.put(event.id)
-            _log.info(
-                "PRICE_DROP: product %d (%s) @ %.2f (target %.2f) via %s",
-                product.id,
-                product.name,
-                cheapest,
-                product.target_price,
-                winning.retailer,
-            )
-        elif cheapest > product.target_price and product.alerted_at is not None:
-            product.alerted_at = None
-            await session.commit()
-            _log.info("product %d (%s) re-armed (price recovered)", product.id, product.name)
-        else:
-            await session.commit()
+            product_listings_result = await session.execute(select(Listing).where(Listing.product_id == product.id))
+            product_listings = list(product_listings_result.scalars().all())
+            # Only listings confirmed available ("ok") are eligible — an "oos"
+            # listing's last_price is frozen at whatever it was before it
+            # disappeared, and letting that stale price win the comparison would
+            # make it permanently block future alerts (it can never be beaten,
+            # so alerted_at would never clear even after it recovers elsewhere).
+            # The just-scraped `listing` is always "ok" here, so this is never empty.
+            available_listings = [l for l in product_listings if l.last_price is not None and l.last_scrape_status == "ok"]
+            winning = min(available_listings, key=lambda l: l.last_price)
+            cheapest = winning.last_price
 
-        # Unconditional — fires on every successful scrape regardless of price
-        # change, as a sibling to the alert-only Event/queue write above, not
-        # a consumer of it. Placed after all three commit branches (not right
-        # after the PriceHistory insert) so the broadcast never fires ahead of
-        # the transaction that's supposed to have already persisted it.
-        broadcast({"product_id": product.id, "listing_id": listing.id})
+            if cheapest <= product.target_price and product.alerted_at is None:
+                event = Event(
+                    type="PRICE_DROP",
+                    payload={
+                        "product_id": product.id,
+                        "listing_id": winning.id,
+                        "retailer": winning.retailer,
+                        "price": cheapest,
+                        "url": winning.url,
+                    },
+                    status="pending",
+                )
+                session.add(event)
+                product.alerted_at = now
+                await session.commit()
+                await queue.put(event.id)
+                _log.info(
+                    "PRICE_DROP: product %d (%s) @ %.2f (target %.2f) via %s",
+                    product.id,
+                    product.name,
+                    cheapest,
+                    product.target_price,
+                    winning.retailer,
+                )
+            elif cheapest > product.target_price and product.alerted_at is not None:
+                product.alerted_at = None
+                await session.commit()
+                _log.info("product %d (%s) re-armed (price recovered)", product.id, product.name)
+            else:
+                await session.commit()
+
+            # Unconditional — fires on every successful scrape regardless of price
+            # change, as a sibling to the alert-only Event/queue write above, not
+            # a consumer of it. Placed after all three commit branches (not right
+            # after the PriceHistory insert) so the broadcast never fires ahead of
+            # the transaction that's supposed to have already persisted it.
+            broadcast({"product_id": product.id, "listing_id": listing.id})
+        finally:
+            clear_in_flight(listing.id)
 
 
 async def _bounded_process_item(listing_id: int, semaphore: asyncio.Semaphore, queue: asyncio.Queue) -> None:

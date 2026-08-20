@@ -4,6 +4,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str
 
+    # Root logging level — "INFO" by default (today's behavior: request
+    # access logs + WARNING+ app logs, no per-attempt scraper detail).
+    # Set "DEBUG" to see e.g. AmazonCAScraper's per-retry exception
+    # (patchright_scraper.py), currently only logged at debug level and
+    # invisible otherwise.
+    log_level: str = "INFO"
+
     api_key: str = ""
     cors_origins: str = "http://localhost:3000"
 

@@ -9,17 +9,21 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api import analysis, events, health, items, poll, stock_alerts, system
+from app.api import analysis, events, fx, health, items, poll, stock_alerts, system
 from app.consumers import dispatcher
 from app.core.auth import verify_api_key
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.models.event import Event
-from app.scheduler.jobs import poll_prices
+from app.scheduler.jobs import poll_prices, refresh_fx_rates_job
 from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.stocks import FinnhubClient
 from app.services.synology import synology_client
 
+logging.basicConfig(
+    level=settings.log_level.upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 _log = logging.getLogger(__name__)
 _TZ = ZoneInfo("America/Toronto")
 
@@ -46,6 +50,15 @@ async def lifespan(app: FastAPI):
         "interval",
         hours=6,
         args=[queue],
+        next_run_time=datetime.now(_TZ),
+    )
+    # Issue #45 — same "interval" + immediate next_run_time pattern as
+    # poll_prices above: fires once at boot, then every 24h from that boot
+    # time, not anchored to midnight (see jobs.refresh_fx_rates_job).
+    scheduler.add_job(
+        refresh_fx_rates_job,
+        "interval",
+        hours=24,
         next_run_time=datetime.now(_TZ),
     )
     scheduler.start()
@@ -84,3 +97,4 @@ app.include_router(stock_alerts.router, dependencies=[Depends(verify_api_key)])
 app.include_router(poll.router, dependencies=[Depends(verify_api_key)])
 app.include_router(analysis.router, dependencies=[Depends(verify_api_key)])
 app.include_router(system.router, dependencies=[Depends(verify_api_key)])
+app.include_router(fx.router, dependencies=[Depends(verify_api_key)])

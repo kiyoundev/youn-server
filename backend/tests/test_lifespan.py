@@ -54,13 +54,20 @@ async def test_lifespan_starts_and_stops_scheduler_and_finnhub() -> None:
             scheduler_cls.assert_called_once()
             dispatcher_run.assert_awaited_once_with(app.state.event_queue)
 
-            assert scheduler.add_job.call_count == 1
-            (poll_prices_call,) = scheduler.add_job.call_args_list
+            assert scheduler.add_job.call_count == 2
+            poll_prices_call, fx_call = scheduler.add_job.call_args_list
 
             assert poll_prices_call.args[1] == "interval"
             assert poll_prices_call.kwargs["hours"] == 6
             assert poll_prices_call.kwargs["args"] == [app.state.event_queue]
             assert "next_run_time" in poll_prices_call.kwargs
+
+            # Issue #45 — refresh_fx_rates_job, same "interval" + immediate
+            # next_run_time pattern as poll_prices, just a 24h period and no
+            # args (it takes none).
+            assert fx_call.args[1] == "interval"
+            assert fx_call.kwargs["hours"] == 24
+            assert "next_run_time" in fx_call.kwargs
 
     scheduler.shutdown.assert_called_once_with(wait=False)
     finnhub.stop.assert_awaited_once()

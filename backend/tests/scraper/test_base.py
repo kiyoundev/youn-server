@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from app.services.scraper.base import (
     BaseScraper,
+    _extract_currency,
     _extract_product_title,
     _extract_site_name,
     _first_title_segment,
@@ -287,34 +288,34 @@ async def test_run_hierarchy_shopify_wins(s: DummyScraper) -> None:
     )
     html = _jsonld_page({"@type": "Product", "offers": {"price": "999.00"}})
     result = await s._run_hierarchy(html, "https://deadstock.ca/products/widget")
-    assert result == ScraperResult(price=129.0, status="ok")
+    assert result == ScraperResult(price=129.0, status="ok", currency="CAD")
 
 
 @pytest.mark.asyncio
 async def test_run_hierarchy_fallthrough_to_error(s: DummyScraper) -> None:
     result = await s._run_hierarchy("<html><body>nothing</body></html>", "https://example.com/product")
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(price=None, status="error", currency="CAD")
 
 
 @pytest.mark.asyncio
 async def test_run_hierarchy_jsonld_wins(s: DummyScraper) -> None:
     html = _jsonld_page({"@type": "Product", "offers": {"price": "89.99"}})
     result = await s._run_hierarchy(html, "https://bestbuy.ca/en-ca/product/12345")
-    assert result == ScraperResult(price=89.99, status="ok")
+    assert result == ScraperResult(price=89.99, status="ok", currency="CAD")
 
 
 @pytest.mark.asyncio
 async def test_run_hierarchy_og_wins(s: DummyScraper) -> None:
     html = '<html><head><meta property="og:price:amount" content="49.99"></head></html>'
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
-    assert result == ScraperResult(price=49.99, status="ok")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
 
 
 @pytest.mark.asyncio
 async def test_run_hierarchy_nextdata_wins(s: DummyScraper) -> None:
     html = _nextdata_page({"props": {"pageProps": {"product": {"price": 299.0}}}})
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
-    assert result == ScraperResult(price=299.0, status="ok")
+    assert result == ScraperResult(price=299.0, status="ok", currency="CAD")
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +330,7 @@ async def test_http_scraper_jsonld_page() -> None:
         return_value=httpx.Response(200, text=page_html)
     )
     result = await HTTPScraper().get_price("https://bestbuy.ca/en-ca/product/12345")
-    assert result == ScraperResult(price=89.99, status="ok")
+    assert result == ScraperResult(price=89.99, status="ok", currency="CAD")
 
 
 @pytest.mark.asyncio
@@ -448,6 +449,64 @@ def test_extract_product_title_no_signal_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _extract_currency (issue #45)
+# ---------------------------------------------------------------------------
+
+def test_extract_currency_og_price_currency_meta() -> None:
+    html = '<html><head><meta property="og:price:currency" content="USD"></head></html>'
+    assert _extract_currency(_soup(html), "https://example.com/item") == "USD"
+
+
+def test_extract_currency_jsonld_price_currency() -> None:
+    html = _jsonld_page({"@type": "Product", "offers": {"price": "52.00", "priceCurrency": "KRW"}})
+    assert _extract_currency(_soup(html), "https://example.com/item") == "KRW"
+
+
+def test_extract_currency_unsupported_jsonld_code_falls_through_to_default() -> None:
+    html = _jsonld_page({"@type": "Product", "offers": {"price": "52.00", "priceCurrency": "EUR"}})
+    assert _extract_currency(_soup(html), "https://example.com/item") == "CAD"
+
+
+def test_extract_currency_won_symbol() -> None:
+    html = "<html><body>Price: ₩52,000</body></html>"
+    assert _extract_currency(_soup(html), "https://example.com/item") == "KRW"
+
+
+def test_extract_currency_won_word() -> None:
+    html = "<html><body>가격: 52,000원</body></html>"
+    assert _extract_currency(_soup(html), "https://example.com/item") == "KRW"
+
+
+def test_extract_currency_us_dollar_marker() -> None:
+    html = "<html><body>Price: US$52.00</body></html>"
+    assert _extract_currency(_soup(html), "https://example.com/item") == "USD"
+
+
+def test_extract_currency_kr_tld_with_no_page_signal() -> None:
+    # The real goyowear.kr case: no priceCurrency, no symbol, just a bare
+    # number — TLD is the only signal left.
+    html = "<html><body>388000</body></html>"
+    assert _extract_currency(_soup(html), "https://goyowear.kr/product/endure-jacket") == "KRW"
+
+
+def test_extract_currency_bare_dollar_defaults_to_cad_regardless_of_tld() -> None:
+    # muddygeorge.com is a real Canadian retailer on a plain .com domain —
+    # TLD must NOT push this to USD.
+    html = "<html><body>Price: $52.00</body></html>"
+    assert _extract_currency(_soup(html), "https://muddygeorge.com/products/cayl-cap") == "CAD"
+
+
+def test_extract_currency_no_signal_at_all_defaults_to_cad() -> None:
+    html = "<html><body>nothing</body></html>"
+    assert _extract_currency(_soup(html), "https://example.com/product") == "CAD"
+
+
+def test_extract_currency_metadata_wins_over_kr_tld() -> None:
+    html = '<html><head><meta property="og:price:currency" content="USD"></head></html>'
+    assert _extract_currency(_soup(html), "https://example.kr/product") == "USD"
+
+
+# ---------------------------------------------------------------------------
 # _run_hierarchy attaches site_name/product_title independently of which
 # price method wins (issue #44)
 # ---------------------------------------------------------------------------
@@ -462,7 +521,7 @@ async def test_run_hierarchy_attaches_name_metadata_alongside_jsonld_price() -> 
     )
     s = DummyScraper()
     result = await s._run_hierarchy(html, "https://muddygeorge.com/products/cayl-cap")
-    assert result == ScraperResult(price=52.0, status="ok", site_name="Muddy George", product_title="Cayl Cap Black")
+    assert result == ScraperResult(price=52.0, status="ok", site_name="Muddy George", product_title="Cayl Cap Black", currency="CAD")
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.event import Event
 from app.models.product import Product
+from app.services.format import format_price
 from app.services.notifications import send_alert
 
 _log = logging.getLogger(__name__)
@@ -34,7 +35,13 @@ async def _format_price_drop(
             f"Product {payload['product_id']} not found for event {event.id}"
         )
     title = f"Price Drop: {product.name}"
-    body = f"Now ${payload['price']:.2f} at {payload['retailer']} (target ${product.target_price:.2f})"
+    # Native currency (issue #45), not FX-converted — same "no FX in the
+    # alert path" contract as the trigger comparison itself
+    # (process_item's cheapest <= product.target_price, both already in
+    # product.currency, no conversion).
+    price = format_price(payload["price"], product.currency)
+    target = format_price(product.target_price, product.currency)
+    body = f"Now {price} at {payload['retailer']} (target {target})"
     url: str | None = payload.get("url")
     return title, body, url, _PRIORITY_NORMAL
 

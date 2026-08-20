@@ -11,17 +11,19 @@ import { Switch } from "@/components/ui/switch";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ExternalLink, LoaderCircle, MoreVertical, Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { ExternalLink, LoaderCircle, MoreVertical, Plus, Search, Pencil, Trash2, ClockAlert } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 import { cn } from "@/lib/utils";
 import { useNavSlot } from "@/components/nav-slot";
 import { useListingHistory, bucketByLocalDay, listingHistoryKey } from "@/lib/hooks/use-listing-history";
 import { subscribeToListingEvents, type ConnectionStatus } from "@/lib/sse-leader";
+import { fmtPrice, fmtCadEquivalent, toCad } from "@/lib/format";
 import {
   createProduct,
   createListing,
@@ -30,9 +32,11 @@ import {
   deleteListing,
   deleteProduct,
   ApiError,
+  getFxRates,
   type Product,
   type Listing,
   type WatchStatus,
+  type FxRates,
 } from "@/lib/api/items";
 import { toast } from "@/lib/toast";
 
@@ -73,6 +77,26 @@ const STATUS_BADGE: Record<
   processing: { label: "Processing", variant: "outline" },
 };
 
+// Mirrors backend's compute_status() priority order (product_status.py) —
+// exists so the sheet-panel badge can reflect the draft active toggle
+// immediately, before Save persists it (found live: flipping the switch
+// updated the switch itself but not the badge next to it, since the badge
+// was reading product.status, real server truth, with no draft-awareness
+// at all). Can't replicate compute_status()'s in-flight-scrape signal
+// (scrape_tracking.py — process-local, backend-only, no field on the
+// frontend Product type to read) — toggling mid-scrape may show a stale
+// non-"processing" state for a moment until the next refetch, same
+// tradeoff every other draft field here already accepts. Only used for
+// this one preview; the table row's own badge stays on product.status
+// (real truth) unconditionally.
+function draftStatus(product: Product, active: boolean): WatchStatus {
+  if (!active) return "paused";
+  if (product.listings.some((l) => l.last_scrape_status === null)) return "processing";
+  if (product.listings.some((l) => l.last_scrape_status === "error")) return "failed";
+  if (product.alerted_at !== null) return "triggered";
+  return "watching";
+}
+
 const formatLastChecked = (iso: string | null) => {
   if (!iso) return "—";
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -86,6 +110,17 @@ const formatLastChecked = (iso: string | null) => {
 
 function fmtValue(value: number) {
   return `$${Math.round(value).toLocaleString("en-US")}`;
+}
+
+// Issue #45 — reused next to the header total and inside the sheet panel
+// wherever a CAD-converted figure is shown; title gives a hover
+// explanation (native tooltip, no new UI dependency for a single icon).
+function StaleFxIcon() {
+  return (
+    <span title="FX rate may be out of date — showing the last known rate" aria-label="FX rate may be stale">
+      <ClockAlert className="size-3.5 text-muted-foreground" aria-hidden="true" />
+    </span>
+  );
 }
 
 const emptyNewItem = { name: "", targetPrice: "", urls: "" };
@@ -104,19 +139,18 @@ const isValidUrl = (value: string) => {
   }
 };
 
-// Which single field in the currently-open sheet is being edited, if any —
-// modeled as one state so switching modes always replaces the whole thing
-// rather than relying on every handler to reset every other flag by hand.
-type SheetEditState =
-  | { type: "none" }
-  | { type: "name"; draft: string }
-  | { type: "targetPrice"; draft: string }
-  | { type: "listing"; id: number; draft: string }
-  | { type: "addingListing"; draft: string };
+// Which single retailer listing in the currently-open sheet is being
+// edited, if any — modeled as one state so switching modes always replaces
+// the whole thing rather than relying on every handler to reset every
+// other flag by hand. Only retailer add/edit stays on this immediate-
+// commit pattern (issue #45 follow-up) — those have real side effects (a
+// scrape dispatch, cascading price-history deletion on remove) a Cancel
+// can't honestly undo the way a plain text-field revert can. Product-level
+// fields (name/target_price/active) moved to the batched ProductDraft
+// below instead, mirroring market/[ticker]/page.tsx's AlertDraft pattern.
+type SheetEditState = { type: "none" } | { type: "listing"; id: number; draft: string } | { type: "addingListing"; draft: string };
 
 type SheetEditAction =
-  | { type: "editName"; name: string }
-  | { type: "editTargetPrice"; targetPrice: number }
   | { type: "editListing"; id: number; url: string }
   | { type: "addListing" }
   | { type: "setDraft"; draft: string }
@@ -124,10 +158,6 @@ type SheetEditAction =
 
 function sheetEditReducer(state: SheetEditState, action: SheetEditAction): SheetEditState {
   switch (action.type) {
-    case "editName":
-      return { type: "name", draft: action.name };
-    case "editTargetPrice":
-      return { type: "targetPrice", draft: String(action.targetPrice) };
     case "editListing":
       return { type: "listing", id: action.id, draft: action.url };
     case "addListing":
@@ -136,6 +166,70 @@ function sheetEditReducer(state: SheetEditState, action: SheetEditAction): Sheet
       return state.type === "none" ? state : { ...state, draft: action.draft };
     case "cancel":
       return { type: "none" };
+  }
+}
+
+// Product-level batched edit draft (name/target_price/active) — mirrors
+// market/[ticker]/page.tsx's AlertDraft/isSectionDirty/saveSection
+// pattern exactly: nothing here reaches the network on its own; only the
+// sheet-level Save diffs it against the real product and fires one PATCH
+// with just the changed fields.
+type ProductDraft = {
+  name: string;
+  target_price: string;
+  active: boolean;
+};
+
+function draftFromProduct(product: Product): ProductDraft {
+  return {
+    name: product.name ?? "",
+    target_price: String(product.target_price),
+    // No raw `active` field on the frontend Product type (compute_status
+    // folds it into `status` server-side) — derived the same way the
+    // pre-batch Switch's `checked` prop already was.
+    active: product.status !== "paused",
+  };
+}
+
+// Same guard the pre-batch per-field-commit code applied before every
+// mutation (`if (!(target_price > 0)) return;`) — reinstated here so a
+// bad/empty string can't register as "dirty" or reach updateProduct as NaN.
+function parseValidPrice(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const price = Number(raw);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function isProductDirty(product: Product, draft: ProductDraft): boolean {
+  const trimmedName = draft.name.trim();
+  const price = parseValidPrice(draft.target_price);
+  // Truthy-gated, matching saveProduct's own guard below — an emptied
+  // name never actually gets sent (same "can't clear via this path"
+  // behavior the old immediate-commit code already had), so it must not
+  // register as dirty either. Without this, Save could enable, "succeed,"
+  // and close the sheet having silently sent nothing at all.
+  const nameChanged = trimmedName !== "" && trimmedName !== (product.name ?? "");
+  const priceChanged = price !== null && price !== product.target_price;
+  const activeChanged = draft.active !== (product.status !== "paused");
+  return nameChanged || priceChanged || activeChanged;
+}
+
+// Fires one updateProduct call with only the fields that actually changed —
+// same diff-against-real-state shape as market/[ticker]/page.tsx's
+// saveSection(). Caller (handleSave) only invokes this when isProductDirty
+// already returned true, so "nothing to send" isn't a case reachable here
+// in practice, but the empty-payload guard stays anyway — cheap, and
+// avoids a no-op network call if that ever changes.
+async function saveProduct(product: Product, draft: ProductDraft) {
+  const payload: Parameters<typeof updateProduct>[1] = {};
+  const trimmedName = draft.name.trim();
+  if (trimmedName && trimmedName !== (product.name ?? "")) payload.name = trimmedName;
+  const price = parseValidPrice(draft.target_price);
+  if (price !== null && price !== product.target_price) payload.target_price = price;
+  const activeChanged = draft.active !== (product.status !== "paused");
+  if (activeChanged) payload.active = draft.active;
+  if (Object.keys(payload).length > 0) {
+    await updateProduct(product.id, payload);
   }
 }
 
@@ -161,6 +255,8 @@ function ProductRow({
   editState,
   dispatchEdit,
   chartReady,
+  fxRates,
+  fxStale,
 }: {
   product: Product;
   openId: number | null;
@@ -168,6 +264,12 @@ function ProductRow({
   editState: SheetEditState;
   dispatchEdit: (action: SheetEditAction) => void;
   chartReady: boolean;
+  // Issue #45 — {} before the first successful FX refresh (bootstrap
+  // case), not undefined/loading-gated — toCad()/fmtCadEquivalent()
+  // already handle a missing rate by returning null, so the sheet panel
+  // just quietly shows no CAD-equivalent suffix until rates land.
+  fxRates: Record<string, number>;
+  fxStale: boolean;
 }) {
   // Mounted unconditionally with the row (not gated by the sheet being
   // open), so history is already warm by the time this row's sheet opens —
@@ -178,6 +280,62 @@ function ProductRow({
   const handleHistoryData = useCallback((listingId: number, points: HistoryPoint[]) => {
     setHistoryByListing((prev) => ({ ...prev, [listingId]: points }));
   }, []);
+
+  // Batched name/target_price/active edit draft (issue #45 follow-up).
+  // Reset to current server truth only when this row's sheet opens — not
+  // every time the underlying SWR poll refreshes while it's open, or an
+  // in-progress edit would get silently blown away mid-session (same
+  // reasoning as market/[ticker]/page.tsx's identical effect).
+  const isSheetOpen = openId === product.id;
+  const [draft, setDraft] = useState<ProductDraft>(() => draftFromProduct(product));
+  const [isSaving, setIsSaving] = useState(false);
+  // Display-vs-edit toggle per field, same look as before batching — the
+  // draft/Save/Cancel machinery underneath doesn't care which way the
+  // display works; typing into either just writes to `draft`, never
+  // commits on its own. Separate booleans, not folded into the
+  // SheetEditState reducer above — that one's scoped to retailers only.
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isEditingTargetPrice, setIsEditingTargetPrice] = useState(false);
+  // Retailer add/edit/delete stay immediate/separate (see SheetEditState
+  // above) — they've already persisted the moment they happen, so Save
+  // has nothing further to do for them. This just tracks "did anything
+  // happen in this sheet session" so the Save button also enables as a
+  // way to acknowledge/close out after retailer-only changes, not just
+  // scalar-field edits.
+  const [hasRetailerActivity, setHasRetailerActivity] = useState(false);
+  useEffect(() => {
+    if (isSheetOpen) {
+      setDraft(draftFromProduct(product));
+    } else {
+      setIsEditingName(false);
+      setIsEditingTargetPrice(false);
+      setHasRetailerActivity(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSheetOpen]);
+  const dirty = isProductDirty(product, draft) || hasRetailerActivity;
+
+  const handleCancelEdits = () => {
+    setDraft(draftFromProduct(product));
+    setIsEditingName(false);
+    setIsEditingTargetPrice(false);
+    setHasRetailerActivity(false);
+    setOpenId(null);
+  };
+
+  const handleSaveEdits = async () => {
+    setIsSaving(true);
+    try {
+      await saveProduct(product, draft);
+      await mutate("/api/proxy/items");
+      toast.success("Updated");
+      setOpenId(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.detail : "Failed to save changes");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleDeleteProduct = async () => {
     try {
@@ -193,6 +351,10 @@ function ProductRow({
   };
 
   const status = STATUS_BADGE[product.status];
+  // Sheet-panel-only badge preview, draft-aware (see draftStatus above) —
+  // the table row's own badge above stays on `status`/product.status
+  // unconditionally, real server truth only.
+  const sheetStatus = STATUS_BADGE[draftStatus(product, draft.active)];
   const best = bestPrice(product);
   const sparklineData = mergeMinByDay(product.listings, historyByListing);
   // Chart wants per-retailer series, unmerged — same underlying per-listing
@@ -212,9 +374,14 @@ function ProductRow({
           <TableCell className="font-medium">{product.name ?? "Untitled"}</TableCell>
           <TableCell>
             <div className="flex gap-1">
-              {product.listings.map((listing) => (
-                <Badge key={listing.id} variant="outline">
-                  {listing.retailer}
+              {/* Dedup by retailer text (issue #45 follow-up) — two
+                  listings on one product can share the same retailer
+                  (different URLs, same site; Listing.url is unique but
+                  retailer isn't), which would otherwise render two
+                  identical badges. */}
+              {Array.from(new Set(product.listings.map((listing) => listing.retailer))).map((retailer) => (
+                <Badge key={retailer} variant="outline">
+                  {retailer}
                 </Badge>
               ))}
             </div>
@@ -223,19 +390,17 @@ function ProductRow({
             {product.status === "processing" ? (
               <LoaderCircle className="size-4 animate-spin text-muted-foreground" aria-label="Processing" />
             ) : best !== null ? (
-              `$${best.toFixed(2)}`
+              fmtPrice(best, product.currency)
             ) : (
               "—"
             )}
           </TableCell>
-          <TableCell>${product.target_price.toFixed(2)}</TableCell>
+          <TableCell>{fmtPrice(product.target_price, product.currency)}</TableCell>
           <TableCell>
             <Badge variant={status.variant}>{status.label}</Badge>
           </TableCell>
           <TableCell>{product.status === "processing" ? "" : formatLastChecked(product.last_checked)}</TableCell>
-          <TableCell>
-            {product.status !== "processing" && <PriceSparkline data={sparklineData} width={80} height={32} />}
-          </TableCell>
+          <TableCell>{product.status !== "processing" && <PriceSparkline data={sparklineData} width={80} height={32} />}</TableCell>
           <TableCell onClick={(e) => e.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -256,104 +421,115 @@ function ProductRow({
         </TableRow>
 
         {/* side panel content */}
-        <SheetContent side="right">
+        <SheetContent side="right" showCloseButton={false}>
           <SheetHeader>
-            <div className="flex items-center gap-2 pr-10">
-              {editState.type === "name" ? (
+            <div className="flex items-start gap-2">
+              {isEditingName ? (
                 <div className="min-w-0 flex-1">
-                  <SheetTitle className="sr-only">{product.name ?? "Untitled"}</SheetTitle>
+                  <SheetTitle className="sr-only">{draft.name || "Untitled"}</SheetTitle>
                   <Input
                     autoFocus
-                    value={editState.draft}
-                    onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
-                    onBlur={() => dispatchEdit({ type: "cancel" })}
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter") {
-                        const name = editState.draft.trim();
-                        dispatchEdit({ type: "cancel" });
-                        if (!name || name === product.name) return;
-                        try {
-                          await updateProduct(product.id, { name });
-                          await mutate("/api/proxy/items");
-                          toast.success("Updated");
-                        } catch (err) {
-                          toast.error(err instanceof ApiError ? err.detail : "Failed to update name");
-                        }
-                      }
-                      if (e.key === "Escape") dispatchEdit({ type: "cancel" });
+                    value={draft.name}
+                    onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                    onBlur={() => setIsEditingName(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === "Escape") setIsEditingName(false);
                     }}
                     className="h-7 font-heading text-base font-medium md:text-base"
                   />
                 </div>
               ) : (
-                <SheetTitle>{product.name ?? "Untitled"}</SheetTitle>
+                // text-box-trim reset to none, scoped to just this title
+                // (not sheet.tsx's base SheetTitle, which other Sheets in
+                // the app may still want tightly trimmed) — trim-both
+                // shrinks this title's box down to ~cap-height (~11px for
+                // 16px text), far smaller than the pencil button's fixed
+                // 28px box next to it; items-center then centers that tiny
+                // box against the button, visibly misaligning a single-line
+                // title (masked for a 2-line title, where the whole
+                // wrapped block becomes the tallest sibling instead).
+                // Reverting to normal line-height sizing (~24px) brings the
+                // two boxes much closer in height, so centering has far
+                // less to visibly disagree about.
+                <SheetTitle className="[text-box-trim:none]">{draft.name || "Untitled"}</SheetTitle>
               )}
-              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => dispatchEdit({ type: "editName", name: product.name ?? "" })}>
+              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => setIsEditingName(true)}>
                 <Pencil size={16} strokeWidth={1.5} />
               </Button>
             </div>
           </SheetHeader>
           <div className="flex flex-col gap-4 px-4">
-            <div style={{ height: 200 }}>{chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} />}</div>
+            <div style={{ height: 200 }}>
+              {chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} currency={product.currency} />}
+            </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Target Price</span>
-              {editState.type === "targetPrice" ? (
-                <Input
-                  autoFocus
-                  type="number"
-                  step="0.01"
-                  value={editState.draft}
-                  onChange={(e) => dispatchEdit({ type: "setDraft", draft: e.target.value })}
-                  onBlur={() => dispatchEdit({ type: "cancel" })}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Enter") {
-                      const target_price = Number(editState.draft);
-                      dispatchEdit({ type: "cancel" });
-                      if (!(target_price > 0) || target_price === product.target_price) return;
-                      try {
-                        await updateProduct(product.id, { target_price });
-                        await mutate("/api/proxy/items");
-                        toast.success("Updated");
-                      } catch (err) {
-                        toast.error(err instanceof ApiError ? err.detail : "Failed to update target price");
-                      }
-                    }
-                    if (e.key === "Escape") dispatchEdit({ type: "cancel" });
-                  }}
-                  className="h-7 w-24 text-right [appearance:textfield] md:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
-              ) : (
-                <div className="flex items-center gap-1">
-                  <span>${product.target_price.toFixed(2)}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground"
-                    aria-label="Edit target price"
-                    onClick={() => dispatchEdit({ type: "editTargetPrice", targetPrice: product.target_price })}
-                  >
-                    <Pencil className="size-3.5" strokeWidth={1.5} />
-                  </Button>
-                </div>
-              )}
+              {/* Toggle-to-edit, same look as before batching — typing
+                  writes to `draft`, Save/Cancel governs persistence.
+                  CAD-equivalent sits outside the toggle, computed off
+                  product.target_price (server truth) — informational
+                  context about the current saved value either way, not a
+                  live preview of an unsaved edit. Deliberately kept outside
+                  both branches (not just the display one, like before
+                  batching) — that's what keeps the two branches the same
+                  height without needing min-h-14 back: single-line
+                  InputGroup vs. single-line price+pencil, same either way,
+                  with the CAD line constant underneath both. */}
+              <div className="flex flex-col items-end gap-0.5">
+                {isEditingTargetPrice ? (
+                  <InputGroup className="h-7 w-28">
+                    <InputGroupAddon>
+                      <InputGroupText>{product.currency === "KRW" ? "₩" : "$"}</InputGroupText>
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      autoFocus
+                      type="number"
+                      step="0.01"
+                      value={draft.target_price}
+                      onChange={(e) => setDraft((d) => ({ ...d, target_price: e.target.value }))}
+                      onBlur={() => setIsEditingTargetPrice(false)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === "Escape") setIsEditingTargetPrice(false);
+                      }}
+                      className="text-right [appearance:textfield] md:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                  </InputGroup>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <span>{fmtPrice(parseValidPrice(draft.target_price) ?? product.target_price, product.currency)}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-muted-foreground"
+                      aria-label="Edit target price"
+                      onClick={() => setIsEditingTargetPrice(true)}
+                    >
+                      <Pencil className="size-3.5" strokeWidth={1.5} />
+                    </Button>
+                  </div>
+                )}
+                {(() => {
+                  const cadEquivalent = fmtCadEquivalent(product.target_price, product.currency, fxRates);
+                  return (
+                    cadEquivalent && (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        {cadEquivalent}
+                        {fxStale && <StaleFxIcon />}
+                      </span>
+                    )
+                  );
+                })()}
+              </div>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
               <div className="flex items-center gap-2">
-                <Badge variant={status.variant}>{status.label}</Badge>
+                <Badge variant={sheetStatus.variant}>{sheetStatus.label}</Badge>
                 <Switch
-                  checked={product.status !== "paused"}
+                  checked={draft.active}
                   disabled={product.status === "processing"}
-                  aria-label={product.status !== "paused" ? "Pause item" : "Resume item"}
-                  onCheckedChange={async (active) => {
-                    try {
-                      await updateProduct(product.id, { active });
-                      await mutate("/api/proxy/items");
-                      toast.success(active ? "Resumed" : "Paused");
-                    } catch (err) {
-                      toast.error(err instanceof ApiError ? err.detail : "Failed to update");
-                    }
-                  }}
+                  aria-label={draft.active ? "Pause item" : "Resume item"}
+                  onCheckedChange={(active) => setDraft((d) => ({ ...d, active }))}
                 />
               </div>
             </div>
@@ -366,7 +542,7 @@ function ProductRow({
               </div>
               {product.listings.map((listing) =>
                 editState.type === "listing" && editState.id === listing.id ? (
-                  <div key={listing.id} className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
+                  <div key={listing.id} className="flex min-h-14 items-center gap-2 rounded-lg border border-border py-2 px-3">
                     <Input
                       autoFocus
                       type="url"
@@ -382,6 +558,7 @@ function ProductRow({
                           try {
                             await updateListing(product.id, listing.id, { url });
                             await mutate("/api/proxy/items");
+                            setHasRetailerActivity(true);
                             toast.success("Updated");
                           } catch (err) {
                             if (err instanceof ApiError && err.status === 409) {
@@ -397,7 +574,7 @@ function ProductRow({
                     />
                   </div>
                 ) : (
-                  <div key={listing.id} className="flex items-center justify-between rounded-lg border border-border py-2 px-3">
+                  <div key={listing.id} className="flex min-h-14 items-center justify-between rounded-lg border border-border py-2 px-3">
                     <div className="flex items-center gap-2">
                       <span>{listing.retailer}</span>
                       <a
@@ -411,7 +588,26 @@ function ProductRow({
                       </a>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span>{listing.last_price !== null ? `$${listing.last_price.toFixed(2)}` : "—"}</span>
+                      {/* Stacked, not inline (issue #45 follow-up) — the
+                          sheet panel has a fixed max-width, and native
+                          price + CAD-equivalent + stale icon + 2 edit
+                          buttons all fighting for one line wraps badly on
+                          a longer KRW figure. */}
+                      <div className="flex flex-col items-end">
+                        <span>{listing.last_price !== null ? fmtPrice(listing.last_price, product.currency) : "—"}</span>
+                        {listing.last_price !== null &&
+                          (() => {
+                            const cadEquivalent = fmtCadEquivalent(listing.last_price, product.currency, fxRates);
+                            return (
+                              cadEquivalent && (
+                                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  {cadEquivalent}
+                                  {fxStale && <StaleFxIcon />}
+                                </span>
+                              )
+                            );
+                          })()}
+                      </div>
                       <div className="flex items-center">
                         <Button
                           variant="ghost"
@@ -432,6 +628,7 @@ function ProductRow({
                               try {
                                 await deleteListing(product.id, listing.id);
                                 await mutate("/api/proxy/items");
+                                setHasRetailerActivity(true);
                                 toast.success("Retailer removed");
                               } catch (err) {
                                 toast.error(err instanceof ApiError ? err.detail : "Failed to remove retailer");
@@ -448,7 +645,11 @@ function ProductRow({
               )}
 
               {editState.type === "addingListing" && (
-                <div className="flex items-center gap-2 rounded-lg border border-border py-2 px-3">
+                // min-h-14 — matches the existing retailer rows' height
+                // (issue #45 follow-up, same fix as the URL-edit and
+                // target_price rows), so this new-listing row doesn't
+                // appear a different size than the rows already above it.
+                <div className="flex min-h-14 items-center gap-2 rounded-lg border border-border py-2 px-3">
                   <Input
                     autoFocus
                     type="url"
@@ -463,6 +664,7 @@ function ProductRow({
                         try {
                           await createListing(product.id, { url });
                           await mutate("/api/proxy/items");
+                          setHasRetailerActivity(true);
                           toast.success("Retailer added");
                         } catch (err) {
                           toast.error(err instanceof ApiError ? err.detail : "Failed to add retailer");
@@ -476,6 +678,18 @@ function ProductRow({
               )}
             </div>
           </div>
+          {/* Governs only name/target_price/active (issue #45 follow-up)
+              — retailer add/edit/delete above stays immediate/separate,
+              same carve-out market/[ticker]/page.tsx's alert sheet makes
+              for Delete. */}
+          <SheetFooter className="flex-row justify-end gap-2">
+            <Button variant="outline" className="w-20" onClick={handleCancelEdits}>
+              Cancel
+            </Button>
+            <Button className="w-20" onClick={handleSaveEdits} disabled={!dirty || isSaving}>
+              {isSaving ? "Saving…" : "Save"}
+            </Button>
+          </SheetFooter>
         </SheetContent>
       </Sheet>
 
@@ -536,8 +750,7 @@ export default function WatchlistPage() {
 
   // name is optional now (issue #44) — left blank, Product.name stays NULL
   // until the first successful scrape infers it. Not required to submit.
-  const canSubmitNewItem =
-    Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
+  const canSubmitNewItem = Number(newItem.targetPrice) > 0 && newItemUrlLines.length > 0 && newItemUrlLines.every(isValidUrl);
 
   // Bulk, single request — backend probes every URL's retailer/scraper_type
   // concurrently (bounded), so this doesn't need the chained-per-URL or
@@ -634,11 +847,31 @@ export default function WatchlistPage() {
   const { data, error, isLoading } = useSWR<Product[]>("/api/proxy/items", fetcher);
   const products = data ?? [];
 
+  // Issue #45 — fetched once on load (SWR's default revalidate-on-focus is
+  // harmless here, rates only change daily server-side). getFxRates()
+  // gives typed ApiError handling, unlike the raw fetcher() used for
+  // products above; {} before the first successful refresh_fx_rates run
+  // is a normal response shape (schema.md), not an error — toCad()/
+  // fmtCadEquivalent() already treat a missing rate as "nothing to show."
+  const { data: fxRatesData } = useSWR<FxRates>("/api/proxy/fx-rates", () => getFxRates());
+  const fxRates = fxRatesData?.rates ?? {};
+  const fxStale = fxRatesData?.stale ?? false;
+
   const filtered = products
     .filter((product) => (product.name ?? "").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-  const totalBestPrice = products.reduce((sum, product) => sum + (bestPrice(product) ?? 0), 0);
+  // FX-converted to CAD before summing (issue #45) — products can be
+  // mixed-currency, so a raw sum would add e.g. a KRW price and a USD
+  // price as if they were the same unit. A product whose best price is
+  // null (no available listing) or whose currency can't yet be converted
+  // (missing rate) contributes 0, same "don't let one product poison the
+  // total" contract as the pre-#45 `?? 0`.
+  const totalBestPrice = products.reduce((sum, product) => {
+    const best = bestPrice(product);
+    const cadBest = best === null ? null : toCad(best, product.currency, fxRates);
+    return sum + (cadBest ?? 0);
+  }, 0);
 
   const triggeredCount = products.filter((product) => product.status === "triggered").length;
   const watchingCount = products.filter((product) => product.status === "watching").length;
@@ -718,7 +951,17 @@ export default function WatchlistPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-baseline gap-2">
             <Label className="font-ndot text-[40px] font-normal block">{fmtValue(totalBestPrice)}</Label>
+            {/* "(CAD)" suffix (issue #45, challenges.md #5) — the total is
+                always FX-converted to CAD while individual rows stay
+                native-currency, so without this it doesn't visually "add
+                up" to the rows for a mixed-currency list; this makes that
+                deliberate, not a bug. */}
             <Label className="font-ndot text-[20px] font-normal block">Total</Label>
+            {fxStale && (
+              <span className="self-center">
+                <StaleFxIcon />
+              </span>
+            )}
           </div>
           <div className="flex items-baseline gap-20 pr-20">
             <div className="flex flex-col gap-1">
@@ -812,6 +1055,8 @@ export default function WatchlistPage() {
                     product={product}
                     openId={openId}
                     setOpenId={setOpenId}
+                    fxRates={fxRates}
+                    fxStale={fxStale}
                     editState={editState}
                     dispatchEdit={dispatchEdit}
                     chartReady={chartReady}

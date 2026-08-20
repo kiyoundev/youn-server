@@ -5,7 +5,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.services.scraper.patchright_scraper import PatchrightScraper
+from app.services.scraper.patchright_scraper import AmazonCAScraper, PatchrightScraper
 from app.services.scraper.result import ScraperResult
 
 
@@ -67,7 +67,7 @@ async def test_get_price_launches_lazily_when_context_missing() -> None:
     mock_start.assert_awaited_once()
     mock_page.goto.assert_awaited_once()
     mock_page.close.assert_awaited_once()
-    assert result == ScraperResult(price=None, status="error")  # no price signals in "<html></html>"
+    assert result == ScraperResult(price=None, status="error", currency="CAD")  # no price signals in "<html></html>"
 
 
 @pytest.mark.asyncio
@@ -366,3 +366,70 @@ async def test_close_if_idle_does_not_touch_xvfb_process() -> None:
         await PatchrightScraper.close_if_idle()
     mock_xvfb.terminate.assert_not_called()
     assert PatchrightScraper._xvfb_process is mock_xvfb
+
+
+# ---------------------------------------------------------------------------
+# AmazonCAScraper (issue #45 — no prior coverage existed for this class at
+# all, not just currency)
+# ---------------------------------------------------------------------------
+
+def _amazon_locator_stub(price_found: bool, title: str | None) -> MagicMock:
+    """Fakes page.locator(selector) for both _find_price_text's first
+    ([data-pricetopay-label]) path and _find_product_title's (#productTitle)
+    — count()=0 on the price selector forces _find_price_text past its
+    semantic-attribute path into its page.evaluate() regex-scan fallback,
+    which the test mocks separately."""
+    price_locator = MagicMock()
+    price_locator.count = AsyncMock(return_value=1 if price_found else 0)
+    title_locator = MagicMock()
+    title_locator.first.text_content = AsyncMock(return_value=title)
+
+    def by_selector(selector: str) -> MagicMock:
+        return title_locator if selector == "#productTitle" else price_locator
+
+    return MagicMock(side_effect=by_selector)
+
+
+@pytest.mark.asyncio
+async def test_amazon_ca_scraper_success_always_includes_currency_cad() -> None:
+    """AmazonCAScraper hardcodes currency="CAD" on every successful
+    ScraperResult (issue #45) — it runs its own dedicated Playwright-locator
+    extraction, never calling BaseScraper._run_hierarchy/_extract_currency,
+    so nothing else would ever set this field for amazon.ca."""
+    mock_page = AsyncMock()
+    mock_page.locator = _amazon_locator_stub(price_found=False, title="Airpod Max 2")
+    mock_page.evaluate = AsyncMock(return_value="$799.99")
+
+    mock_context = MagicMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    async def fake_start_browser() -> None:
+        PatchrightScraper._context = mock_context
+
+    with patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start_browser)):
+        result = await AmazonCAScraper().get_price("https://www.amazon.ca/dp/B0DGJJKWW7")
+
+    assert result == ScraperResult(price=799.99, status="ok", product_title="Airpod Max 2", currency="CAD")
+
+
+@pytest.mark.asyncio
+async def test_amazon_ca_scraper_error_path_leaves_currency_none() -> None:
+    """The error path (retries exhausted, no price ever found) does not go
+    through the currency-hardcoding success branch — currency stays None,
+    same as any other genuine extraction failure."""
+    mock_page = AsyncMock()
+    mock_page.locator = _amazon_locator_stub(price_found=False, title=None)
+    mock_page.evaluate = AsyncMock(return_value=None)
+
+    mock_context = MagicMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    async def fake_start_browser() -> None:
+        PatchrightScraper._context = mock_context
+
+    scraper = AmazonCAScraper()
+    scraper.MAX_RETRIES = 1
+    with patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start_browser)):
+        result = await scraper.get_price("https://www.amazon.ca/dp/B0DGJJKWW7")
+
+    assert result == ScraperResult(price=None, status="error", currency=None)

@@ -40,7 +40,7 @@ async def test_dispatch_price_drop_marks_processed() -> None:
         status="pending",
         processed_at=None,
     )
-    product = SimpleNamespace(id=11, name="Shoes", target_price=100.0)
+    product = SimpleNamespace(id=11, name="Shoes", target_price=100.0, currency=None)
 
     notify_session = MagicMock()
 
