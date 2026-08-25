@@ -407,6 +407,10 @@ async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = D
         product.name = body.name
     if body.target_price is not None:
         product.target_price = body.target_price
+        # Editing the price stales any alert fired against the old target —
+        # clear it so status falls back to "watching" until the next scrape
+        # re-evaluates against the new target_price (see jobs.py).
+        product.alerted_at = None
     if body.active is not None:
         product.active = body.active
     if body.currency is not None:
