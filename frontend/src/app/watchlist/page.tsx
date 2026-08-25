@@ -423,7 +423,7 @@ function ProductRow({
         {/* side panel content */}
         <SheetContent side="right" showCloseButton={false}>
           <SheetHeader>
-            <div className="flex items-start gap-2">
+            <div className="flex items-baseline justify-between gap-2">
               {isEditingName ? (
                 <div className="min-w-0 flex-1">
                   <SheetTitle className="sr-only">{draft.name || "Untitled"}</SheetTitle>
@@ -439,21 +439,9 @@ function ProductRow({
                   />
                 </div>
               ) : (
-                // text-box-trim reset to none, scoped to just this title
-                // (not sheet.tsx's base SheetTitle, which other Sheets in
-                // the app may still want tightly trimmed) — trim-both
-                // shrinks this title's box down to ~cap-height (~11px for
-                // 16px text), far smaller than the pencil button's fixed
-                // 28px box next to it; items-center then centers that tiny
-                // box against the button, visibly misaligning a single-line
-                // title (masked for a 2-line title, where the whole
-                // wrapped block becomes the tallest sibling instead).
-                // Reverting to normal line-height sizing (~24px) brings the
-                // two boxes much closer in height, so centering has far
-                // less to visibly disagree about.
                 <SheetTitle className="[text-box-trim:none]">{draft.name || "Untitled"}</SheetTitle>
               )}
-              <Button variant="ghost" size="icon-sm" aria-label="Edit item" onClick={() => setIsEditingName(true)}>
+              <Button variant="ghost" size="icon-sm" aria-label="Edit item" className="translate-y-0.5" onClick={() => setIsEditingName(true)}>
                 <Pencil size={16} strokeWidth={1.5} />
               </Button>
             </div>
@@ -464,17 +452,6 @@ function ProductRow({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Target Price</span>
-              {/* Toggle-to-edit, same look as before batching — typing
-                  writes to `draft`, Save/Cancel governs persistence.
-                  CAD-equivalent sits outside the toggle, computed off
-                  product.target_price (server truth) — informational
-                  context about the current saved value either way, not a
-                  live preview of an unsaved edit. Deliberately kept outside
-                  both branches (not just the display one, like before
-                  batching) — that's what keeps the two branches the same
-                  height without needing min-h-14 back: single-line
-                  InputGroup vs. single-line price+pencil, same either way,
-                  with the CAD line constant underneath both. */}
               <div className="flex flex-col items-end gap-0.5">
                 {isEditingTargetPrice ? (
                   <InputGroup className="h-7 w-28">
@@ -496,7 +473,20 @@ function ProductRow({
                   </InputGroup>
                 ) : (
                   <div className="flex items-center gap-1">
-                    <span>{fmtPrice(parseValidPrice(draft.target_price) ?? product.target_price, product.currency)}</span>
+                    <div>
+                      <span>{fmtPrice(parseValidPrice(draft.target_price) ?? product.target_price, product.currency)}</span>
+                      {(() => {
+                        const cadEquivalent = fmtCadEquivalent(product.target_price, product.currency, fxRates);
+                        return (
+                          cadEquivalent && (
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              {cadEquivalent}
+                              {fxStale && <StaleFxIcon />}
+                            </span>
+                          )
+                        );
+                      })()}
+                    </div>
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -508,17 +498,6 @@ function ProductRow({
                     </Button>
                   </div>
                 )}
-                {(() => {
-                  const cadEquivalent = fmtCadEquivalent(product.target_price, product.currency, fxRates);
-                  return (
-                    cadEquivalent && (
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        {cadEquivalent}
-                        {fxStale && <StaleFxIcon />}
-                      </span>
-                    )
-                  );
-                })()}
               </div>
             </div>
             <div className="flex items-center justify-between">
@@ -1027,9 +1006,9 @@ export default function WatchlistPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Card className="w-full px-4">
+        <Card className="w-full p-0">
           <Table>
-            <TableHeader className="[&_th]:h-auto [&_th]:px-2 [&_th]:pt-0 [&_th]:pb-4">
+            <TableHeader className="[&_th]:h-auto [&_th]:px-4 [&_th]:pt-4 [&_th]:pb-4">
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
                 <TableHead>Retailer</TableHead>
@@ -1041,7 +1020,7 @@ export default function WatchlistPage() {
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
-            <TableBody className="[&_td]:py-4 [&_tr:last-child_td]:pb-0">
+            <TableBody className="[&_td]:px-4 [&_td]:py-4">
               {filtered.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
