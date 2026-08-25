@@ -23,5 +23,6 @@ beautifulsoup4>=4.12,<5.0
 patchright==1.62.1
 yfinance>=0.2,<0.3
 pydantic-settings>=2.2,<3.0
+anthropic>=1.0,<2.0
 python-multipart>=0.0.9,<0.1
 respx>=0.21,<0.22

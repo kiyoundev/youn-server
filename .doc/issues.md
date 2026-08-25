@@ -38,7 +38,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
 
 **TradingAgents / AI Chat**
-✅ #9, ✅ #17, ⬜ #42, ⬜ #25, ⬜ #26, ⬜ #27, ⬜ #28
+✅ #9, ✅ #17, ⬜ #42, ⬜ #25, ⬜ #26, ⬜ #27, ⬜ #28, ⬜ #49
 
 **Wealthsimple Import**
 ⬜ #32, ⬜ #33
@@ -100,7 +100,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #38 | Earnings Calendar (Portfolio Page + Ticker Detail Page) | feat / AFK | ~3h | #19, #31 |
 | ✅ Done | #39 | Resolve Redirects Before `RETAILER_MAP` Routing (Shortlink Support) | fix / AFK | ~1.5h | None |
 | ✅ Done | #40 | Lazy-Launch Patchright's Browser, Guarded by a Lock | fix / AFK | ~1h | None |
-| ⬜ Open | #41 | Immediate First Scrape on Item/Listing Add | feat / AFK | ~3h | #40 |
+| ✅ Done | #41 | Immediate First Scrape on Item/Listing Add | feat / AFK | ~3h | #40 |
 | ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
 | ✅ Done | #43 | Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix) | ops / HITL | ~1h | #13, #16 |
 
@@ -2104,6 +2104,33 @@ The actual chat interface attached to a report: sending messages, showing the ru
 - [ ] User can send a message and see it appear in the thread immediately
 - [ ] Claude's reply renders progressively as it streams in
 - [ ] Reloading the page (or revisiting later) shows the full prior thread for that report, not just the current session
+
+---
+
+## [ ] Issue #49 — Pushover Alert on Claude OAuth Auth Failure
+
+**Type:** feat / AFK
+**Estimate:** ~1h
+**Blocked by:** #26, #5
+
+### What to build
+
+Catches Claude auth failures on the chat endpoint (#26) and surfaces them via Pushover instead of letting them fail silently as a generic 500.
+
+- Catch `anthropic.AuthenticationError` around the chat endpoint's Claude call
+- On catch, fire the existing Pushover service (`notifications.send_alert`) — message identifies it as an OAuth issue and names the fix (`ant auth login --no-browser` on the affected host)
+- Simple in-memory cooldown at this call site so a burst of chat messages during an expired-token window fires one alert, not N — `send_alert` itself has no dedupe today; this issue doesn't add one globally, just locally here
+
+### Why (context)
+
+OAuth refresh tokens hard-expire — they don't slide with use, so even active daily usage doesn't prevent eventual expiry, and there's no proactive warning before it happens (see #25's auth setup). Once the mounted profile stops being valid, the chat endpoint would otherwise fail with a generic error and no operator-visible signal — the same blind spot every other failure mode in this app already avoids by routing through Pushover (#5).
+
+### Acceptance criteria
+
+- [ ] `AuthenticationError` from the chat call triggers a Pushover alert, not just a 500 to the client
+- [ ] Alert names the problem (OAuth/auth) and the fix (`ant auth login`)
+- [ ] Repeated failures in quick succession produce one alert, not a flood
+- [ ] Verified by temporarily breaking the mounted credentials and confirming exactly one alert fires
 
 ---
 

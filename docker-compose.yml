@@ -8,6 +8,11 @@ services:
       - "8000:8000"
     volumes:
       - /opt/tradingagents:/opt/tradingagents
+      # OAuth profile from `ant auth login` (host-side, run separately on
+      # each machine — see #25). ${HOME} resolves per-host at `docker
+      # compose up` time (/home/youn on Pi, /Users/youn on Mac), so this
+      # one line covers both without a docker-compose.local.yml override.
+      - ${HOME}/.config/anthropic:/home/pwuser/.config/anthropic
     networks:
       - app
 

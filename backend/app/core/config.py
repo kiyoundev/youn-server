@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     # NAS lives on LAN with DSM's default self-signed cert; flip to True if a valid cert is configured
     synology_verify_ssl: bool = False
 
-    anthropic_api_key: str = ""
     tradingagents_path: str = "/opt/tradingagents"
     tradingagents_venv_python: str = "/opt/tradingagents/.venv/bin/python"
     tradingagents_results_dir: str = "/opt/tradingagents/data"
