@@ -105,10 +105,10 @@ def _price_from_offer(offers: Any) -> ScraperResult | None:
     return ScraperResult(price=price, status="ok")
 
 
-def _search_price_recursive(data: Any) -> float | None:
+def _search_price_recursive(data: Any, key: str = "price") -> float | None:
     if isinstance(data, dict):
-        if "price" in data:
-            val = data["price"]
+        if key in data:
+            val = data[key]
             if isinstance(val, (int, float)) and val > 0:
                 return float(val)
             if isinstance(val, str):
@@ -116,14 +116,87 @@ def _search_price_recursive(data: Any) -> float | None:
                 if parsed and parsed > 0:
                     return parsed
         for v in data.values():
-            result = _search_price_recursive(v)
+            result = _search_price_recursive(v, key)
             if result is not None:
                 return result
     elif isinstance(data, list):
         for item in data:
-            result = _search_price_recursive(item)
+            result = _search_price_recursive(item, key)
             if result is not None:
                 return result
+    return None
+
+
+# NEXT_DATA fallback (_extract_nextdata) tier list, checked in this order —
+# storefronts commonly ship several price fields on the same product object
+# (list price down to actually-payable price: site-wide sale, then a
+# further stackable coupon on top). Plain "price" stays last so today's
+# behavior is unchanged for pages that only have that one field. Global by
+# design, not scoped to any one host — real shape observed on musinsa's
+# __NEXT_DATA__ (goodsPrice: {salePrice, normalPrice, couponPrice,
+# finalPrice, ...}), see test_base.py's regression fixture.
+_PRICE_KEY_PRIORITY = ("finalPrice", "couponPrice", "salePrice", "normalPrice", "price")
+
+
+def _search_price_by_priority(data: Any) -> float | None:
+    for key in _PRICE_KEY_PRIORITY:
+        result = _search_price_recursive(data, key)
+        if result is not None:
+            return result
+    return None
+
+
+# Common product-ID field names across storefronts' NEXT_DATA — used to
+# scope a priority-price search to the actual tracked product's node rather
+# than the whole page tree, which also holds "related items" / "other
+# colors" carousels carrying the *same* price field names for *different*
+# products (see musinsa regression fixture: a dark-grey/blue/black jacket
+# variant carousel, each with its own finalPrice). Without scoping,
+# _search_price_by_priority's first-match-wins DFS is at the mercy of
+# whatever key order the page happened to serialize in — right today by
+# luck, not by construction. Global, no per-host config: any host whose
+# NEXT_DATA uses one of these names and whose URL ends in a bare numeric ID
+# gets scoping for free; anything else silently falls back to the unscoped
+# whole-tree search (today's behavior), never an error.
+_ID_KEY_CANDIDATES = ("goodsNo", "productId", "productID", "itemId", "id", "sku", "pid")
+
+
+def _extract_id_from_url(url: str) -> str | None:
+    """Last purely-numeric path segment, e.g. "/products/5622799" ->
+    "5622799". Generic across hosts on purpose — no per-site path config.
+    None for URLs that don't end in a bare numeric segment; callers treat
+    that as "can't scope, fall back to whole-tree search"."""
+    path = urlparse(url).path
+    for segment in reversed([s for s in path.split("/") if s]):
+        if segment.isdigit():
+            return segment
+    return None
+
+
+def _find_node_by_id(data: Any, id_value: str) -> dict | None:
+    """DFS for the dict representing one specific product — matched by any
+    of _ID_KEY_CANDIDATES holding a value equal (string-compared, since
+    JSON may store the ID as either an int or a string) to id_value. Returns
+    that dict itself, so a price search can be scoped to run inside it, or
+    None if no node anywhere in the tree carries a matching ID. First-match
+    DFS order no longer matters for correctness here the way it does for
+    price keys: any node matching the real product's own ID reflects that
+    same product's current price, regardless of which matching node (main
+    data blob vs. a "recently viewed"/self-referencing carousel card) is
+    found first."""
+    if isinstance(data, dict):
+        for id_key in _ID_KEY_CANDIDATES:
+            if id_key in data and str(data[id_key]) == id_value:
+                return data
+        for v in data.values():
+            found = _find_node_by_id(v, id_value)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_node_by_id(item, id_value)
+            if found is not None:
+                return found
     return None
 
 
@@ -373,7 +446,19 @@ class BaseScraper(ABC):
             except (KeyError, TypeError, IndexError):
                 pass
 
-        price = _search_price_recursive(data)
+        # ID-scoped priority search (see _find_node_by_id / _PRICE_KEY_PRIORITY
+        # docstrings) — falls back to the unscoped whole-tree search when the
+        # URL doesn't end in a bare numeric ID, or nothing in the tree
+        # carries a matching one. Either way this stays a strict superset of
+        # the old "first 'price' key anywhere" behavior, never a regression.
+        product_id = _extract_id_from_url(url)
+        scope = data
+        if product_id is not None:
+            node = _find_node_by_id(data, product_id)
+            if node is not None:
+                scope = node
+
+        price = _search_price_by_priority(scope)
         if price:
             return ScraperResult(price=price, status="ok")
         return None
@@ -393,8 +478,25 @@ class BaseScraper(ABC):
             result = self._extract_jsonld(soup, jsonld_scripts)
         if result is None:
             result = self._extract_og_price(soup)
-        if result is None:
-            result = self._extract_nextdata(soup, url)
+
+        # NEXT_DATA is checked unconditionally now, not only as a last-resort
+        # fallback (musinsa regression, this session) — a page can have both
+        # a cruder single-value tag (og:price meta, JSON-LD offers.price)
+        # *and* a richer __NEXT_DATA__ blob with a real stacked-discount
+        # price the cruder tag doesn't know about (musinsa's og:price meta
+        # reports its plain sale price; __NEXT_DATA__'s
+        # goodsPrice.finalPrice has the coupon-inclusive price on top of
+        # that). Whichever succeeded above only gets overridden by a
+        # strictly cheaper NEXT_DATA match — never a more expensive one —
+        # so a page with no such richer data, or where NEXT_DATA's own
+        # price happens to be higher, is unaffected either way.
+        nextdata_result = self._extract_nextdata(soup, url)
+        if nextdata_result is not None and (
+            result is None
+            or (result.price is not None and nextdata_result.price < result.price)
+        ):
+            result = nextdata_result
+
         if result is None:
             result = ScraperResult(price=None, status="error")
 

@@ -11,8 +11,10 @@ from bs4 import BeautifulSoup
 from app.services.scraper.base import (
     BaseScraper,
     _extract_currency,
+    _extract_id_from_url,
     _extract_product_title,
     _extract_site_name,
+    _find_node_by_id,
     _first_title_segment,
     _last_title_segment,
     _parse_price,
@@ -197,6 +199,109 @@ def test_extract_nextdata_bad_explicit_path_falls_back_to_heuristic(s: DummyScra
 
 
 # ---------------------------------------------------------------------------
+# _extract_nextdata — priority-key search + ID scoping (musinsa regression)
+#
+# Real shape from musinsa.com/products/5622799 (Endure Goose Down Jacket,
+# dark grey): the product's own node carries salePrice/normalPrice/
+# couponPrice/finalPrice together, and a "same jacket, other colors"
+# carousel elsewhere on the page repeats those same field names for
+# different goodsNo values — one of which (black) has no discount at all,
+# so grabbing the wrong node's finalPrice wouldn't even look implausible.
+# ---------------------------------------------------------------------------
+
+def _musinsa_like_page(tracked_final_price: int) -> dict:
+    return {
+        "props": {
+            "pageProps": {
+                # Real page order: unrelated scalar fields, then "meta"
+                # (the tracked product), then "dehydratedState" (carries the
+                # carousel) — kept in that order here since one regression
+                # test below depends on scoping working regardless of it.
+                "isMobile": False,
+                "meta": {
+                    "data": {
+                        "goodsNo": 5622799,
+                        "goodsNm": "인듀어 구스 다운 자켓 (다크 그레이)",
+                        "goodsPrice": {
+                            "salePrice": 310400,
+                            "normalPrice": 388000,
+                            "couponPrice": 279360,
+                            "finalPrice": tracked_final_price,
+                            "finalDiscount": 28,
+                        },
+                    }
+                },
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "state": {
+                                "data": {
+                                    "data": {
+                                        "curationTabs": [
+                                            {
+                                                "curationGoodsList": [
+                                                    {"goodsNo": 5622799, "finalPrice": tracked_final_price, "normalPrice": 388000},
+                                                    {"goodsNo": 5622834, "finalPrice": tracked_final_price, "normalPrice": 388000},
+                                                    # Different product, no discount — proves scoping
+                                                    # isn't just "first plausible finalPrice in the tree".
+                                                    {"goodsNo": 5622697, "finalPrice": 388000, "normalPrice": 388000},
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+            }
+        }
+    }
+
+
+def test_extract_nextdata_prefers_final_price_over_plain_price(s: DummyScraper) -> None:
+    html = _nextdata_page(_musinsa_like_page(279360))
+    result = s._extract_nextdata(_soup(html), "https://www.musinsa.com/products/5622799")
+    assert result == ScraperResult(price=279360.0, status="ok")
+
+
+def test_extract_nextdata_id_scoping_ignores_other_products_carousel(s: DummyScraper) -> None:
+    # Same tree, but the tracked product's own finalPrice differs from the
+    # (unrelated) carousel's black-variant entry (388000, no discount) —
+    # scoping to goodsNo 5622799 must return the tracked product's own
+    # price, not whichever finalPrice DFS would hit first unscoped.
+    page = _musinsa_like_page(279360)
+    page["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["data"]["curationTabs"][0][
+        "curationGoodsList"
+    ].insert(0, {"goodsNo": 9999999, "finalPrice": 111111, "normalPrice": 111111})
+    html = _nextdata_page(page)
+    result = s._extract_nextdata(_soup(html), "https://www.musinsa.com/products/5622799")
+    assert result == ScraperResult(price=279360.0, status="ok")
+
+
+def test_extract_nextdata_priority_falls_back_to_bare_price(s: DummyScraper) -> None:
+    """Pages with only a plain "price" field (no finalPrice/salePrice/etc.)
+    keep working exactly as before — priority list ends in "price"."""
+    html = _nextdata_page({"props": {"pageProps": {"product": {"price": 42.0}}}})
+    result = s._extract_nextdata(_soup(html), "https://example.com/products/1")
+    assert result == ScraperResult(price=42.0, status="ok")
+
+
+def test_extract_id_from_url_last_numeric_segment() -> None:
+    assert _extract_id_from_url("https://www.musinsa.com/products/5622799") == "5622799"
+    assert _extract_id_from_url("https://www.musinsa.com/products/5622799?color=grey") == "5622799"
+    assert _extract_id_from_url("https://example.com/p/not-numeric") is None
+    assert _extract_id_from_url("https://example.com/") is None
+
+
+def test_find_node_by_id_matches_any_candidate_key() -> None:
+    tree = {"a": {"items": [{"sku": "X"}, {"productId": "42", "price": 9}]}}
+    node = _find_node_by_id(tree, "42")
+    assert node == {"productId": "42", "price": 9}
+    assert _find_node_by_id(tree, "does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
 # _extract_shopify
 # ---------------------------------------------------------------------------
 
@@ -316,6 +421,57 @@ async def test_run_hierarchy_nextdata_wins(s: DummyScraper) -> None:
     html = _nextdata_page({"props": {"pageProps": {"product": {"price": 299.0}}}})
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
     assert result == ScraperResult(price=299.0, status="ok", currency="CAD")
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_nextdata_overrides_og_price_when_cheaper(s: DummyScraper) -> None:
+    """musinsa regression (this session) — og:price meta reports the plain
+    sale price with no coupon awareness; __NEXT_DATA__'s goodsPrice has the
+    actual stacked-coupon finalPrice alongside it. NEXT_DATA is now checked
+    unconditionally (not just as a last-resort fallback) and its strictly
+    cheaper match overrides og:price's cruder one."""
+    html = (
+        '<html><head><meta property="og:price:amount" content="310400"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps(
+            {
+                "props": {
+                    "pageProps": {
+                        "meta": {
+                            "data": {
+                                "goodsNo": 5622799,
+                                "goodsPrice": {
+                                    "salePrice": 310400,
+                                    "normalPrice": 388000,
+                                    "couponPrice": 279360,
+                                    "finalPrice": 279360,
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        + "</script></body></html>"
+    )
+    result = await s._run_hierarchy(html, "https://www.musinsa.com/products/5622799")
+    assert result == ScraperResult(price=279360.0, status="ok", currency="CAD")
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_og_price_wins_when_cheaper_than_nextdata(s: DummyScraper) -> None:
+    """Override only fires when NEXT_DATA is strictly cheaper — a page
+    where NEXT_DATA's own price happens to be higher than what an earlier
+    method already found keeps that earlier (cheaper) result, not the
+    higher NEXT_DATA one."""
+    html = (
+        '<html><head><meta property="og:price:amount" content="49.99"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps({"props": {"pageProps": {"product": {"price": 99.99}}}})
+        + "</script></body></html>"
+    )
+    result = await s._run_hierarchy(html, "https://example.com/item/abc")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
 
 
 # ---------------------------------------------------------------------------

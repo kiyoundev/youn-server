@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ⬜ #50, ⬜ #51
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2679,3 +2679,73 @@ Raised as a direct pushback during `#47`'s planning, after confirming `poll_pric
 - [x] Regression check: the same fix doesn't reintroduce the double-alert race for `#41`'s existing concurrent bulk-add path either — both call sites end up protected by the same guard, not two different ones (structural — one fix site inside `process_item`, both callers route through it; not separately live-retested against #41's own bulk-add flow)
 - [x] No change to `poll_prices`'s external behavior for single-listing products (the common case) — same result, just correctly ordered/grouped for multi-listing ones — verified live
 - [ ] Total `poll_prices` cycle wall-clock time measured before/after on a real multi-product, multi-listing dataset — confirms the concurrency actually helps, not just theoretically (deferred — not blocking)
+
+---
+
+## [ ] Issue #50 — 29CM Coupon Price Extraction (RSC Flight Payload, Priority Over JSON-LD)
+
+**Type:** fix / AFK
+**Estimate:** ~3h
+**Related:** same investigation that produced the global `_PRICE_KEY_PRIORITY`/ID-scoping fix to `_extract_nextdata()` (`base.py`) — that fix covers musinsa; this issue is 29CM's harder half, deliberately split out rather than bundled in.
+
+**Update (same session, after musinsa's fix landed):** musinsa turned out to need a second fix beyond `_PRICE_KEY_PRIORITY` — `_extract_nextdata()` was still only ever checked as a last resort (`if result is None: ...`), so on musinsa's actual page an earlier method (`_extract_og_price()`, a flat sale-price meta tag) won and short-circuited before NEXT_DATA's richer priority-tier search ever ran. Fixed by making `_run_hierarchy()` (`base.py`) check `_extract_nextdata()` **unconditionally** on every call, and override whichever earlier method won *only* when NEXT_DATA's result is strictly cheaper (never overrides upward — see `base.py`'s `_run_hierarchy` comment and `test_run_hierarchy_nextdata_overrides_og_price_when_cheaper`/`test_run_hierarchy_og_price_wins_when_cheaper_than_nextdata` in `test_base.py`). This directly resolves point 2 below ("Priority ordering problem") *in the abstract* — the same always-compute-then-override-if-cheaper pattern is what `_extract_rsc_flight()` should slot into once built, not a new bespoke ordering decision. It does **not** fix 29CM on its own: confirmed 29CM has no `og:price` meta and no `__NEXT_DATA__` tag at all (App Router/RSC streaming), so `_extract_nextdata()` still returns `None` there regardless — point 1 (the RSC-flight parser itself) is still fully unbuilt and is now the entire remaining scope of this issue.
+
+### What to build
+
+29CM (`29cm.co.kr`) surfaced the same "scraper grabs list price, not the actually-payable coupon price" problem as musinsa, but its page doesn't fit the `__NEXT_DATA__` shape the existing fix targets — it needs its own extraction path.
+
+Confirmed live against `https://www.29cm.co.kr/products/3567244`:
+- The page **does** have `<script type="application/ld+json">`, and `_extract_jsonld()` (higher in `_run_hierarchy`'s priority order than `_extract_nextdata()`) finds `offers.price: 388000` — the full list price — and returns immediately. `_extract_nextdata()` never even runs.
+- The real discounted price (₩329,800, 15% off) isn't in JSON-LD or a `__NEXT_DATA__` tag at all — 29CM's on the Next.js App Router, which streams data as React Server Components flight chunks (`<script>self.__next_f.push([1,"..."])</script>`, 93 of them on this page), not a single parseable `__NEXT_DATA__` blob. The coupon price is embedded as **escaped JSON inside a string** inside one of those chunks: `"totalDiscountedItemPrice":329800,"totalDiscountedRate":15,"appliedCouponType":"CART_SIN..."`.
+
+Needed:
+1. A new extraction method, e.g. `_extract_rsc_flight()`: collect all `self.__next_f.push([1,"..."])` script bodies, concatenate/decode the escaped string payloads (each chunk is a JS array literal wrapping an escaped JSON string, not directly `json.loads`-able as one document — needs the flight-protocol unescaping step first), then run the same `_search_price_by_priority()`/`_find_node_by_id()` machinery already built for `_extract_nextdata()` against the decoded structure. Reuse, don't reinvent, that search logic.
+2. **Priority ordering — resolved by the musinsa follow-up fix (see Update above), reuse it, don't redesign.** `_run_hierarchy()` now always computes `_extract_nextdata()`'s result and overrides whichever earlier method won only when strictly cheaper — the same pattern applies directly to `_extract_rsc_flight()`: add it as one more always-computed, strictly-cheaper-only override step (after the NEXT_DATA step), not a new special case for JSON-LD specifically. No open design decision left here.
+3. ID-scoping (`_find_node_by_id`) matters here too, same reasoning as musinsa's carousel risk — 29CM's RSC payload almost certainly repeats price fields for related/recommended products across its many chunks, not just the tracked one.
+
+### Why (context)
+
+Split out from the musinsa fix (same conversation, same regression report — user added both a musinsa and a 29CM listing for the same goyowear product and both scraped a too-high price) once it became clear the two sites fail for structurally different reasons: musinsa's fix is a same-file, same-hierarchy-slot change (shipped); 29CM's needs a new extraction method *and* a hierarchy-ordering decision, which is real, undesigned scope, not a quick patch alongside the musinsa change.
+
+### Acceptance criteria
+
+- [ ] `_extract_rsc_flight()` (or equivalent) correctly decodes 29CM's `self.__next_f.push(...)` chunks into a searchable structure
+- [ ] Extraction, run against the real 29CM product page, returns 329,800 (the coupon-applied price), not 388,000 (JSON-LD's list price)
+- [ ] `_extract_rsc_flight()` wired into `_run_hierarchy()` using the same always-computed, strictly-cheaper-only override pattern the musinsa fix added for `_extract_nextdata()` — not a new bespoke ordering mechanism — confirmed not to regress any site that currently relies on JSON-LD winning
+- [ ] ID-scoping applied the same way as musinsa's fix, guarding against the same wrong-product risk from repeated price fields across chunks
+- [ ] Regression tests added using 29CM's real page shape, same style as `test_base.py`'s musinsa fixtures
+- [ ] No change to behavior for every other site currently served correctly by JSON-LD (musinsa's fix, Shopify sites, etc.)
+
+---
+
+## [ ] Issue #51 — Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule
+
+**Type:** feat / AFK
+**Estimate:** ~2.5h
+**Blocked by:** None
+
+### What to build
+
+Two separate pieces — both let a user force a scrape right now instead of waiting for the next scheduled cycle, at different granularity.
+
+**Global (whole watchlist)** — backend already exists, nothing new to build server-side:
+- `POST /api/poll/prices` (`app/api/poll.py`, from #6) already rescrapes every active listing as a background task, rate-limited to one call per 5 minutes (429 with remaining-seconds detail on cooldown). Confirmed nothing in the frontend calls it today — no reference to `poll/prices` anywhere in `frontend/src`.
+- Add a button (header/toolbar area, near the products/triggered/watching stat row — `watchlist/page.tsx` ~line 947) that `POST`s to it, toasts `"Rescraping…"` on success and the cooldown message from the 429 body on rate-limit, and relies on the existing SSE flow (`subscribeToListingEvents` → `mutate("/api/proxy/items")`) to reflect results as they land — no polling loop needed, the push wiring already exists.
+
+**Per-item (sheet panel, one product)** — needs a new backend endpoint, nothing per-item exists today:
+- New route, e.g. `POST /api/items/{product_id}/poll`: reuses `_dispatch_first_scrapes(listing_ids, semaphore, queue)` (`scheduler/jobs.py:346`, already shared between #41's add-time scrape and `poll_prices`'s per-product batch) — pass that product's own `listing.id`s, `request.app.state.event_queue`, and either the existing `_first_scrape_semaphore` (`items.py:61`) or a small dedicated one. This is a call-site reuse, not new scraping logic — the concurrency-bounded gather, Patchright close-if-idle, and in-flight tracking (`mark_in_flight`/`in_flight_snapshot`, `scrape_tracking.py`) all come for free, which also means `compute_status()` already shows `"processing"` for a manually-triggered re-scrape with zero changes there — it only checks the in-flight set, not *why* something's in flight.
+- **Rate-limiting**: the global endpoint's 5-minute lock is process-wide and wrong at this granularity (would block re-scraping product B because product A was just triggered). Needs its own guard — proposal: reject (or just no-op) if any of the product's listings are already in `in_flight_snapshot()` (genuinely redundant, cheap check, no new state), plus a short per-product cooldown (e.g. 30–60s) using `Product.last_checked`/listing `last_scrape_status` timestamps rather than a new in-memory dict keyed by product id — open design question, not decided here.
+- Frontend: icon button (e.g. `RefreshCw`) in the sheet panel near "Last checked"/Retailers header, disabled while any of the product's listings show in-flight, same SSE-driven refresh as the global button — no new fetch/poll loop.
+
+### Why (context)
+
+User request, prompted directly by this session's musinsa/29CM investigation — wanting to force a fresh price check on a specific product (or the whole list) right after fixing/adding a listing, instead of waiting up to 6h for the next scheduled `poll_prices` cycle.
+
+### Acceptance criteria
+
+- [ ] Global button calls `POST /api/poll/prices`, surfaces the 429 cooldown message instead of a generic error, and results show up via the existing SSE refresh without a manual page reload
+- [ ] New `POST /api/items/{product_id}/poll` route rescrapes only that product's own listings, reusing `_dispatch_first_scrapes` — not a second scraping implementation
+- [ ] Manually-triggered re-scrape shows `"processing"` on the affected row/sheet via existing `compute_status()`, no changes needed to that function
+- [ ] Rapid repeat clicks on the same product's button don't queue redundant concurrent scrapes of the same listings — rate-limit strategy decided and implemented, not left as a TODO
+- [ ] Sheet-panel button disables while its own product's listings are in flight; re-enables once the SSE update lands
+- [ ] No regression to `poll_prices`'s own 6h schedule or #41's add-time first-scrape — both still work unchanged
