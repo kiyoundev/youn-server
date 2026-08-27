@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ⬜ #50, ⬜ #51
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ⬜ #51
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2682,7 +2682,7 @@ Raised as a direct pushback during `#47`'s planning, after confirming `poll_pric
 
 ---
 
-## [ ] Issue #50 — 29CM Coupon Price Extraction (RSC Flight Payload, Priority Over JSON-LD)
+## [x] Issue #50 — 29CM Coupon Price Extraction (RSC Flight Payload, Priority Over JSON-LD)
 
 **Type:** fix / AFK
 **Estimate:** ~3h
@@ -2709,12 +2709,14 @@ Split out from the musinsa fix (same conversation, same regression report — us
 
 ### Acceptance criteria
 
-- [ ] `_extract_rsc_flight()` (or equivalent) correctly decodes 29CM's `self.__next_f.push(...)` chunks into a searchable structure
-- [ ] Extraction, run against the real 29CM product page, returns 329,800 (the coupon-applied price), not 388,000 (JSON-LD's list price)
-- [ ] `_extract_rsc_flight()` wired into `_run_hierarchy()` using the same always-computed, strictly-cheaper-only override pattern the musinsa fix added for `_extract_nextdata()` — not a new bespoke ordering mechanism — confirmed not to regress any site that currently relies on JSON-LD winning
-- [ ] ID-scoping applied the same way as musinsa's fix, guarding against the same wrong-product risk from repeated price fields across chunks
-- [ ] Regression tests added using 29CM's real page shape, same style as `test_base.py`'s musinsa fixtures
-- [ ] No change to behavior for every other site currently served correctly by JSON-LD (musinsa's fix, Shopify sites, etc.)
+- [x] `_extract_rsc_flight()` correctly decodes 29CM's `self.__next_f.push(...)` chunks into a searchable structure — `_parse_rsc_flight_rows()` concatenates chunk payloads in document order (a row can span multiple push calls — confirmed live and covered by `test_extract_rsc_flight_row_split_across_multiple_pushes`), splits on the newline-prefixed-hex-id row boundary, `json.loads`es each row, best-effort skipping non-JSON Flight syntax
+- [x] Extraction, run against the real 29CM product page (`/tmp/29cm.html` fetched live this session), returns `329800.0` via both `_extract_rsc_flight()` directly and the full `_run_hierarchy()` — not 388,000 (JSON-LD's list price)
+- [x] `_extract_rsc_flight()` wired into `_run_hierarchy()` using the same always-computed, strictly-cheaper-only override pattern the musinsa fix added for `_extract_nextdata()` — confirmed via `test_run_hierarchy_rsc_overrides_jsonld_when_cheaper`; no changes needed to how NEXT_DATA's own override step works, RSC is just one more step of the same shape
+- [x] ID-scoping applied via the same `_find_node_by_id()` (extended with `"itemNo"` in `_ID_KEY_CANDIDATES`) — but RSC rows are flat/reference-based, not one nested tree like NEXT_DATA, so the scoped node's price is often hidden behind a `"$rowId"` reference rather than inline (29CM's real page: product row has `internalDisplayPrice: "$a7"`, not the price itself) — needed a new `_resolve_rsc_refs()` (depth-bounded, cheap — pure in-memory dict lookups, no reparsing) to dereference before searching. **Not separately tested against a synthetic wrong-product-carousel case the way musinsa's fix was** (`test_run_hierarchy_nextdata_id_scoping_ignores_other_products_carousel` has no RSC equivalent) — the real 29CM page was checked directly during investigation and had only one `totalDiscountedItemPrice` occurrence site-wide, no collision risk observed there, and the scoping mechanism itself (`_find_node_by_id`) is the identical, already-tested function musinsa's fix uses — but if a future RSC-based site does show a carousel-style collision, add that regression test then rather than treating this as fully closed
+- [x] Regression tests added using 29CM's real page shape (`_rsc_page()` fixture builder + 6 new tests, `test_base.py`) — reference resolution, cross-chunk row splitting, unscoped fallback, no-chunks no-op, and the full-hierarchy override
+- [x] No change to behavior for every other site currently served correctly by JSON-LD/Shopify/etc. — full suite (405 tests) passes unchanged; `_extract_rsc_flight()` is a no-op (`_parse_rsc_flight_rows()` returns `{}`) on any page without `self.__next_f.push(...)` chunks
+
+**Status (2026-08-27):** Done — implemented and verified live against 29CM's real page in the same session. Not yet deployed (needs the same `docker compose up --build backend` + rescrape cycle as the musinsa fix).
 
 ---
 

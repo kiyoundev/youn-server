@@ -18,6 +18,8 @@ from app.services.scraper.base import (
     _first_title_segment,
     _last_title_segment,
     _parse_price,
+    _parse_rsc_flight_rows,
+    _resolve_rsc_refs,
     _split_title,
     _strip_trailing_site_name,
 )
@@ -472,6 +474,126 @@ async def test_run_hierarchy_og_price_wins_when_cheaper_than_nextdata(s: DummySc
     )
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
     assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+
+
+# ---------------------------------------------------------------------------
+# _extract_rsc_flight / _parse_rsc_flight_rows / _resolve_rsc_refs
+# (issue #50 — 29CM regression)
+#
+# Real shape from 29cm.co.kr/products/3567244 (same jacket as the musinsa
+# fixtures above): no __NEXT_DATA__ tag at all (App Router) — data ships as
+# a stream of self.__next_f.push([1, "{id}:{json}"]) calls instead. The
+# tracked product's own row ("3c" on the real page) carries the URL's id
+# (itemNo) alongside a *reference* to a separate row ("internalDisplayPrice:
+# "$a7"") rather than the price inline — row "a7" is where
+# totalDiscountedItemPrice actually lives.
+# ---------------------------------------------------------------------------
+
+def _rsc_page(rows: dict, *, split_row: str | None = None) -> str:
+    """One self.__next_f.push(...) script per row — "{id}:{json}\\n" per
+    push call, matching the common case. The trailing newline matters:
+    real Flight rows are newline-terminated within the decoded chunk text
+    (confirmed against 29CM's actual page — concatenated chunks split on
+    "\\n(?=[hex]:)"), so omitting it here would merge rows into one
+    unparseable blob instead of reproducing the real boundary. If
+    split_row names a key in rows, that row's payload is emitted across
+    two separate push calls instead of one, covering the real "a single
+    row can span multiple chunks" behavior confirmed against that page."""
+    scripts = []
+    for row_id, value in rows.items():
+        row_text = f"{row_id}:{json.dumps(value)}\n"
+        if row_id == split_row:
+            mid = len(row_text) // 2
+            scripts.append(f"<script>self.__next_f.push({json.dumps([1, row_text[:mid]])})</script>")
+            scripts.append(f"<script>self.__next_f.push({json.dumps([1, row_text[mid:]])})</script>")
+        else:
+            scripts.append(f"<script>self.__next_f.push({json.dumps([1, row_text])})</script>")
+    return "<html><body>" + "".join(scripts) + "</body></html>"
+
+
+def test_parse_rsc_flight_rows_no_chunks_returns_empty(s: DummyScraper) -> None:
+    assert _parse_rsc_flight_rows("<html><body>plain page</body></html>") == {}
+
+
+def test_resolve_rsc_refs_follows_reference_to_sibling_row() -> None:
+    rows = {"3c": {"internalDisplayPrice": "$a7"}, "a7": {"totalDiscountedItemPrice": 329800}}
+    resolved = _resolve_rsc_refs(rows["3c"], rows)
+    assert resolved == {"internalDisplayPrice": {"totalDiscountedItemPrice": 329800}}
+
+
+def test_resolve_rsc_refs_leaves_unmatched_string_alone() -> None:
+    rows: dict = {}
+    assert _resolve_rsc_refs("just a plain string", rows) == "just a plain string"
+    assert _resolve_rsc_refs("$doesnotexist", rows) == "$doesnotexist"
+
+
+def test_extract_rsc_flight_resolves_reference_to_find_price(s: DummyScraper) -> None:
+    """29CM regression — the tracked product's own row has itemNo (matches
+    the URL's id) plus a reference to a separate row holding the actual
+    discounted price, not the price inline."""
+    html = _rsc_page(
+        {
+            "3c": {"itemNo": 3567244, "sellPrice": 388000, "internalDisplayPrice": "$a7"},
+            "a7": {"totalDiscountedItemPrice": 329800, "totalDiscountedRate": 15},
+        }
+    )
+    result = s._extract_rsc_flight(html, "https://www.29cm.co.kr/products/3567244")
+    assert result == ScraperResult(price=329800.0, status="ok")
+
+
+def test_extract_rsc_flight_row_split_across_multiple_pushes(s: DummyScraper) -> None:
+    """A single row's payload can be split across separate push() calls —
+    must be concatenated in document order before splitting into rows,
+    not parsed push-by-push (confirmed against 29CM's real page)."""
+    html = _rsc_page(
+        {
+            "3c": {"itemNo": 3567244, "internalDisplayPrice": "$a7"},
+            "a7": {"totalDiscountedItemPrice": 329800},
+        },
+        split_row="3c",
+    )
+    result = s._extract_rsc_flight(html, "https://www.29cm.co.kr/products/3567244")
+    assert result == ScraperResult(price=329800.0, status="ok")
+
+
+def test_extract_rsc_flight_falls_back_unscoped_when_id_unmatched(s: DummyScraper) -> None:
+    """No row carries a matching id — falls back to searching every row
+    directly, same graceful-degradation shape as _extract_nextdata's own
+    id-scoping fallback."""
+    html = _rsc_page({"a7": {"totalDiscountedItemPrice": 329800}})
+    result = s._extract_rsc_flight(html, "https://www.29cm.co.kr/products/9999999")
+    assert result == ScraperResult(price=329800.0, status="ok")
+
+
+def test_extract_rsc_flight_no_chunks_returns_none(s: DummyScraper) -> None:
+    result = s._extract_rsc_flight("<html><body>plain page</body></html>", "https://example.com/products/1")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_rsc_overrides_jsonld_when_cheaper(s: DummyScraper) -> None:
+    """29CM regression, full hierarchy — JSON-LD reports the list price
+    (what today's code found before this fix); RSC/Flight rows have the
+    real coupon-discounted price. RSC is checked unconditionally (same
+    pattern as NEXT_DATA) and its strictly cheaper match overrides
+    JSON-LD's cruder one."""
+    rsc_scripts = _rsc_page(
+        {
+            "3c": {"itemNo": 3567244, "internalDisplayPrice": "$a7"},
+            "a7": {"totalDiscountedItemPrice": 329800},
+        }
+    ).split("<body>", 1)[1]
+    html = (
+        '<html><head><script type="application/ld+json">'
+        + json.dumps({"@type": "Product", "offers": {"price": "388000"}})
+        + "</script></head><body>"
+        + rsc_scripts
+    )
+    result = await s._run_hierarchy(html, "https://www.29cm.co.kr/products/3567244")
+    # currency="KRW", not the other tests' "CAD" default — .co.kr triggers
+    # the existing TLD-based KRW fallback (_extract_currency), unrelated
+    # to this test's actual subject (the price override).
+    assert result == ScraperResult(price=329800.0, status="ok", currency="KRW")
 
 
 # ---------------------------------------------------------------------------

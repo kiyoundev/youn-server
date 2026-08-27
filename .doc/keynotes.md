@@ -835,3 +835,60 @@ Whichever login happens last wins; anything still holding an earlier sid is now 
 2FA was ruled out as a contributing cause (checked directly — not enabled on the account) — this is purely the concurrent-session race described above, see [[Concurrent Session Invalidation]] in Concepts for the general pattern and the decided solution.
 
 **Status:** fixed. Applied to `backend/app/services/synology.py` — persistent cached `_sid`, `asyncio.Lock` scoped to `_get_sid`'s refresh step only, `_SessionExpired` raised specifically on DSM error codes 106/119 and caught by `get_storage()` for a single retry-with-relogin. `_logout` wired into a new `close()` method, called from `backend/app/main.py`'s `lifespan()` shutdown sequence alongside the existing `finnhub.stop()`. Not yet verified against the live NAS — next real DSM poll (or a container restart) will confirm.
+
+## Rendering strategies — CSR, SSR (+ hydration), and RSC compared (2026-08-27)
+
+Why this belongs here: surfaced debugging issue #50 (29CM's scraper returning the wrong price). Musinsa and 29CM disagree with each other not because of a scraper bug in the ordinary sense, but because the two retailers are built on genuinely different Next.js rendering models — worth understanding the mechanics once, generally, since it explains why one site's data fits in `__NEXT_DATA__` and the other's structurally can't.
+
+### The four strategies, by how much work server vs. browser does
+
+**1. CSR (Client-Side Rendering)** — classic single-page app (plain React/Vue, `create-react-app`). Server sends a near-empty HTML shell + a JS bundle. The browser downloads and executes that JS, and *that* JS builds the entire page client-side, including fetching data via API calls after the page has already "loaded." View-source shows almost nothing — no scraper without real JS execution (i.e. no plain `httpx` request) can read anything meaningful off a CSR page.
+
+**2. Traditional SSR (+ hydration)** — the older model (Next.js Pages Router, `getServerSideProps`, most historical "SSR" frameworks). The server runs the *same* component code the browser would, producing full real HTML for the first response — good first paint, good SEO, and a plain HTTP scraper sees real content immediately. Concretely, same component:
+
+```jsx
+function ProductPage({ price }) {
+  return <div>Price: ${price}</div>;
+}
+```
+
+1. Request arrives at a Node.js server (a JS *runtime* on the server, not a browser).
+2. Server calls something like `renderToString(<ProductPage price={310400} />)` — runs the component function in Node, producing a plain HTML string. No DOM exists yet anywhere; this is string generation.
+3. That HTML string is sent to the browser as a complete document — real content, visible via plain HTTP fetch, no JS execution needed on the reader's end.
+4. Browser's own HTML parser paints it immediately — fast, no JS required yet.
+5. Browser downloads the JS bundle containing that same component's code, separately.
+6. Once loaded, the browser calls the *same* `ProductPage({ price: 310400 })` function again — this time in the browser — and instead of replacing the existing DOM, React walks it and attaches event listeners/state to it. That's **hydration**: making already-painted static markup interactive, not repainting it.
+
+For hydration to reproduce identical output, the server has to hand the browser the *data* it used (`price: 310400`) — not the code, the bundle already has that. That's what `__NEXT_DATA__` is: one JSON blob of props, serialized once, for the client's re-render pass to consume.
+
+**3. RSC (React Server Components)** — Next.js App Router's current model. Splits components into two kinds:
+
+| | Server Components (default) | Client Components (`"use client"`) |
+|---|---|---|
+| Where it runs | Server only | Server (first render) + browser (hydration) |
+| JS shipped to browser | **None at all** | Yes, same as traditional SSR |
+| Can touch DB/filesystem directly | Yes — no API layer needed | No — needs props from a server component or an API call |
+| What's sent to the client | Serialized *output* (Flight rows) | Code + data, hydrates like #2 above |
+
+A real page mixes both kinds. The server-only parts never get re-executed by the browser at all — no hydration pass for them, because their JS was never shipped in the first place. The browser only hydrates the "islands" of interactive Client Components.
+
+**The conceptual shift from #2 to #3:** traditional SSR's server render is a *preview* — an optimization so the page isn't blank while the browser prepares to fully rebuild it via hydration. RSC's server render is *final* for the server-only parts — nothing rebuilds them. That's why RSC doesn't ship one big props blob the way `__NEXT_DATA__` does: there's no client-side reconstruction step needing all the data reassembled into one object. It ships a description of already-finished UI, piece by piece, as each piece becomes ready — a **stream** of small chunks (`self.__next_f.push(...)`, "Flight" being the internal codename for this wire protocol — `next_f` = "Next Flight"), each row addressable by an id, later rows able to *reference* earlier ones (`"$a7"`) instead of duplicating shared data. This lets a slow part (wrapped in `<Suspense>`) arrive as a later chunk without blocking everything else that was already ready — real 29CM product pages stream on the order of 90+ separate chunks this way.
+
+### Why `og:price` and `__NEXT_DATA__` don't already cover RSC data
+
+Three genuinely separate mechanisms, easy to conflate since they can all carry the same underlying value (a product's price):
+
+| Mechanism | What it is | Who maintains it | Exists on... |
+|---|---|---|---|
+| `og:price` meta tag | Static Open Graph tag, originally for social-media link previews (Facebook/Twitter price cards) | SEO/marketing tooling — any framework, unrelated to Next.js entirely | Any site that bothers to add one |
+| `__NEXT_DATA__` | Pages Router's one-shot props blob (see #2 above) | Next.js's older routing model | Pages Router pages only |
+| RSC/Flight (`self.__next_f.push`) | App Router's streamed component output (see #3 above) | Next.js's current routing model | App Router pages only |
+
+None of them "cover" the others — a page can have any combination, or none, and they're written by different parts of a site's stack at different times, which is exactly why they can *disagree*: musinsa's `og:price` meta reported a stale plain sale price while its own `__NEXT_DATA__` (the actual component-level data) had the accurate coupon price. A site's Next.js routing generation (Pages vs. App Router) determines whether `__NEXT_DATA__` exists **at all** — not a bug, not a missing tag, a different data-shipping mechanism entirely. Confirmed directly: musinsa's page has exactly one `<script id="__NEXT_DATA__">` tag; 29CM's has zero, only `self.__next_f.push(...)` chunks.
+
+### Tie-in: why this repo needs two different scraper extraction methods
+
+- **Musinsa** (Pages Router, or at least still emits `__NEXT_DATA__`) — one clean, `json.loads`-able JSON tree. `_extract_nextdata()` (`backend/app/services/scraper/base.py`) reads it directly.
+- **29CM** (App Router, RSC/Flight streaming) — no such single tree exists. The real discounted price is genuinely present in the initial HTTP response (the page *is* server-rendered — this doesn't require a real browser/Patchright, no client-side JS execution needed), just encoded as ~90 cross-referencing stream chunks instead of one object. Needs its own parser (`_extract_rsc_flight()`, tracked as issue #50, `.doc/issues.md`) — concatenate the chunk payloads, split into rows, resolve `"$rowId"` references, then reuse the same priority-key/ID-scoping search machinery `_extract_nextdata()` already has, rather than reinventing it.
+
+Both sites are legitimately server-rendering their price data — the difference is entirely in *which* Next.js data-shipping mechanism each one happens to use, not in how "scrapeable" one is versus the other.
