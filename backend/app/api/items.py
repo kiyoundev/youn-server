@@ -190,7 +190,7 @@ def _build_product_response(
     )
 
 
-async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
+async def get_product(product_id: int, db: AsyncSession) -> Product:
     result = await db.execute(select(Product).options(selectinload(Product.listings)).where(Product.id == product_id))
     product = result.scalar_one_or_none()
     if product is None:
@@ -198,7 +198,7 @@ async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
     return product
 
 
-async def _get_listing_or_404(product_id: int, listing_id: int, db: AsyncSession) -> Listing:
+async def get_listing(product_id: int, listing_id: int, db: AsyncSession) -> Listing:
     listing = await db.get(Listing, listing_id)
     if listing is None or listing.product_id != product_id:
         raise HTTPException(status_code=404, detail="Listing not found")
@@ -228,7 +228,7 @@ async def list_items(db: AsyncSession = Depends(get_db)) -> list[ProductResponse
     summary="Get a single wishlist product",
 )
 async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductResponse:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
     last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
     return _build_product_response(product, last_checked_map, in_flight_snapshot())
 
@@ -358,7 +358,7 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
     description="Same retailer-derivation and `scraper_type` auto-detection as `POST /api/items`.",
 )
 async def create_listing(request: Request, product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
-    await _get_product_or_404(product_id, db)
+    await get_product(product_id, db)
 
     existing = await db.execute(select(Listing.id).where(Listing.url == body.url))
     if existing.scalar_one_or_none() is not None:
@@ -401,7 +401,7 @@ async def create_listing(request: Request, product_id: int, body: ListingCreate,
     ),
 )
 async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = Depends(get_db)) -> ProductResponse:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
 
     if body.name is not None:
         product.name = body.name
@@ -428,7 +428,7 @@ async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = D
     description="Cascades to delete all listings and their price history.",
 )
 async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
     await db.delete(product)
     await db.commit()
 
@@ -449,7 +449,7 @@ async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> No
     ),
 )
 async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
-    listing = await _get_listing_or_404(product_id, listing_id, db)
+    listing = await get_listing(product_id, listing_id, db)
 
     if body.url is not None and body.url != listing.url:
         existing = await db.execute(select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id))
@@ -483,7 +483,7 @@ async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, 
     ),
 )
 async def delete_listing(product_id: int, listing_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    listing = await _get_listing_or_404(product_id, listing_id, db)
+    listing = await get_listing(product_id, listing_id, db)
 
     sibling_count = await db.execute(select(func.count(Listing.id)).where(Listing.product_id == product_id, Listing.id != listing_id))
     is_last_listing = sibling_count.scalar_one() == 0
@@ -491,7 +491,7 @@ async def delete_listing(product_id: int, listing_id: int, db: AsyncSession = De
     if is_last_listing:
         # Eager-load listings (not db.get()) so the ORM cascade has what it
         # needs without relying on implicit lazy-loading during delete().
-        product = await _get_product_or_404(product_id, db)
+        product = await get_product(product_id, db)
         await db.delete(product)
     else:
         await db.delete(listing)
@@ -509,7 +509,7 @@ async def get_listing_history(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ) -> list[PriceHistory]:
-    await _get_listing_or_404(product_id, listing_id, db)
+    await get_listing(product_id, listing_id, db)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
