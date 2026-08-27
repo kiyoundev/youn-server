@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ExternalLink, LoaderCircle, MoreVertical, Plus, Search, Pencil, Trash2, ClockAlert } from "lucide-react";
+import { ExternalLink, LoaderCircle, MoreVertical, Plus, RefreshCw, Search, Pencil, Trash2, ClockAlert } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
@@ -31,6 +31,8 @@ import {
   updateListing,
   deleteListing,
   deleteProduct,
+  pollAllPrices,
+  pollProduct,
   ApiError,
   getFxRates,
   type Product,
@@ -276,6 +278,14 @@ function ProductRow({
   // the only way to reach it is through this row, so it's already mounted.
   const [historyByListing, setHistoryByListing] = useState<Record<number, HistoryPoint[]>>({});
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  // Issue #51 — covers just the click-to-response gap; product.status
+  // becoming "processing" (via the in-flight set, once the SSE update
+  // lands) is what keeps the button disabled for the actual scrape
+  // duration after that. Without this, a second click during the brief
+  // window before the first SSE event arrives could slip past the
+  // server's own in-flight/cooldown guards' timing and still show as an
+  // instant, confusing no-op on the button itself.
+  const [isPolling, setIsPolling] = useState(false);
 
   const handleHistoryData = useCallback((listingId: number, points: HistoryPoint[]) => {
     setHistoryByListing((prev) => ({ ...prev, [listingId]: points }));
@@ -347,6 +357,23 @@ function ProductRow({
       toast.error(err instanceof ApiError ? err.detail : "Failed to delete item");
     } finally {
       setIsDeleteDialogOpen(false);
+    }
+  };
+
+  // Issue #51 — no mutate() call here, unlike the handlers above: this
+  // product's own listings turning "processing" then resolving happens via
+  // the existing SSE flow (subscribeToListingEvents -> mutate) as the
+  // background scrape actually runs, not as a direct result of this POST
+  // resolving (which only means the scrape was queued, not finished).
+  const handleRescrapeProduct = async () => {
+    setIsPolling(true);
+    try {
+      await pollProduct(product.id);
+      toast.success("Rescraping…");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.detail : "Failed to trigger rescrape");
+    } finally {
+      setIsPolling(false);
     }
   };
 
@@ -515,9 +542,20 @@ function ProductRow({
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Retailers</span>
-                <Button variant="ghost" size="icon-sm" aria-label="Add retailer" onClick={() => dispatchEdit({ type: "addListing" })}>
-                  <Plus size={16} strokeWidth={1.5} />
-                </Button>
+                <div className="flex items-center">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Rescrape ${product.name ?? "item"}`}
+                    disabled={isPolling || product.status === "processing"}
+                    onClick={handleRescrapeProduct}
+                  >
+                    <RefreshCw size={16} strokeWidth={1.5} />
+                  </Button>
+                  <Button variant="ghost" size="icon-sm" aria-label="Add retailer" onClick={() => dispatchEdit({ type: "addListing" })}>
+                    <Plus size={16} strokeWidth={1.5} />
+                  </Button>
+                </div>
               </div>
               {product.listings.map((listing) =>
                 editState.type === "listing" && editState.id === listing.id ? (
@@ -703,6 +741,22 @@ export default function WatchlistPage() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [newItem, setNewItem] = useState(emptyNewItem);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Issue #51 — same click-to-response-gap coverage as ProductRow's
+  // isPolling above; the actual "processing" rows are driven by the
+  // existing SSE flow once poll_prices's background task picks them up.
+  const [isRescrapingAll, setIsRescrapingAll] = useState(false);
+
+  const handleRescrapeAll = async () => {
+    setIsRescrapingAll(true);
+    try {
+      await pollAllPrices();
+      toast.success("Rescraping…");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.detail : "Failed to trigger rescrape");
+    } finally {
+      setIsRescrapingAll(false);
+    }
+  };
 
   const handleExpandSearch = () => {
     setSearchExpanded(true);
@@ -909,6 +963,15 @@ export default function WatchlistPage() {
                 )}
               />
             </div>
+            <button
+              type="button"
+              aria-label="Rescrape all"
+              disabled={isRescrapingAll}
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={handleRescrapeAll}
+            >
+              <RefreshCw className="size-4 shrink-0 opacity-50" />
+            </button>
             <button
               type="button"
               aria-label="New item"

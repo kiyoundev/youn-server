@@ -2,7 +2,7 @@
 
 ## Potential Challenges
 
-1. **Zero-listing product hitting the new route** — a `Product` can exist with an empty `listings` list (e.g. mid-creation, or every listing deleted individually before the last one triggers product deletion — actually `delete_listing` deletes the product once its last listing goes, so this may be unreachable in practice; worth a quick check during implementation rather than assuming). If reachable, decide 404 vs. no-op 200 before writing the route — currently open, flagged in implementation.md step 2.
+1. **Zero-listing product hitting the new route** — resolved: `POST /api/items` allows `urls=[]` (product created with no listings, for callers that add listings separately), so this is reachable. Decided: no special-case in the route — `_dispatch_first_scrapes` on an empty `listing_ids` list is a no-op `gather()` that returns immediately, so it still 200s with `status="queued"` rather than needing its own branch or a 404.
 
 2. **Per-product cooldown dict grows unbounded** — `_last_product_trigger: dict[int, datetime]` never evicts entries for deleted products. Low real-world risk (single-user app, product count stays small, each entry is one int key + one datetime), but worth a one-line note in the dict's docstring (matching `scrape_tracking.py`'s own "purely in-memory, process-local, restart loses it" framing) rather than silently leaving it unexplained.
 

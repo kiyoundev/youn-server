@@ -167,6 +167,25 @@ export function deleteListing(productId: number, listingId: number): Promise<voi
   return request<void>(`${BASE}/${productId}/listings/${listingId}`, { method: "DELETE" });
 }
 
+// Issue #51 — manual rescrape, outside the normal 6h schedule. Both return
+// {"status": "queued"} immediately; results land via the existing SSE flow
+// (subscribeToListingEvents -> mutate("/api/proxy/items")), same as every
+// other mutation on this page — no new polling loop needed here either.
+
+// Whole-watchlist rescrape. Not under BASE ("/api/proxy/items") — relays to
+// the backend's existing POST /api/poll/prices (from #6), rate-limited
+// there to one call per 5 minutes, process-wide.
+export function pollAllPrices(): Promise<{ status: string }> {
+  return request<{ status: string }>("/api/proxy/poll/prices", { method: "POST" });
+}
+
+// Single-product rescrape — only this product's own listings, not the
+// whole watchlist. Rate-limited per-product server-side (45s cooldown, plus
+// an in-flight guard) — see backend/app/api/items.py:poll_item.
+export function pollProduct(productId: number): Promise<{ status: string }> {
+  return request<{ status: string }>(`${BASE}/${productId}/poll`, { method: "POST" });
+}
+
 // Not under BASE ("/api/proxy/items") — the proxy is a generic [...path]
 // catch-all (route.ts), so "/api/proxy/fx-rates" relays straight to the
 // backend's GET /api/fx-rates with no new proxy code needed.

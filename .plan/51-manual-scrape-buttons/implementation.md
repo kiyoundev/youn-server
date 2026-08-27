@@ -3,30 +3,30 @@
 ## Steps
 
 ### 1. Backend — per-product cooldown state
-- [ ] In `backend/app/api/items.py`, add module-level `_last_product_trigger: dict[int, datetime] = {}` and a `_PRODUCT_RATE_LIMIT_WINDOW = timedelta(seconds=45)` constant
-- [ ] Add `_check_product_rate_limit(product_id: int) -> None`, same shape as `poll.py`'s `_check_rate_limit`, raising `HTTPException(429, detail=f"Rate limited, try again in {remaining}s")` when inside the window
+- [x] In `backend/app/api/items.py`, add module-level `_last_product_trigger: dict[int, datetime] = {}` and a `_PRODUCT_RATE_LIMIT_WINDOW = timedelta(seconds=45)` constant
+- [x] Add `_check_product_rate_limit(product_id: int) -> None`, same shape as `poll.py`'s `_check_rate_limit`, raising `HTTPException(429, detail=f"Rate limited, try again in {remaining}s")` when inside the window
 
 ### 2. Backend — new route
-- [ ] Add `POST /api/items/{product_id}/poll` in `items.py`:
-  - `await _get_product_or_404(product_id, db)` to load the product + listings (reuses existing helper, 404s correctly)
+- [x] Add `POST /api/items/{product_id}/poll` in `items.py` (named `poll_item`):
+  - `await get_product(product_id, db)` to load the product + listings (renamed from `_get_product_or_404`, see the standalone rename commit)
   - Compute `listing_ids = [l.id for l in product.listings]`
-  - If `listing_ids` is empty, decide: 404 or no-op 200 — product with zero listings can't be rescraped (edge case, see challenges.md)
+  - Zero-listing edge case resolved: no special-case — `_dispatch_first_scrapes` on an empty list is a no-op `gather()` that returns immediately, still 200s with `status="queued"`
   - If any `listing_ids` intersect `in_flight_snapshot()` → `raise HTTPException(429, detail="Already scraping — try again shortly")`
   - Else `_check_product_rate_limit(product_id)` (429 on cooldown)
   - Else record `_last_product_trigger[product_id] = datetime.now(timezone.utc)`, `spawn(_dispatch_first_scrapes(listing_ids, _first_scrape_semaphore, request.app.state.event_queue))`, return `{"status": "queued"}`
 
 ### 3. Frontend — data layer
-- [ ] In `frontend/src/lib/api/items.ts`, add `pollAllPrices()` and `pollProduct(productId)` (see schema.md for exact signatures)
+- [x] In `frontend/src/lib/api/items.ts`, add `pollAllPrices()` and `pollProduct(productId)` (see schema.md for exact signatures)
 
 ### 4. Frontend — global button
-- [ ] In `watchlist/page.tsx` toolbar (near line 912-919, next to "New item"), add an icon button (`RefreshCw`, `aria-label="Rescrape all"`)
-- [ ] `onClick`: `try { await pollAllPrices(); toast.success("Rescraping…"); } catch (err) { toast.error(err instanceof ApiError ? err.detail : "Failed to trigger rescrape"); }`
-- [ ] No manual `mutate()` call needed — existing SSE flow already refreshes `/api/proxy/items` as results land
+- [x] In `watchlist/page.tsx` toolbar, next to "New item", add an icon button (`RefreshCw`, `aria-label="Rescrape all"`), disabled for the click-to-response gap via local `isRescrapingAll` state
+- [x] `onClick`: `try { await pollAllPrices(); toast.success("Rescraping…"); } catch (err) { toast.error(err instanceof ApiError ? err.detail : "Failed to trigger rescrape"); }`
+- [x] No manual `mutate()` call needed — existing SSE flow already refreshes `/api/proxy/items` as results land
 
 ### 5. Frontend — per-item button
-- [ ] In the sheet panel's "Retailers" row (line 515-521), add a second icon button (`RefreshCw`, `aria-label="Rescrape {product.name ?? 'item'}"`) next to the existing "Add retailer" `+` button, both right-aligned in the existing `justify-between` row
-- [ ] `disabled` when any of `product.listings` has its `id` in the current in-flight set — reuse `product.status === "processing"` if that's a sufficient proxy (it already folds in-flight into its check per `compute_status()`), otherwise thread the in-flight ids through if finer-grained disable is needed (see challenges.md)
-- [ ] `onClick`: same try/catch/toast pattern as the global button, calling `pollProduct(product.id)`
+- [x] In the sheet panel's "Retailers" row, add a second icon button (`RefreshCw`, `aria-label="Rescrape {product.name ?? 'item'}"`) next to the existing "Add retailer" `+` button, both right-aligned in the existing `justify-between` row
+- [x] `disabled` when `isPolling` (local, covers the click-to-response gap) or `product.status === "processing"` (covers the actual scrape duration via the existing in-flight-aware status)
+- [x] `onClick`: same try/catch/toast pattern as the global button, calling `pollProduct(product.id)`
 
 ### 6. Testing & Validation
 - [ ] Manual test: click global button, confirm "Rescraping…" toast, confirm rows update to "processing" then resolve via SSE with no page reload
