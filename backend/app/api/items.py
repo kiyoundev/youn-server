@@ -60,6 +60,28 @@ _PROBE_CONCURRENCY = 3
 _FIRST_SCRAPE_CONCURRENCY = 3
 _first_scrape_semaphore = asyncio.Semaphore(_FIRST_SCRAPE_CONCURRENCY)
 
+# Issue #51 — per-product cooldown for the manual per-item poll route below.
+# Deliberately separate from poll.py's _last_prices_trigger (process-wide,
+# one datetime, 5-minute window): that lock is wrong at this granularity —
+# it would block re-scraping product B just because product A was triggered
+# a moment ago. Keyed by product_id instead, shorter window (spam-click
+# guard, not a heavy-cycle guard). Purely in-memory, process-local, same
+# restart-loses-state tradeoff poll.py's own trigger already accepts — never
+# evicted for deleted products, but bounded by how many products actually
+# exist, so unbounded growth isn't a real concern here.
+_PRODUCT_RATE_LIMIT_WINDOW = timedelta(seconds=45)
+_last_product_trigger: dict[int, datetime] = {}
+
+
+def _check_product_rate_limit(product_id: int) -> None:
+    last_trigger = _last_product_trigger.get(product_id)
+    if last_trigger is None:
+        return
+    elapsed = datetime.now(timezone.utc) - last_trigger
+    if elapsed < _PRODUCT_RATE_LIMIT_WINDOW:
+        remaining = int((_PRODUCT_RATE_LIMIT_WINDOW - elapsed).total_seconds())
+        raise HTTPException(status_code=429, detail=f"Rate limited, try again in {remaining}s")
+
 
 class _ProbeResult(NamedTuple):
     url: str
@@ -190,7 +212,7 @@ def _build_product_response(
     )
 
 
-async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
+async def get_product(product_id: int, db: AsyncSession) -> Product:
     result = await db.execute(select(Product).options(selectinload(Product.listings)).where(Product.id == product_id))
     product = result.scalar_one_or_none()
     if product is None:
@@ -198,7 +220,7 @@ async def _get_product_or_404(product_id: int, db: AsyncSession) -> Product:
     return product
 
 
-async def _get_listing_or_404(product_id: int, listing_id: int, db: AsyncSession) -> Listing:
+async def get_listing(product_id: int, listing_id: int, db: AsyncSession) -> Listing:
     listing = await db.get(Listing, listing_id)
     if listing is None or listing.product_id != product_id:
         raise HTTPException(status_code=404, detail="Listing not found")
@@ -228,9 +250,64 @@ async def list_items(db: AsyncSession = Depends(get_db)) -> list[ProductResponse
     summary="Get a single wishlist product",
 )
 async def get_item(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductResponse:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
     last_checked_map = await _fetch_last_checked_map(db, [listing.id for listing in product.listings])
     return _build_product_response(product, last_checked_map, in_flight_snapshot())
+
+
+@router.post(
+    "/api/items/{product_id}/poll",
+    summary="Manually trigger a re-scrape of one product's own listings",
+    description=(
+        "Outside the normal 6h schedule — rescrapes only this product's "
+        "listings, not the whole watchlist (see POST /api/poll/prices for "
+        "that). Runs as a background task, same as /api/poll/prices — "
+        "returns immediately with status='queued'. Rejected (429) if any "
+        "of this product's listings are already mid-scrape, or if called "
+        "again within 45s of the last trigger for this product."
+    ),
+)
+async def poll_item(request: Request, product_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+    """Manually trigger #41's add-time first-scrape machinery for one
+    product's own listings, outside poll_prices's normal 6h schedule.
+
+    Reuses _dispatch_first_scrapes (jobs.py:346) — same call shape as #41's
+    add-time first-scrape and poll_prices's own per-product batches — so the
+    concurrency-bounded gather, Patchright close-if-idle, and in-flight
+    tracking all come for free. compute_status() already shows "processing"
+    for a manually-triggered re-scrape with zero changes there — it only
+    checks the in-flight set, not *why* something's in flight.
+
+    A product with zero listings (POST /api/items allows urls=[]) isn't
+    special-cased — _dispatch_first_scrapes on an empty list is a no-op
+    gather() that returns immediately; still 200s with status='queued'
+    rather than erroring over a product that simply has nothing to scrape
+    yet.
+
+    Args:
+        request: Used to reach the shared `event_queue` on `app.state`.
+        product_id: The product whose listings should be rescraped.
+        db: Session used only to resolve product_id -> its listing ids.
+
+    Returns:
+        `{"status": "queued"}`.
+
+    Raises:
+        HTTPException: 404 if the product doesn't exist.
+        HTTPException: 429 if any of this product's listings are already
+            in flight, or if triggered again within 45s of the last trigger
+            for this product.
+    """
+    product = await get_product(product_id, db)
+    listing_ids = [listing.id for listing in product.listings]
+
+    if any(lid in in_flight_snapshot() for lid in listing_ids):
+        raise HTTPException(status_code=429, detail="Already scraping — try again shortly")
+    _check_product_rate_limit(product_id)
+
+    _last_product_trigger[product_id] = datetime.now(timezone.utc)
+    spawn(_dispatch_first_scrapes(listing_ids, _first_scrape_semaphore, request.app.state.event_queue))
+    return {"status": "queued"}
 
 
 @router.post(
@@ -358,7 +435,7 @@ async def create_item(request: Request, body: ProductCreate, db: AsyncSession = 
     description="Same retailer-derivation and `scraper_type` auto-detection as `POST /api/items`.",
 )
 async def create_listing(request: Request, product_id: int, body: ListingCreate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
-    await _get_product_or_404(product_id, db)
+    await get_product(product_id, db)
 
     existing = await db.execute(select(Listing.id).where(Listing.url == body.url))
     if existing.scalar_one_or_none() is not None:
@@ -401,7 +478,7 @@ async def create_listing(request: Request, product_id: int, body: ListingCreate,
     ),
 )
 async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = Depends(get_db)) -> ProductResponse:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
 
     if body.name is not None:
         product.name = body.name
@@ -428,7 +505,7 @@ async def update_item(product_id: int, body: ProductUpdate, db: AsyncSession = D
     description="Cascades to delete all listings and their price history.",
 )
 async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    product = await _get_product_or_404(product_id, db)
+    product = await get_product(product_id, db)
     await db.delete(product)
     await db.commit()
 
@@ -449,7 +526,7 @@ async def delete_item(product_id: int, db: AsyncSession = Depends(get_db)) -> No
     ),
 )
 async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, db: AsyncSession = Depends(get_db)) -> ListingResponse:
-    listing = await _get_listing_or_404(product_id, listing_id, db)
+    listing = await get_listing(product_id, listing_id, db)
 
     if body.url is not None and body.url != listing.url:
         existing = await db.execute(select(Listing.id).where(Listing.url == body.url, Listing.id != listing_id))
@@ -483,7 +560,7 @@ async def update_listing(product_id: int, listing_id: int, body: ListingUpdate, 
     ),
 )
 async def delete_listing(product_id: int, listing_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    listing = await _get_listing_or_404(product_id, listing_id, db)
+    listing = await get_listing(product_id, listing_id, db)
 
     sibling_count = await db.execute(select(func.count(Listing.id)).where(Listing.product_id == product_id, Listing.id != listing_id))
     is_last_listing = sibling_count.scalar_one() == 0
@@ -491,7 +568,7 @@ async def delete_listing(product_id: int, listing_id: int, db: AsyncSession = De
     if is_last_listing:
         # Eager-load listings (not db.get()) so the ORM cascade has what it
         # needs without relying on implicit lazy-loading during delete().
-        product = await _get_product_or_404(product_id, db)
+        product = await get_product(product_id, db)
         await db.delete(product)
     else:
         await db.delete(listing)
@@ -509,7 +586,7 @@ async def get_listing_history(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ) -> list[PriceHistory]:
-    await _get_listing_or_404(product_id, listing_id, db)
+    await get_listing(product_id, listing_id, db)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(

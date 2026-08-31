@@ -156,6 +156,18 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         # at all, so re-scraping an existing listing looked identical to
         # doing nothing until the new result landed.
         mark_in_flight(listing.id)
+        # Issue #51 follow-up — a "started" broadcast, mirroring the
+        # completion one below, so compute_status()'s "processing" signal
+        # (issue #45 follow-up, docstring above) is actually observable
+        # client-side. Without this, nothing tells a connected frontend to
+        # refetch until the scrape's own completion broadcast fires — by
+        # which point in_flight has already cleared, so "processing" is
+        # never visible for a scrape too fast to be caught by some *other*
+        # listing's completion refetch landing while this one's still mid-
+        # flight (the only way it was ever visible before: reliably true
+        # for poll_prices's own many-listings-at-once cycle, effectively
+        # never true for a single-listing manual per-item poll).
+        broadcast({"product_id": listing.product_id, "listing_id": listing.id})
         try:
             scrape = await router.get_price(listing.url, scraper_type=listing.scraper_type)
 
