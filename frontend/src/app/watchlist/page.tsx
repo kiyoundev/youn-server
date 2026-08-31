@@ -550,7 +550,11 @@ function ProductRow({
                     disabled={isPolling || product.status === "processing"}
                     onClick={handleRescrapeProduct}
                   >
-                    <RefreshCw size={16} strokeWidth={1.5} />
+                    {isPolling || product.status === "processing" ? (
+                      <LoaderCircle size={16} strokeWidth={1.5} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={16} strokeWidth={1.5} />
+                    )}
                   </Button>
                   <Button variant="ghost" size="icon-sm" aria-label="Add retailer" onClick={() => dispatchEdit({ type: "addListing" })}>
                     <Plus size={16} strokeWidth={1.5} />
@@ -909,6 +913,14 @@ export default function WatchlistPage() {
   const triggeredCount = products.filter((product) => product.status === "triggered").length;
   const watchingCount = products.filter((product) => product.status === "watching").length;
   const failedCount = products.filter((product) => product.status === "failed").length;
+  // Issue #51 follow-up — drives the global rescrape button's spinner past
+  // the click-to-response gap (isRescrapingAll alone) for the actual scrape
+  // duration too, same reasoning as ProductRow's own isPolling/status
+  // combo below. Broader than "this click's own scrape" (also true during
+  // any other in-flight scrape, e.g. #41's add-time first-scrape) — read
+  // as "something's actively scraping right now," which is accurate either
+  // way and needs no extra per-request tracking to compute.
+  const isAnyProcessing = products.some((product) => product.status === "processing");
 
   if (isLoading) {
     return <LoadingScreen page="Watchlist" />;
@@ -966,11 +978,15 @@ export default function WatchlistPage() {
             <button
               type="button"
               aria-label="Rescrape all"
-              disabled={isRescrapingAll}
+              disabled={isRescrapingAll || isAnyProcessing}
               className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               onClick={handleRescrapeAll}
             >
-              <RefreshCw className="size-4 shrink-0 opacity-50" />
+              {isRescrapingAll || isAnyProcessing ? (
+                <LoaderCircle className="size-4 shrink-0 animate-spin opacity-50" />
+              ) : (
+                <RefreshCw className="size-4 shrink-0 opacity-50" />
+              )}
             </button>
             <button
               type="button"
