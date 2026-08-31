@@ -22,7 +22,13 @@ function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
     <ToastPrimitive.Viewport
       data-slot="toast-viewport"
       className={cn(
-        "pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
+        // z-[60], not z-50 — Sheet/Dialog/DropdownMenu overlays (base-ui)
+        // all use z-50 too, and whichever one's portal mounts later in the
+        // DOM wins the paint order at an equal z-index. This viewport
+        // mounts once at root layout, so a Sheet opened afterward (e.g.
+        // watchlist's product panel) was painting over it, silently
+        // hiding every toast fired while any sheet/dialog stayed open.
+        "pointer-events-none fixed inset-x-4 bottom-4 z-[60] mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
         className
       )}
       {...props}
