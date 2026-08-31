@@ -2720,7 +2720,7 @@ Split out from the musinsa fix (same conversation, same regression report — us
 
 ---
 
-## [ ] Issue #51 — Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule
+## [x] Issue #51 — Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule
 
 **Type:** feat / AFK
 **Estimate:** ~2.5h
@@ -2745,9 +2745,9 @@ User request, prompted directly by this session's musinsa/29CM investigation —
 
 ### Acceptance criteria
 
-- [ ] Global button calls `POST /api/poll/prices`, surfaces the 429 cooldown message instead of a generic error, and results show up via the existing SSE refresh without a manual page reload
-- [ ] New `POST /api/items/{product_id}/poll` route rescrapes only that product's own listings, reusing `_dispatch_first_scrapes` — not a second scraping implementation
-- [ ] Manually-triggered re-scrape shows `"processing"` on the affected row/sheet via existing `compute_status()`, no changes needed to that function
-- [ ] Rapid repeat clicks on the same product's button don't queue redundant concurrent scrapes of the same listings — rate-limit strategy decided and implemented, not left as a TODO
-- [ ] Sheet-panel button disables while its own product's listings are in flight; re-enables once the SSE update lands
-- [ ] No regression to `poll_prices`'s own 6h schedule or #41's add-time first-scrape — both still work unchanged
+- [x] Global button calls `POST /api/poll/prices`, surfaces the 429 cooldown message instead of a generic error, and results show up via the existing SSE refresh without a manual page reload
+- [x] New `POST /api/items/{product_id}/poll` route rescrapes only that product's own listings, reusing `_dispatch_first_scrapes` — not a second scraping implementation
+- [x] Manually-triggered re-scrape shows `"processing"` on the affected row/sheet via existing `compute_status()`, no changes needed to that function
+- [x] Rapid repeat clicks on the same product's button don't queue redundant concurrent scrapes of the same listings — rate-limit strategy decided and implemented, not left as a TODO
+- [x] Sheet-panel button disables while its own product's listings are in flight; re-enables once the SSE update lands
+- [x] No regression to `poll_prices`'s own 6h schedule or #41's add-time first-scrape — both still work unchanged

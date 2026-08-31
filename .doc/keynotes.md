@@ -545,6 +545,8 @@ Came up while designing a planned chatbot feature (discuss a TradingAgents stock
 
 **Axis 1 — how you authenticate.** API key (`x-api-key` header) vs. OAuth login tied to a Claude.ai account/subscription (`Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` header, obtained via `ant auth login`). This changes *who pays and how* — metered per-token API billing vs. a subscription's bundled usage — nothing else.
 
+> **⚠️ Contradicted by #25's live findings (2026-08-25) — see the entry below.** "OAuth via `ant auth login` draws on subscription bundled usage" turned out to be false for this org. Don't treat the claim above as settled; the correction below is what actually happened.
+
 **Axis 2 — whether the API remembers your conversation.** A property of the `/v1/messages` endpoint itself, completely independent of axis 1. The Messages API is **stateless**: no `session_id`, no server-side memory, full `messages` history required on every single request. This is true regardless of which credential type hits the endpoint — same request/response shape either way.
 
 **The mixup:** after agreeing to use OAuth/subscription auth instead of a metered API key, it was easy to assume that also meant the API would handle conversation persistence automatically (something like Claude Code's `/resume`). It doesn't — `/resume` is a Claude Code *product* feature, not an API feature. Claude Code stores your session transcripts locally on your own machine and resends the full history itself, exactly like any other caller would have to.
@@ -556,6 +558,26 @@ Came up while designing a planned chatbot feature (discuss a TradingAgents stock
 - Every turn: load all prior `ChatMessage` rows for that analysis → build the full `messages` array → append the new user turn → send the *whole* array to Claude → persist both the user message and Claude's reply as new rows.
 - The stock report itself (loaded from `AnalysisResult.report_path`) is stable across every turn in one chat thread — belongs in a cached `system` block (`cache_control: {type: "ephemeral"}`), not resent as part of the growing `messages` history, so repeat turns don't re-pay full input cost for the same report text.
 - A genuinely different product surface — Managed Agents — *does* offer real server-side session persistence (`sessions.create()` + `sessions.events.list()`), but that's a heavier hosted-sandbox-per-session model built for open-ended agentic work, not a fit for "answer questions about one report."
+
+## `ant auth login` OAuth bills org credit balance, not Pro/Max subscription usage (2026-08-25)
+
+Found while implementing #25 on the Pi. The assumption in this file's "Claude API statelessness" entry above — that OAuth login via `ant auth login` taps a Claude.ai Pro/Max subscription's bundled usage instead of metered API billing — does not hold, at least not for this org.
+
+**What happened:** `ant auth login --no-browser` on the Pi, authorized against org "Youn" (`kiyoun.dev@gmail.com`). Tried both workspaces the picker offered — "Default" first, then "Claude Code" on a second full login. A bare `Anthropic()` client call (`model: claude-opus-5`, real request, from inside the backend container) returned the **same error both times**:
+
+```
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}}
+```
+
+Two different workspaces producing byte-identical billing errors rules out "wrong workspace" as the cause — it's not a scoping mistake, something more fundamental is off.
+
+**CONFIRMED via discriminator check (2026-08-25, same session):** on the same Pi, same org, same "Claude Code" workspace (`wrkspc_019YDyaV7oLbkVJCMBTxUJ9i`) — `claude -p "say hi"` succeeded with no billing issue, while the SDK `Anthropic()` call against that identical workspace still 400'd on credit balance. Only variable between the two: which client is asking (Claude Code's own OAuth client vs. `ant`'s `anthropic-cli` client, `client_id: 41077d10-94b8-4194-be48-d251e9eb21b4`). That isolates the cause cleanly: **Pro/Max subscription bundled usage is scoped to first-party client applications Anthropic recognizes specifically (claude.ai website, the Claude Code app) — not to any OAuth token on the account, regardless of org/workspace.** `ant auth login` gets a real, valid OAuth token (mount/SDK/container plumbing all work correctly), but it's billed as generic Console/API access against the org's credit balance, same as an API key would be. **There is no way to reach Pro/Max bundled usage from a generic OAuth CLI/SDK client** — the "Axis 1" framing above (API key vs. OAuth = who pays) is a false dichotomy for this purpose. The real axis is *which specific client app is asking*, and third-party/backend code can't pass that check no matter which auth flow it uses.
+
+**What this means for #25/#26 if confirmed:** the entire reason #25 chose OAuth over an API key — avoiding a second, metered billing relationship for a low-volume personal feature — doesn't hold. The fork is real and not a config fix:
+- **(a)** Fund the org's credit balance (or point at an API key on a funded org) — backend works as-is, no code changes, but this is the exact "second billing relationship" #25 was written to avoid
+- **(b)** Hold the no-metered-billing constraint — then #25/#26's auth design needs replanning, this OAuth-profile approach doesn't deliver what it was chosen for
+
+**Resolved as of this entry (root cause confirmed); the (a)/(b) fork above still needs a user decision, not further debugging.**
 
 ## Hoisting — one word, two unrelated concepts (2026-07-28)
 
