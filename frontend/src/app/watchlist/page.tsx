@@ -546,6 +546,7 @@ function ProductRow({
                   <Button
                     variant="ghost"
                     size="icon-sm"
+                    className="text-muted-foreground"
                     aria-label={`Rescrape ${product.name ?? "item"}`}
                     disabled={isPolling || product.status === "processing"}
                     onClick={handleRescrapeProduct}
@@ -556,7 +557,13 @@ function ProductRow({
                       <RefreshCw size={16} strokeWidth={1.5} />
                     )}
                   </Button>
-                  <Button variant="ghost" size="icon-sm" aria-label="Add retailer" onClick={() => dispatchEdit({ type: "addListing" })}>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground"
+                    aria-label="Add retailer"
+                    onClick={() => dispatchEdit({ type: "addListing" })}
+                  >
                     <Plus size={16} strokeWidth={1.5} />
                   </Button>
                 </div>
