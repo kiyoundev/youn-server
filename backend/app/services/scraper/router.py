@@ -9,12 +9,19 @@ RETAILER_MAP: dict[str, type[BaseScraper]] = {
     "amazon.ca": AmazonCAScraper,
 }
 
-# Friendly display names for hostnames with dedicated scraper support above —
-# checked first by _derive_retailer() so these don't fall through to the
-# generic hostname.replace(".", "_") derivation ("amazon.ca" -> "amazon_ca").
-# Hostnames not registered here (or in RETAILER_MAP) keep that generic form.
+# Friendly display names, checked first by _derive_retailer() so these don't
+# fall through to the generic hostname.replace(".", "_") derivation
+# ("amazon.ca" -> "amazon_ca"). Not limited to hostnames with dedicated
+# scraper support (RETAILER_MAP above) — 29cm.co.kr/musinsa.com use the
+# generic HTTPScraper/PatchrightScraper path but still get a short override
+# here because their scraped og:site_name (see _extract_site_name) is a
+# full Korean marketing tagline ("감도 깊은 취향 셀렉트샵 29CM") or, for
+# Musinsa, its Hangul brand name (무신사) rather than a short display name.
+# Hostnames not registered here (or in RETAILER_MAP) keep the generic form.
 RETAILER_DISPLAY_NAMES: dict[str, str] = {
     "amazon.ca": "Amazon",
+    "29cm.co.kr": "29CM",
+    "musinsa.com": "Musinsa",
 }
 
 

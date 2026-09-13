@@ -12,7 +12,12 @@ from app.models.watch_item import Listing
 from app.services.fx import refresh_fx_rates
 from app.services.scrape_tracking import clear_in_flight, mark_in_flight
 from app.services.scraper.patchright_scraper import PatchrightScraper
-from app.services.scraper.router import RetailerRouter, _derive_retailer, _hostname_of
+from app.services.scraper.router import (
+    RETAILER_DISPLAY_NAMES,
+    RetailerRouter,
+    _derive_retailer,
+    _hostname_of,
+)
 from app.services.sse import broadcast
 from app.services.stocks import FinnhubClient
 
@@ -203,9 +208,17 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             # fallback, so it's left alone — this is what stops a scheduled poll
             # 6h later from silently stomping it. Doesn't need `product` at all,
             # so it happens here rather than at the locked read below.
+            #
+            # Hostnames with a curated RETAILER_DISPLAY_NAMES entry are
+            # excluded from this upgrade entirely — otherwise a host whose
+            # own og:site_name is a long tagline (29cm.co.kr's full Korean
+            # marketing name, musinsa.com's Hangul brand name) would have
+            # its curated short name self-clobbered back to that tagline on
+            # the very next scrape, since _derive_retailer(hostname) now
+            # *is* the curated name and so still matches the guard above.
             if scrape.site_name:
                 hostname = _hostname_of(listing.url)
-                if listing.retailer == _derive_retailer(hostname):
+                if hostname not in RETAILER_DISPLAY_NAMES and listing.retailer == _derive_retailer(hostname):
                     listing.retailer = scrape.site_name
 
             # Locked read (issue #48) — two listings of the same product scraped

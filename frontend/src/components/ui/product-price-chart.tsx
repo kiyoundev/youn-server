@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { ArrowDown, ArrowUp } from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -63,9 +62,8 @@ function ProductPriceChart({
   // Domain is fit to price data only, never targetPrice — a target far
   // below/above the actual price range used to drag the axis wide enough
   // that a real (if small) price move flattened out to invisible. A
-  // target that falls outside this domain gets an edge badge instead of
-  // a ReferenceLine (see targetInRange below) so it's still shown, just
-  // not at the cost of squashing the price detail.
+  // target that falls outside this domain just isn't drawn at all (see
+  // targetInRange below) rather than forcing the axis wide to fit it.
   const allPrices = listings.flatMap((l) => l.priceHistory.map((h) => h.price));
   const rawMin = Math.min(...allPrices);
   const rawMax = Math.max(...allPrices);
@@ -74,7 +72,6 @@ function ProductPriceChart({
 
   const targetInRange =
     targetPrice !== undefined && targetPrice >= paddedMin && targetPrice <= paddedMax;
-  const targetBelowRange = targetPrice !== undefined && targetPrice < paddedMin;
 
   const chartConfig = listings.reduce((config, listing, i) => {
     config[seriesKey(listing.retailer)] = {
@@ -86,20 +83,6 @@ function ProductPriceChart({
 
   return (
     <div className="relative" style={{ height, width: "100%" }}>
-      {targetPrice !== undefined && !targetInRange && (
-        <div
-          className={`absolute z-10 flex items-center gap-1 text-xs text-muted-foreground ${
-            targetBelowRange ? "bottom-1 left-1" : "top-1 left-1"
-          }`}
-        >
-          {targetBelowRange ? (
-            <ArrowDown className="size-3" />
-          ) : (
-            <ArrowUp className="size-3" />
-          )}
-          <span>Target {fmtPrice(targetPrice, currency)}</span>
-        </div>
-      )}
       <ChartContainer
         config={chartConfig}
         className={className}
@@ -178,6 +161,15 @@ function ProductPriceChart({
               key={listing.retailer}
               type="monotone"
               dataKey={seriesKey(listing.retailer)}
+              // Recharts defaults a series' tooltip `name` to its
+              // `dataKey` when none is given — that's the CSS-safe
+              // seriesKey (non-ASCII chars replaced with "_"), not the
+              // real retailer name. The default ChartTooltipContent path
+              // resolves the real name via chartConfig, but this chart's
+              // custom `formatter` below reads `name` directly, so a
+              // Hangul-heavy retailer name rendered as underscores
+              // without this explicit override.
+              name={listing.retailer}
               stroke={`var(--color-${seriesKey(listing.retailer)})`}
               strokeWidth={2}
               dot={false}
