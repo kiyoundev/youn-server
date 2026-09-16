@@ -15,10 +15,18 @@ function PriceSparkline({ data, width = 64, height = 24 }: PriceSparklineProps) 
 
   const firstPrice = data[0].price;
   const lastPrice = data[data.length - 1].price;
+  // Scraper noise tolerance — different scrape paths for the same retailer
+  // can record slightly different decimal precision for what's really the
+  // same listed price (e.g. $799.99 vs $799.00), so a swing this small or
+  // smaller is treated as unchanged rather than a real price move. Native-
+  // currency units, so this is effectively USD/CAD-only in practice (KRW
+  // amounts are large enough that $1 ~= exact-equality, no regression).
+  const NOISE_THRESHOLD = 1;
+  const diff = lastPrice - firstPrice;
   const color =
-    lastPrice === firstPrice
+    Math.abs(diff) <= NOISE_THRESHOLD
       ? "var(--muted-foreground)"
-      : lastPrice < firstPrice
+      : diff < 0
         ? "var(--status-success)"
         : "var(--status-error)";
 
