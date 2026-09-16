@@ -292,8 +292,10 @@ async def test_create_item_probe_failure_reported_in_failed_not_raised() -> None
     assert result.failed[0].url == "https://shop.example.com/p"
     assert result.failed[0].detail == "URL could not be scraped by any available method"
     # Issue #44 — hostname-derived, same fallback a real listing would get;
-    # no scrape happened here to infer anything better from.
-    assert result.failed[0].retailer == "shop_example_com"
+    # no scrape happened here to infer anything better from. Generic-TLD
+    # strip (_strip_tld_suffix) only drops the trailing ".com", leaving the
+    # "shop.example" subdomain segment underscore-joined and capitalized.
+    assert result.failed[0].retailer == "Shop_example"
     db.commit.assert_awaited_once()
 
 
@@ -431,7 +433,7 @@ async def test_create_listing_adds_to_existing_product() -> None:
         result = await items.create_listing(request, 5, body, db)
 
     assert result.product_id == 5
-    assert result.retailer == "bestbuy_ca"
+    assert result.retailer == "Bestbuy"
     db.commit.assert_awaited_once()
 
 
@@ -499,7 +501,7 @@ async def test_create_listing_shortlink_resolves_before_retailer_map_routing(
         result = await items.create_listing(request, 5, body, db)
 
     assert result.url == "https://www.bestbuy.ca/p"
-    assert result.retailer == "bestbuy_ca"
+    assert result.retailer == "Bestbuy"
 
 
 @pytest.mark.asyncio
@@ -867,7 +869,7 @@ async def test_update_listing_url_change_rederives_retailer_and_preserves_id() -
 
     assert result.id == 1
     assert result.url == "https://www.bestbuy.ca/p/NEW"
-    assert result.retailer == "bestbuy_ca"
+    assert result.retailer == "Bestbuy"
     assert result.last_checked is not None
     db.commit.assert_awaited_once()
 

@@ -252,10 +252,11 @@ async def test_process_item_writes_history_and_price_drop_event() -> None:
 @pytest.mark.asyncio
 async def test_process_item_fills_retailer_when_still_hostname_fallback() -> None:
     """Issue #44 — _listing()'s URL is always https://example.com/item-N, so
-    _derive_retailer(hostname) for it is always "example_com". Constructing
-    the listing with exactly that value simulates "untouched since
-    creation" — the guard should fire."""
-    listing = _listing(item_id=7, product_id=1, retailer="example_com")
+    _derive_retailer(hostname) for it is always "Example" (generic-TLD
+    strip, see router.py's _strip_tld_suffix). Constructing the listing
+    with exactly that value simulates "untouched since creation" — the
+    guard should fire."""
+    listing = _listing(item_id=7, product_id=1, retailer="Example")
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
     session = MagicMock()

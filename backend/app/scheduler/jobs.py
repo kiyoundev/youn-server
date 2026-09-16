@@ -17,6 +17,7 @@ from app.services.scraper.router import (
     RetailerRouter,
     _derive_retailer,
     _hostname_of,
+    _strip_tld_suffix,
 )
 from app.services.sse import broadcast
 from app.services.stocks import FinnhubClient
@@ -219,7 +220,11 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             if scrape.site_name:
                 hostname = _hostname_of(listing.url)
                 if hostname not in RETAILER_DISPLAY_NAMES and listing.retailer == _derive_retailer(hostname):
-                    listing.retailer = scrape.site_name
+                    # Some sites' og:site_name is literally their bare domain
+                    # ("Walmart.ca") rather than a brand name — same TLD
+                    # strip _derive_retailer's own fallback uses, so both
+                    # paths agree on one display name per retailer.
+                    listing.retailer = _strip_tld_suffix(scrape.site_name)
 
             # Locked read (issue #48) — two listings of the same product scraped
             # concurrently (see _poll_concurrency_semaphore / #41's own
