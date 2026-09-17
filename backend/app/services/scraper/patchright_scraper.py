@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import tempfile
-from urllib.parse import urlparse
 
 from patchright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
@@ -238,13 +237,7 @@ class PatchrightScraper(BaseScraper):
                     await page.close()
             finally:
                 PatchrightScraper._active_scrapes -= 1
-            result = await self._run_hierarchy(html, url)
-            if result.status == "error":
-                debug_path = f"/tmp/scrape-debug-{urlparse(url).hostname}.html"
-                with open(debug_path, "w") as f:
-                    f.write(html)
-                _log.warning("PatchrightScraper: no price found for %s, dumped HTML to %s", url, debug_path)
-            return result
+            return await self._run_hierarchy(html, url)
         except Exception:
             _log.warning("PatchrightScraper error for %s", url, exc_info=True)
             return ScraperResult(price=None, status="error")

@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ⬜ #51
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ⬜ #51, ⬜ #52, ⬜ #53
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -2751,3 +2751,77 @@ User request, prompted directly by this session's musinsa/29CM investigation —
 - [x] Rapid repeat clicks on the same product's button don't queue redundant concurrent scrapes of the same listings — rate-limit strategy decided and implemented, not left as a TODO
 - [x] Sheet-panel button disables while its own product's listings are in flight; re-enables once the SSE update lands
 - [x] No regression to `poll_prices`'s own 6h schedule or #41's add-time first-scrape — both still work unchanged
+
+---
+
+## [ ] Issue #52 — Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (KitchenAid Cold Brew Listing)
+
+**Type:** fix / AFK
+**Estimate:** ~1h (investigation-only estimate — real fix scope unknown until retested; could be $0 if it self-resolves, or open-ended if it needs real Akamai mitigation)
+**Blocked by:** None
+
+### What to build
+
+Nothing yet — this issue exists to park an unresolved live debugging session, not to spec a fix. Two things surfaced that need a decision before further work:
+
+**1. The actual failure, confirmed live.** `watch_items` listing for "KitchenAid 28oz Cold Brew Coffee Maker" / Crate & Barrel Canada (`crateandbarrel.ca`) showed `last_scrape_status = "error"` → product `"failed"`. Traced via `scheduler/jobs.py`'s warning log → no exception anywhere (`PatchrightScraper error for %s`, `patchright_scraper.py:242`, never fired) → root-caused to `_run_hierarchy` (`base.py:622-623`) returning `ScraperResult(status="error")` **silently** (no log, no exception) whenever the page loads but none of the 4 extraction methods (Shopify/JSON-LD/og:price/NEXT_DATA) find a price. A temporary diagnostic patch (see #4 below) captured the actual HTML the scraper received: Akamai's own "Access Denied" page, reference `18.45a71002.1789660259.a824f66f` — not a Cloudflare-style JS challenge (the existing `wait_for_function("document.title !== 'Just a moment...'")` handling at `patchright_scraper.py:230-234` is the wrong vendor for this), a hard edge-level deny.
+
+**2. Ruled out: blanket IP block.** A real browser, on the same LAN/same public WAN IP as the Pi (confirmed physically on-site), loaded the identical URL fine. So Akamai isn't blocking the network — it's the automated request specifically (browser fingerprint, and/or per-URL request-velocity heuristics). Can't yet separate those two: this debugging session alone hit the exact same product URL ~6 times in under 3 hours, well above the app's normal 6h/4x-daily `poll_prices` cadence, which is itself a plausible trigger independent of any fingerprint issue.
+
+**3. Lost the trail.** The original listing (id 21) was deleted mid-investigation and re-add was attempted with a cleaned URL (`srsltid` Google Shopping tracking param stripped) — got the same "URL could not be scraped by any available method" (`detect_scraper_type`, `router.py:73-86`, both `HTTPScraper` and `PatchrightScraper` errored). Rules out the tracking param as the cause. But `price_history`/logs for the original listing are gone (cascade delete), so there's no way to tell from history whether this predates today or started with today's testing.
+
+**4. Temporary debug patch still live.** `patchright_scraper.py`'s `get_price()` currently dumps the raw HTML to `/tmp/scrape-debug-<hostname>.html` and logs a warning whenever `_run_hierarchy` returns `status="error"` with no exception — added this session purely to capture the Akamai page above. Needs a decision: revert outright, or keep a permanent lightweight version (e.g. log the page `<title>` only, not a full file dump) so the next silent scrape failure — for any retailer, not just this one — isn't another blind debugging session.
+
+### Why (context)
+
+User-reported "failed" status on the watchlist (home-server, not local dev) for this specific product. Full session traced DB (`watch_items.last_scrape_status`) → app logs (`docker compose logs backend`) → live HTML capture, rather than guessing at a fix. Root cause is confirmed (Akamai deny), but *why* Akamai is denying this specific automated request is not yet isolated from *how much our own debugging today contributed*.
+
+### Acceptance criteria
+
+- [ ] Re-add the Crate & Barrel Canada listing after a genuine cooldown (hours, untouched — no manual pokes), single clean attempt, to separate "standing block" from "today's request-velocity artifact"
+- [ ] If still Access-Denied cold: decide whether to invest in Akamai-specific mitigation (referer header on `page.goto()`, per-domain request pacing/backoff, alternate egress) or mark this retailer unsupported for now
+- [ ] If it resolves on its own: close as environmental, no code change needed for this retailer specifically
+- [ ] Decide fate of the temporary `/tmp` HTML-dump debug patch in `patchright_scraper.py` — revert, or keep a permanent lightweight version
+- [ ] (Generalizable beyond this retailer) Consider always logging something identifying when `_run_hierarchy` hits its silent `status="error"` return (`base.py:622-623`) — today it's indistinguishable in logs from a timeout, a real exception, or any other failure mode, which is what made this investigation slower than it needed to be
+
+---
+
+## [ ] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel
+
+**Type:** feat / AFK
+**Estimate:** ~3h
+**Blocked by:** None (related: #52 — surfaced by that investigation, but not dependent on its outcome)
+
+### What to build
+
+Today a failed listing only ever shows as the single word "failed" (`compute_status`, `product_status.py:39-40`) — no retailer-specific reason, no timestamp. Diagnosing the Crate & Barrel case (#52) required a live SSH-into-Pi-and-grep-logs session because none of this is persisted. Two parts:
+
+**1. Persist a reason, not just a status.** Add two nullable columns to `Listing` (`watch_items`, `models/watch_item.py`) via a new Alembic migration:
+- `last_scrape_error: str | None` — a short machine-written reason, not a full traceback (that still belongs in logs only)
+- `last_failed_at: datetime | None` — set alongside it
+
+Populate `last_scrape_error` at every point a listing's `last_scrape_status` gets set to `"error"`, today split across several silent/semi-silent paths (see #52's failure-scenario table for the full breakdown):
+- Network error / navigation timeout / browser launch failure (`http_scraper.py:22-24`, `patchright_scraper.py:229,241-243,293`) — already caught with a real exception in hand; store `str(exc)` or exception type name
+- Amazon retry exhaustion (`patchright_scraper.py:327-328`) — store the last attempt's exception summary, not just "exhausted retries"
+- The silent no-price-found path (`base.py:622-623`) — currently zero information; needs a distinguishing reason string at minimum (e.g. `"no price found on page"`), ideally further split out whether a Cloudflare-style challenge was seen and never cleared (`patchright_scraper.py:231-234` currently swallows this distinction entirely — `except Exception: pass` with no flag threaded through)
+- `status="ok"` with `price is None` (`jobs.py:192-198`) — currently leaves `last_scrape_status` untouched (silently stale, not even marked `"error"`); decide whether this should now actually transition to `"error"` with its own reason, since right now a recurring extraction bug here is invisible forever
+
+Clear both columns (`None`) on the next `status == "ok"` scrape for that listing — a stale reason from 3 failures ago must not linger once scraping recovers.
+
+**2. Show it in the UI.** Item sheet panel (watchlist, same panel #51 added the per-item manual-scrape button to) — for any listing currently in `"error"`/contributing to the product's `"failed"` status, show: retailer name (already shown), failure reason (`last_scrape_error`), and relative last-failed time (`last_failed_at`, e.g. "3h ago"). Only render this block when relevant — a healthy listing shows nothing extra.
+
+**3. API surface.** Add both fields to whichever response schema backs the sheet panel's listing data (`schemas/product.py` / `schemas/listing.py` — check current shape).
+
+### Why (context)
+
+Directly prompted by #52's debugging session — confirming a scrape failure and its retailer took a DB query; finding *why* took SSH + log-grepping + a temporary code patch to dump raw HTML, because none of that information is persisted anywhere. This issue makes that information visible in the app itself, without needing a debugging session, for any future retailer that fails the same way.
+
+### Acceptance criteria
+
+- [ ] New Alembic migration adds `last_scrape_error` (nullable string) and `last_failed_at` (nullable timestamptz) to `watch_items`
+- [ ] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error` — no path leaves it `None` while status is `"error"`
+- [ ] The silent no-price-found path (`base.py:622-623`) is no longer silent — has its own reason string, and distinguishes "challenge/interstitial never cleared" from "page loaded normally, no extractor matched" where the code has that information available
+- [ ] `status="ok"` + `price is None` (`jobs.py:192-198`) — decided and implemented: either transitions to `"error"` with its own reason, or is explicitly left as-is with a documented reason why the current stale-status behavior is intentional (not left ambiguous)
+- [ ] A listing's next successful scrape clears both `last_scrape_error` and `last_failed_at`
+- [ ] Sheet panel shows retailer + reason + relative last-failed time for any errored listing, hidden entirely for healthy ones
+- [ ] Verified live against a real failure (e.g. re-triggering the Crate & Barrel case from #52, if still reproducible) — reason text shown in the UI matches what actually happened, not a generic placeholder
