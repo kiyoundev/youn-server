@@ -2,11 +2,13 @@ from urllib.parse import urlparse
 
 from app.services.scraper.base import BaseScraper
 from app.services.scraper.http_scraper import HTTPScraper
+from app.services.scraper.ikea_scraper import IKEAScraper
 from app.services.scraper.patchright_scraper import AmazonCAScraper, PatchrightScraper
 from app.services.scraper.result import ScraperResult
 
 RETAILER_MAP: dict[str, type[BaseScraper]] = {
     "amazon.ca": AmazonCAScraper,
+    "ikea.com": IKEAScraper,
 }
 
 # Friendly display names, checked first by _derive_retailer() — for hostnames

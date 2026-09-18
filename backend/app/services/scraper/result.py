@@ -21,3 +21,8 @@ class ScraperResult:
     # at all (e.g. AmazonCAScraper's own error-path ScraperResults, which
     # bypass _run_hierarchy entirely), not "couldn't infer."
     currency: Literal["USD", "CAD", "KRW"] | None = None
+    # Set only on status="oos", only when the retailer's own data exposes an
+    # expected-back date (e.g. IKEAScraper's per-store restock window) —
+    # None means either in-stock or "OOS with no known restock date", not
+    # distinguished further since no caller currently needs that distinction.
+    restock_at: str | None = None
