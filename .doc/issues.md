@@ -2812,16 +2812,31 @@ Clear both columns (`None`) on the next `status == "ok"` scrape for that listing
 
 **3. API surface.** Add both fields to whichever response schema backs the sheet panel's listing data (`schemas/product.py` / `schemas/listing.py` — check current shape).
 
+**4. Fix `last_checked`'s freshness semantics (merged in from live #54 testing).** Today `last_checked` (product-level, `product_status.py`'s `compute_last_checked`) is derived entirely from `MAX(PriceHistory.checked_at)` per listing (`items.py:177-178`, `_fetch_last_checked_map`) — and a `PriceHistory` row is only ever written on the `"ok"` path in `jobs.py`. A listing that's genuinely `"oos"` never gets one, so its `last_checked` stays permanently stale no matter how many times it's actually re-scraped — caught live testing #54's IKEA OOS fix: a manual re-poll correctly updated the listing's price/status/restock date but left "last checked" showing a stale timestamp.
+
+Two distinct questions were being conflated into one field, and neither `last_checked` alone nor `last_failed_at` alone can answer both:
+- *"How fresh is my data?"* — should update on `"ok"` and `"oos"` alike (both are legitimate, informative results), not just `"ok"`
+- *"When did we last try and fail?"* — `last_failed_at` (above), kept separate — without it, a listing that's been failing for weeks and one that just started failing this cycle would look identical once `last_checked` also started counting `"error"` attempts (considered and rejected as a simpler single-field fix, see this issue's discussion trail)
+
+Add a third column, `last_checked_at: datetime | None`, set on every `"ok"`/`"oos"` scrape — not `"error"`, so a failed attempt doesn't read as "fresh" — and have `_fetch_last_checked_map`/`compute_last_checked` derive from this instead of `PriceHistory.checked_at`.
+
+**5. Show `last_failed_at` in the UI too.** "Failed" badge gets a hover tooltip ("Last attempted `<relative time>`"), same pattern as the "Out of Stock" badge's restock-date tooltip (already shipped, part of #54's work, ahead of the rest of this issue) — so a listing failing for weeks reads differently from one that just started failing, a distinction the "Failed" badge alone can't convey.
+
 ### Why (context)
 
 Directly prompted by #52's debugging session — confirming a scrape failure and its retailer took a DB query; finding *why* took SSH + log-grepping + a temporary code patch to dump raw HTML, because none of that information is persisted anywhere. This issue makes that information visible in the app itself, without needing a debugging session, for any future retailer that fails the same way.
 
+Part 4 (`last_checked_at`) was folded in later, surfaced live while testing #54's IKEA out-of-stock fix — same underlying gap (a listing's true "was this checked" state isn't persisted anywhere reliable), same migration, closely related enough not to split into a separate issue.
+
 ### Acceptance criteria
 
-- [ ] New Alembic migration adds `last_scrape_error` (nullable string) and `last_failed_at` (nullable timestamptz) to `watch_items`
+- [ ] New Alembic migration adds `last_scrape_error` (nullable string), `last_failed_at` (nullable timestamptz), and `last_checked_at` (nullable timestamptz) to `watch_items`
 - [ ] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error` — no path leaves it `None` while status is `"error"`
 - [ ] The silent no-price-found path (`base.py:622-623`) is no longer silent — has its own reason string, and distinguishes "challenge/interstitial never cleared" from "page loaded normally, no extractor matched" where the code has that information available
 - [ ] `status="ok"` + `price is None` (`jobs.py:192-198`) — decided and implemented: either transitions to `"error"` with its own reason, or is explicitly left as-is with a documented reason why the current stale-status behavior is intentional (not left ambiguous)
 - [ ] A listing's next successful scrape clears both `last_scrape_error` and `last_failed_at`
 - [ ] Sheet panel shows retailer + reason + relative last-failed time for any errored listing, hidden entirely for healthy ones
+- [ ] `last_checked_at` set on `"ok"` and `"oos"` scrapes, not on `"error"`; `_fetch_last_checked_map`/`compute_last_checked` derive from it instead of `PriceHistory.checked_at`
+- [ ] A listing stuck in `"oos"` shows an up-to-date `last_checked` after every re-scrape, not a permanently stale/blank one
+- [ ] "Failed" badge shows a hover tooltip with `last_failed_at`, same pattern as the "Out of Stock" badge's restock-date tooltip
 - [ ] Verified live against a real failure (e.g. re-triggering the Crate & Barrel case from #52, if still reproducible) — reason text shown in the UI matches what actually happened, not a generic placeholder
