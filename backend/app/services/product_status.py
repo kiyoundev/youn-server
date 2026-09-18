@@ -19,8 +19,13 @@ def compute_status(
        already-scraped listing, see services/scrape_tracking.py) ->
        processing
     3. Any listing errored on its last scrape -> failed
-    4. Product has an active alert -> triggered
-    5. Otherwise -> watching
+    4. Any listing out of stock on its last scrape -> out_of_stock (issue
+       #54 — previously fell through to "watching" unconditionally, since
+       no branch here ever checked for "oos" at all; a broken scraper
+       (failed) still outranks a confirmed-accurate "can't buy it right
+       now" reading, so this is checked after failed, not before)
+    5. Product has an active alert -> triggered
+    6. Otherwise -> watching
 
     `in_flight_listing_ids` defaults to None/empty and is checked with a
     truthiness guard before ever touching `listing.id` — keeps this
@@ -38,6 +43,9 @@ def compute_status(
 
     if any(listing.last_scrape_status == "error" for listing in listings):
         return "failed"
+
+    if any(listing.last_scrape_status == "oos" for listing in listings):
+        return "out_of_stock"
 
     if alerted_at is not None:
         return "triggered"

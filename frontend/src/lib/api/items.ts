@@ -10,7 +10,7 @@
 
 // Matches backend/app/schemas — GET /api/items response shape. Mirrors
 // watchlist/page.tsx's local Product/Listing interfaces.
-export type WatchStatus = "watching" | "triggered" | "paused" | "failed" | "processing";
+export type WatchStatus = "watching" | "triggered" | "paused" | "failed" | "processing" | "out_of_stock";
 
 // Issue #45 — mirrors backend's Currency = Literal["USD","CAD","KRW"]
 // (schemas/product.py). Product-level, not per-Listing — a single product
@@ -24,6 +24,7 @@ export interface Listing {
   url: string;
   last_price: number | null;
   last_scrape_status: "ok" | "oos" | "error" | null;
+  restock_at: string | null;
   last_checked: string | null;
   product_id: number;
   created_at: string;

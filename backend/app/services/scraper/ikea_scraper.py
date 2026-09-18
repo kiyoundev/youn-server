@@ -58,12 +58,20 @@ class IKEAScraper(BaseScraper):
             stores = data["availabilityResponse"]["availability"]["stores"]
             store = stores.get(IKEA_STORE_ID)
 
+            price = float(product["price"])
+
             if store and store.get("isOutOfStock"):
+                # IKEA shows price and availability as separate attributes —
+                # a sold-out item still has a real, known price. Keep it on
+                # the "oos" result rather than nulling it out the way the
+                # generic Shopify/JSON-LD OOS paths do (those genuinely have
+                # no price signal at all once OOS; IKEA's fragment endpoint
+                # always includes one regardless of stock).
                 restocks = (store.get("restocks") or {}).get("shortDate")
                 restock_at = "–".join(restocks) if restocks else None
-                return ScraperResult(price=None, status="oos", currency=currency, restock_at=restock_at)
+                return ScraperResult(price=price, status="oos", currency=currency, restock_at=restock_at)
 
-            return ScraperResult(price=float(product["price"]), status="ok", currency=currency)
+            return ScraperResult(price=price, status="ok", currency=currency)
         except Exception:
             _log.warning("IKEAScraper error for %s", url, exc_info=True)
             return ScraperResult(price=None, status="error")

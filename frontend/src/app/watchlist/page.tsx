@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 import { cn } from "@/lib/utils";
 import { useNavSlot } from "@/components/nav-slot";
@@ -77,6 +78,7 @@ const STATUS_BADGE: Record<
   paused: { label: "Paused", variant: "outline" },
   failed: { label: "Failed", variant: "destructive" },
   processing: { label: "Processing", variant: "outline" },
+  out_of_stock: { label: "Out of Stock", variant: "outline" },
 };
 
 // Mirrors backend's compute_status() priority order (product_status.py) —
@@ -95,6 +97,7 @@ function draftStatus(product: Product, active: boolean): WatchStatus {
   if (!active) return "paused";
   if (product.listings.some((l) => l.last_scrape_status === null)) return "processing";
   if (product.listings.some((l) => l.last_scrape_status === "error")) return "failed";
+  if (product.listings.some((l) => l.last_scrape_status === "oos")) return "out_of_stock";
   if (product.alerted_at !== null) return "triggered";
   return "watching";
 }
@@ -382,6 +385,12 @@ function ProductRow({
   // the table row's own badge above stays on `status`/product.status
   // unconditionally, real server truth only.
   const sheetStatus = STATUS_BADGE[draftStatus(product, draft.active)];
+  // Feeds the "Out of Stock" badge's tooltip (both table row and sheet
+  // header) — one line per OOS listing, since a multi-retailer product can
+  // have some listings OOS and others not, each with its own restock date.
+  const oosRestockLines = product.listings
+    .filter((l) => l.last_scrape_status === "oos")
+    .map((l) => (l.restock_at ? `Available ${l.restock_at}` : "no restock date available"));
   const best = bestPrice(product);
   const sparklineData = mergeMinByDay(product.listings, historyByListing);
   // Chart wants per-retailer series, unmerged — same underlying per-listing
@@ -424,7 +433,18 @@ function ProductRow({
           </TableCell>
           <TableCell>{fmtPrice(product.target_price, product.currency)}</TableCell>
           <TableCell>
-            <Badge variant={status.variant}>{status.label}</Badge>
+            {product.status === "out_of_stock" ? (
+              <Tooltip>
+                <TooltipTrigger render={<Badge variant={status.variant}>{status.label}</Badge>} />
+                <TooltipContent>
+                  {oosRestockLines.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <Badge variant={status.variant}>{status.label}</Badge>
+            )}
           </TableCell>
           <TableCell>{product.status === "processing" ? "" : formatLastChecked(product.last_checked)}</TableCell>
           <TableCell>{product.status !== "processing" && <PriceSparkline data={sparklineData} width={80} height={32} />}</TableCell>
@@ -530,7 +550,18 @@ function ProductRow({
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
               <div className="flex items-center gap-2">
-                <Badge variant={sheetStatus.variant}>{sheetStatus.label}</Badge>
+                {draftStatus(product, draft.active) === "out_of_stock" ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<Badge variant={sheetStatus.variant}>{sheetStatus.label}</Badge>} />
+                    <TooltipContent>
+                      {oosRestockLines.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Badge variant={sheetStatus.variant}>{sheetStatus.label}</Badge>
+                )}
                 <Switch
                   checked={draft.active}
                   disabled={product.status === "processing"}
@@ -920,6 +951,7 @@ export default function WatchlistPage() {
   const triggeredCount = products.filter((product) => product.status === "triggered").length;
   const watchingCount = products.filter((product) => product.status === "watching").length;
   const failedCount = products.filter((product) => product.status === "failed").length;
+  const outOfStockCount = products.filter((product) => product.status === "out_of_stock").length;
   // Issue #51 follow-up — drives the global rescrape button's spinner past
   // the click-to-response gap (isRescrapingAll alone) for the actual scrape
   // duration too, same reasoning as ProductRow's own isPolling/status
@@ -1047,6 +1079,14 @@ export default function WatchlistPage() {
                   {failedCount}
                 </Label>
                 <Label className="text-muted-foreground">Failed</Label>
+              </div>
+            )}
+            {outOfStockCount > 0 && (
+              <div className="flex flex-col gap-1">
+                <Label className="text-md font-ndot" style={{ color: "var(--status-warning)" }}>
+                  {outOfStockCount}
+                </Label>
+                <Label className="text-muted-foreground">Out of Stock</Label>
               </div>
             )}
           </div>

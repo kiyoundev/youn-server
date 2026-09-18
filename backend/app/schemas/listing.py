@@ -33,6 +33,7 @@ class ListingResponse(BaseModel):
     url: str
     last_price: float | None
     last_scrape_status: Literal["ok", "oos", "error"] | None
+    restock_at: str | None
     last_checked: datetime | None
     product_id: int
     created_at: datetime

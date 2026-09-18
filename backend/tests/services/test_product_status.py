@@ -38,9 +38,42 @@ def test_compute_status_failed_outranks_triggered() -> None:
 
 
 def test_compute_status_default_watching() -> None:
-    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
+    listings = [_listing(last_scrape_status="ok")]
 
     assert compute_status(listings, product_active=True, alerted_at=None) == "watching"
+
+
+def test_compute_status_oos_listing_is_out_of_stock() -> None:
+    """Issue #54 — previously fell through every branch to "watching"
+    unconditionally, since compute_status() never checked for "oos" at
+    all. A sibling listing still "ok" doesn't mask it — any OOS listing
+    is enough to flag the whole product."""
+    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
+
+    assert compute_status(listings, product_active=True, alerted_at=None) == "out_of_stock"
+
+
+def test_compute_status_failed_outranks_out_of_stock() -> None:
+    """A broken scraper (failed) is still more actionable than a
+    confirmed-accurate "can't buy it right now" reading (out_of_stock)."""
+    listings = [_listing(last_scrape_status="error"), _listing(last_scrape_status="oos")]
+
+    assert compute_status(listings, product_active=True, alerted_at=None) == "failed"
+
+
+def test_compute_status_out_of_stock_outranks_triggered() -> None:
+    listings = [_listing(last_scrape_status="oos")]
+
+    assert (
+        compute_status(listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc))
+        == "out_of_stock"
+    )
+
+
+def test_compute_status_processing_outranks_out_of_stock() -> None:
+    listings = [_listing(last_scrape_status="oos"), _listing(last_scrape_status=None)]
+
+    assert compute_status(listings, product_active=True, alerted_at=None) == "processing"
 
 
 def test_compute_status_never_scraped_listing_is_processing() -> None:

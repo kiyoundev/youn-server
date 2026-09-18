@@ -635,6 +635,105 @@ async def test_process_item_persists_scrape_status_on_oos_or_error(status: str) 
 
 
 @pytest.mark.asyncio
+async def test_process_item_persists_price_on_oos_when_scraper_provides_one() -> None:
+    """IKEAScraper (issue #54) exposes price and availability as separate
+    attributes — a real price alongside "oos" is stored, not discarded."""
+    listing = _listing(item_id=10)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=49.99, status="oos"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.last_price == 49.99
+    session.add.assert_not_called()  # still no PriceHistory row — oos never contributes to alerts
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_with_no_price_preserves_prior_last_price() -> None:
+    """The generic Shopify/JSON-LD OOS paths have no price signal at all
+    once out of stock (scrape.price stays None) — must not wipe out a
+    listing's prior stale-but-last-known price."""
+    listing = _listing(item_id=10, last_price=129.0)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status="oos"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.last_price == 129.0
+
+
+@pytest.mark.asyncio
+async def test_process_item_persists_restock_at_on_oos() -> None:
+    """Issue #54 — a retailer's OOS result can carry an expected-back date
+    (e.g. IKEAScraper's per-store restock window); persisted onto the
+    listing alongside last_scrape_status, not dropped."""
+    listing = _listing(item_id=10)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(
+        return_value=ScraperResult(price=None, status="oos", restock_at="Sep 22, 2026–Sep 29, 2026")
+    )
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.restock_at == "Sep 22, 2026–Sep 29, 2026"
+
+
+@pytest.mark.asyncio
+async def test_process_item_clears_restock_at_on_successful_scrape() -> None:
+    """A listing that recovers from OOS to a real price must not keep
+    showing a stale restock date from before it came back in stock."""
+    listing = _listing(item_id=7, product_id=1)
+    listing.restock_at = "Sep 22, 2026–Sep 29, 2026"  # stale, from a prior OOS scrape
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+    session.add = MagicMock()
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert listing.last_scrape_status == "ok"
+    assert listing.restock_at is None
+
+
+@pytest.mark.asyncio
 async def test_process_item_skips_ok_status_with_none_price() -> None:
     """Anomalous combination (status=ok but no price) — nothing meaningful
     happened, so nothing is written at all, unlike oos/error."""

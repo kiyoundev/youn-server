@@ -46,7 +46,10 @@ async def test_in_stock_returns_ok_with_price_and_currency() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_out_of_stock_returns_oos_with_restock_date_range() -> None:
+async def test_out_of_stock_returns_oos_with_price_and_restock_date_range() -> None:
+    """IKEA shows price and availability as separate attributes — an OOS
+    result keeps the real price, unlike the generic Shopify/JSON-LD OOS
+    paths which have no price signal at all once out of stock."""
     payload = _payload(
         store={
             "isOutOfStock": True,
@@ -59,7 +62,7 @@ async def test_out_of_stock_returns_oos_with_restock_date_range() -> None:
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
     assert result == ScraperResult(
-        price=None, status="oos", currency="CAD", restock_at="Sep 22, 2026–Sep 29, 2026"
+        price=49.99, status="oos", currency="CAD", restock_at="Sep 22, 2026–Sep 29, 2026"
     )
 
 
@@ -71,7 +74,7 @@ async def test_out_of_stock_with_no_restock_data_leaves_restock_at_none() -> Non
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=None, status="oos", currency="CAD", restock_at=None)
+    assert result == ScraperResult(price=49.99, status="oos", currency="CAD", restock_at=None)
 
 
 @pytest.mark.asyncio

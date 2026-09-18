@@ -92,6 +92,7 @@ def _listing(
     retailer: str = "amazon_ca",
     last_price: float | None = None,
     last_scrape_status: str | None = None,
+    restock_at: str | None = None,
     product_id: int = 1,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -100,6 +101,7 @@ def _listing(
         retailer=retailer,
         last_price=last_price,
         last_scrape_status=last_scrape_status,
+        restock_at=restock_at,
         product_id=product_id,
         created_at=datetime.now(timezone.utc),
     )

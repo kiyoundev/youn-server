@@ -19,6 +19,14 @@ class Listing(Base):
     last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_scrape_status: Mapped[str | None] = mapped_column(String, nullable=True)
     scraper_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Set only alongside last_scrape_status="oos", only when the retailer's
+    # own data exposes an expected-back date (e.g. IKEAScraper's per-store
+    # restock window, issue #54) — a free-text string, not a real date
+    # column, since retailers format this inconsistently ("Sep 22, 2026",
+    # a range, etc.) and nothing here needs to query/sort on it. Cleared
+    # back to None on the listing's next "ok" scrape, same as any other
+    # stale-on-recovery field.
+    restock_at: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

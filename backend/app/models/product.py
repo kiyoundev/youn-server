@@ -11,7 +11,7 @@ from app.models.base import Base
 # schemas/product.py's ProductResponse (API contract) need this type, and
 # putting it in either one would make the other import "sideways"/"up" out
 # of its usual layer. models/ is the lowest layer both already depend on.
-ProductStatus = Literal["watching", "triggered", "paused", "failed", "processing"]
+ProductStatus = Literal["watching", "triggered", "paused", "failed", "processing", "out_of_stock"]
 
 
 class Product(Base):

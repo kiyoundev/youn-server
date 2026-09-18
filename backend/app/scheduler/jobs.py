@@ -180,6 +180,16 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             if scrape.status == "oos":
                 _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
                 listing.last_scrape_status = "oos"
+                listing.restock_at = scrape.restock_at
+                # Some retailers (e.g. IKEAScraper) expose price and
+                # availability as separate attributes — a real price
+                # alongside "oos" is kept, not discarded. Others (the
+                # generic Shopify/JSON-LD OOS paths) genuinely have no price
+                # signal once OOS, so `scrape.price` is None there — leave
+                # `last_price` at its prior (stale-but-last-known) value
+                # rather than overwriting it with None.
+                if scrape.price is not None:
+                    listing.last_price = scrape.price
                 await session.commit()
                 return
 
@@ -201,6 +211,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
             listing.last_price = scrape.price
             listing.last_scrape_status = "ok"
+            listing.restock_at = None
 
             # Retailer-name inference (issue #44) — guarded: only overwrite while
             # listing.retailer still equals what _derive_retailer(hostname) would
