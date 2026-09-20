@@ -175,10 +175,16 @@ async def _resolve_one(url: str, semaphore: asyncio.Semaphore) -> _ProbeResult:
 
 
 async def _fetch_last_checked_map(db: AsyncSession, listing_ids: list[int] | None = None) -> dict[int, datetime]:
-    query = select(PriceHistory.watch_item_id, func.max(PriceHistory.checked_at))
+    # Issue #53 — reads Listing.last_checked_at (set on every poll, whatever
+    # the outcome) instead of MAX(PriceHistory.checked_at), which was blind
+    # to "oos" and "error" since PriceHistory is only written on "ok". Kept as a batched
+    # (id, timestamp) read rather than inlined onto the already-loaded
+    # Listing rows so every existing call site and route test's db.execute
+    # sequence stays valid.
+    query = select(Listing.id, Listing.last_checked_at).where(Listing.last_checked_at.is_not(None))
     if listing_ids is not None:
-        query = query.where(PriceHistory.watch_item_id.in_(listing_ids))
-    result = await db.execute(query.group_by(PriceHistory.watch_item_id))
+        query = query.where(Listing.id.in_(listing_ids))
+    result = await db.execute(query)
     return dict(result.all())
 
 
@@ -190,6 +196,7 @@ def _build_listing_response(listing: Listing, last_checked_map: dict[int, dateti
         last_price=listing.last_price,
         last_scrape_status=listing.last_scrape_status,
         restock_at=listing.restock_at,
+        last_scrape_error=listing.last_scrape_error,
         last_checked=last_checked_map.get(listing.id),
         product_id=listing.product_id,
         created_at=listing.created_at,

@@ -39,6 +39,8 @@ def _listing(
     product_id: int = 1,
     last_price: float | None = None,
     last_scrape_status: str | None = None,
+    last_scrape_error: str | None = None,
+    last_checked_at: dt.datetime | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=item_id,
@@ -48,6 +50,8 @@ def _listing(
         product_id=product_id,
         last_price=last_price,
         last_scrape_status=last_scrape_status,
+        last_scrape_error=last_scrape_error,
+        last_checked_at=last_checked_at,
     )
 
 
@@ -734,10 +738,12 @@ async def test_process_item_clears_restock_at_on_successful_scrape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_item_skips_ok_status_with_none_price() -> None:
-    """Anomalous combination (status=ok but no price) — nothing meaningful
-    happened, so nothing is written at all, unlike oos/error."""
-    listing = _listing(item_id=10)
+async def test_process_item_marks_ok_status_with_none_price_as_error() -> None:
+    """Anomalous combination (status=ok but no price) — issue #53: this was
+    a silent no-op that left last_scrape_status untouched, so a recurring
+    extraction bug here was invisible forever. Now a real "error" with its
+    own reason, same as the other silent no-price path."""
+    listing = _listing(item_id=10, last_scrape_status="ok", last_price=129.0)
 
     session = MagicMock()
     session.get = AsyncMock(return_value=listing)
@@ -752,9 +758,109 @@ async def test_process_item_skips_ok_status_with_none_price() -> None:
     with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
         await jobs.process_item(10, router, queue)
 
-    session.add.assert_not_called()
-    session.commit.assert_not_awaited()
+    assert listing.last_scrape_status == "error"
+    assert listing.last_scrape_error == "scraper returned ok status but no price was found"
+    assert listing.last_checked_at is not None  # a failed attempt still counts as a check
+    assert listing.last_price == 129.0  # prior last-known price untouched
+    session.add.assert_not_called()  # no PriceHistory row — there's no price
+    session.commit.assert_awaited_once()
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_process_item_persists_error_reason_and_counts_as_a_check() -> None:
+    """Issue #53 — an "error" result persists why, and still advances
+    last_checked_at: "last checked" is when we last tried, the Failed badge
+    already says it didn't work."""
+    listing = _listing(item_id=10, last_scrape_status="ok")
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(
+        return_value=ScraperResult(price=None, status="error", error_reason="Akamai bot-block (access denied)")
+    )
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_status == "error"
+    assert listing.last_scrape_error == "Akamai bot-block (access denied)"
+    assert listing.last_checked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_process_item_error_without_reason_still_gets_non_empty_reason() -> None:
+    """A scraper that returns "error" without setting error_reason must not
+    leave the listing with an error status and a null reason."""
+    listing = _listing(item_id=10)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status="error"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_error == "unknown scraper error"
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_clears_prior_failure_and_sets_last_checked_at() -> None:
+    """"oos" is a legitimate, informative result — supersedes an earlier
+    failure and counts as a fresh check (issue #53)."""
+    listing = _listing(item_id=10, last_scrape_status="error", last_scrape_error="boom")
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=None, status="oos"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(10, router, queue)
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.last_scrape_error is None
+    assert listing.last_checked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_process_item_ok_clears_prior_failure_and_sets_last_checked_at() -> None:
+    listing = _listing(item_id=7, product_id=1, last_scrape_status="error", last_scrape_error="boom")
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = MagicMock()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+    session.add = MagicMock()
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok"))
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, queue)
+
+    assert listing.last_scrape_status == "ok"
+    assert listing.last_scrape_error is None
+    assert listing.last_checked_at is not None
 
 
 @pytest.mark.asyncio
@@ -947,6 +1053,10 @@ async def test_bounded_process_item_marks_error_on_unhandled_exception() -> None
         await jobs._bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())
 
     assert listing.last_scrape_status == "error"
+    # Issue #53 — the backstop is a fourth place that sets "error"; it must
+    # persist a reason and count as a check too, not leave them null.
+    assert listing.last_scrape_error == "RuntimeError: boom"
+    assert listing.last_checked_at is not None
     session.commit.assert_awaited_once()
 
 
@@ -967,6 +1077,8 @@ async def test_bounded_process_item_does_not_overwrite_already_persisted_status(
         await jobs._bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())
 
     assert listing.last_scrape_status == "ok"
+    assert listing.last_scrape_error is None
+    assert listing.last_checked_at is None
     session.commit.assert_not_awaited()
 
 

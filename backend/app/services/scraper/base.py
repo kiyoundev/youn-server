@@ -31,6 +31,37 @@ def _build_headers(ua: str) -> dict[str, str]:
     }
 
 
+def _describe_exception(exc: BaseException, max_len: int = 200) -> str:
+    """Short, never-empty description of `exc` for ScraperResult.error_reason
+    (issue #53) — raw str(exc) isn't safe to persist: it can be empty
+    (httpx.ConnectError(""), a bare TimeoutError()) or a multi-line
+    Playwright call log. First line only, type name alone when the message
+    is empty, truncated so a tooltip stays readable."""
+    lines = str(exc).strip().splitlines()
+    message = lines[0].strip() if lines else ""
+    text = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _detect_bot_block(soup: BeautifulSoup) -> str | None:
+    """Content-based check for a bot-check/deny page (issue #53), run only
+    once every extraction method has already come up empty. Deliberately by
+    page content rather than a flag threaded from a specific scraper: the
+    real case that motivated this (#52) was Akamai's hard "Access Denied",
+    not the Cloudflare "Just a moment..." interstitial patchright_scraper.py
+    already waits on — a Cloudflare-specific flag would have missed it.
+    Only two known signatures; any other vendor's block page falls through
+    to the caller's generic reason, so this is not an exhaustive detector."""
+    title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
+    if "just a moment" in title:
+        return "Cloudflare bot-check challenge did not clear"
+    if "access denied" in title:
+        text = soup.get_text(" ", strip=True).lower()
+        if "edgesuite" in text or "reference #" in text:
+            return "Akamai bot-block (access denied)"
+    return None
+
+
 def _parse_price(raw: str) -> float | None:
     cleaned = re.sub(r"[^\d.,]", "", raw)
     if not cleaned:
@@ -620,7 +651,14 @@ class BaseScraper(ABC):
             result = rsc_result
 
         if result is None:
-            result = ScraperResult(price=None, status="error")
+            # Page loaded but no extraction method found a price — silent
+            # before issue #53 (no log, no exception), the exact gap that hid
+            # #52's Akamai block. Now carries a reason.
+            result = ScraperResult(
+                price=None,
+                status="error",
+                error_reason=_detect_bot_block(soup) or "no price found on page",
+            )
 
         site_name = _extract_site_name(soup, jsonld_scripts)
         product_title = _extract_product_title(soup, jsonld_scripts)

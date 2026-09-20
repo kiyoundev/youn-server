@@ -26,3 +26,8 @@ class ScraperResult:
     # None means either in-stock or "OOS with no known restock date", not
     # distinguished further since no caller currently needs that distinction.
     restock_at: str | None = None
+    # Set only on status="error" (issue #53) — a short machine-written reason
+    # persisted to Listing.last_scrape_error, not a traceback (those stay in
+    # logs via each scraper's exc_info=True). jobs.py falls back to a generic
+    # string if a scraper ever returns "error" without one.
+    error_reason: str | None = None

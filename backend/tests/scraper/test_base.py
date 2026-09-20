@@ -10,6 +10,8 @@ from bs4 import BeautifulSoup
 
 from app.services.scraper.base import (
     BaseScraper,
+    _describe_exception,
+    _detect_bot_block,
     _extract_currency,
     _extract_id_from_url,
     _extract_product_title,
@@ -401,7 +403,73 @@ async def test_run_hierarchy_shopify_wins(s: DummyScraper) -> None:
 @pytest.mark.asyncio
 async def test_run_hierarchy_fallthrough_to_error(s: DummyScraper) -> None:
     result = await s._run_hierarchy("<html><body>nothing</body></html>", "https://example.com/product")
-    assert result == ScraperResult(price=None, status="error", currency="CAD")
+    assert result == ScraperResult(price=None, status="error", currency="CAD", error_reason="no price found on page")
+
+
+# Real page shape captured from issue #52 — Crate & Barrel behind Akamai.
+AKAMAI_DENY_HTML = (
+    "<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1>"
+    "You don't have permission to access \"http://www.crateandbarrel.ca/x\" on this server."
+    "<p>Reference #18.45a71002.1789660259.a824f66f</p>"
+    "<p>https://errors.edgesuite.net/18.45a71002.1789660259.a824f66f</p></body></html>"
+)
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_error_reason_names_akamai_block(s: DummyScraper) -> None:
+    result = await s._run_hierarchy(AKAMAI_DENY_HTML, "https://www.crateandbarrel.ca/x")
+    assert result.status == "error"
+    assert result.error_reason == "Akamai bot-block (access denied)"
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_error_reason_names_cloudflare_challenge(s: DummyScraper) -> None:
+    html = "<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>"
+    result = await s._run_hierarchy(html, "https://example.com/p")
+    assert result.status == "error"
+    assert result.error_reason == "Cloudflare bot-check challenge did not clear"
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_success_carries_no_error_reason(s: DummyScraper) -> None:
+    html = _jsonld_page({"@type": "Product", "offers": {"price": "129.00"}})
+    result = await s._run_hierarchy(html, "https://example.com/product")
+    assert result.status == "ok"
+    assert result.error_reason is None
+
+
+def test_detect_bot_block_ignores_access_denied_without_akamai_markers() -> None:
+    """Some other vendor's (or a site's own) "Access Denied" page must not
+    be mislabeled as Akamai — falls through to the caller's generic reason."""
+    soup = BeautifulSoup("<html><head><title>Access Denied</title></head><body>nope</body></html>", "html.parser")
+    assert _detect_bot_block(soup) is None
+
+
+def test_detect_bot_block_none_for_normal_page_and_missing_title() -> None:
+    assert _detect_bot_block(BeautifulSoup("<html><head><title>Widget</title></head></html>", "html.parser")) is None
+    assert _detect_bot_block(BeautifulSoup("<html><body>no title</body></html>", "html.parser")) is None
+
+
+def test_describe_exception_includes_type_and_message() -> None:
+    assert _describe_exception(httpx.ConnectError("refused")) == "ConnectError: refused"
+
+
+def test_describe_exception_empty_message_falls_back_to_type_name() -> None:
+    """str(TimeoutError()) is "" — persisting that would violate the
+    non-empty-reason guarantee."""
+    assert _describe_exception(TimeoutError()) == "TimeoutError"
+    assert _describe_exception(httpx.ConnectError("")) == "ConnectError"
+
+
+def test_describe_exception_keeps_only_first_line() -> None:
+    exc = TimeoutError("Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to ...")
+    assert _describe_exception(exc) == "TimeoutError: Page.goto: Timeout 30000ms exceeded."
+
+
+def test_describe_exception_truncates_long_messages() -> None:
+    result = _describe_exception(RuntimeError("x" * 500))
+    assert len(result) == 200
+    assert result.endswith("…")
 
 
 @pytest.mark.asyncio
@@ -616,7 +684,7 @@ async def test_http_scraper_jsonld_page() -> None:
 async def test_http_scraper_connection_error_returns_error() -> None:
     respx.get("http://localhost:9999/nope").mock(side_effect=httpx.ConnectError("refused"))
     result = await HTTPScraper().get_price("http://localhost:9999/nope")
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(price=None, status="error", error_reason="ConnectError: refused")
 
 
 # ---------------------------------------------------------------------------

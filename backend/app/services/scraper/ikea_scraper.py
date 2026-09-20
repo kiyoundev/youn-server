@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.services.scraper.base import USER_AGENTS, BaseScraper, _build_headers
+from app.services.scraper.base import USER_AGENTS, BaseScraper, _build_headers, _describe_exception
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS, IKEA_STORE_ID
 from app.services.scraper.result import ScraperResult
 
@@ -33,7 +33,7 @@ class IKEAScraper(BaseScraper):
         match = _ITEM_NO_PATTERN.search(urlparse(url).path)
         if match is None:
             _log.warning("IKEAScraper: no item number found in %s", url)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason="no item number found in URL")
         item_no = match.group(1)
 
         fragment_url = (
@@ -49,7 +49,9 @@ class IKEAScraper(BaseScraper):
             soup = BeautifulSoup(resp.text, "html.parser")
             tag = soup.find("script", type="text/hydrate")
             if not tag or not tag.string:
-                return ScraperResult(price=None, status="error")
+                return ScraperResult(
+                    price=None, status="error", error_reason="availability data missing from IKEA response"
+                )
             data = json.loads(tag.string)
 
             product = data["product"]
@@ -72,6 +74,6 @@ class IKEAScraper(BaseScraper):
                 return ScraperResult(price=price, status="oos", currency=currency, restock_at=restock_at)
 
             return ScraperResult(price=price, status="ok", currency=currency)
-        except Exception:
+        except Exception as exc:
             _log.warning("IKEAScraper error for %s", url, exc_info=True)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))

@@ -25,6 +25,11 @@ export interface Listing {
   last_price: number | null;
   last_scrape_status: "ok" | "oos" | "error" | null;
   restock_at: string | null;
+  // Issue #53 — why the last scrape failed. Null while healthy, and for a
+  // listing that was already "error" before this field existed until its
+  // next scrape.
+  last_scrape_error: string | null;
+  // When this listing was last polled, whatever the outcome.
   last_checked: string | null;
   product_id: number;
   created_at: string;

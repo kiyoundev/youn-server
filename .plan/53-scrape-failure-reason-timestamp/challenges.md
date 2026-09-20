@@ -12,13 +12,21 @@
 
 5. **Shared production DB migration, same low-risk pattern as `0016`.** Purely additive nullable columns, no data migration, no backfill (Q5, decided) — same shape as the `restock_at` migration that already deployed cleanly this session to both local and the Pi/NAS. Low risk, but still needs the same manual `alembic upgrade head` step on the Pi after `git pull` + rebuild — easy to forget, as already happened once this session with `0016`.
 
+6. **Pre-existing `"error"` listings have no reason or timestamp until their next scrape.** The new columns are null for anything already failed at deploy time, so the UI must render a placeholder (`"no details recorded yet"`) instead of `null`/`undefined`. Self-heals within one `poll_prices` cycle.
+
+7. **Existing tests assert full-dataclass equality on error results.** About 10 assertions across `test_ikea`/`test_patchright`/`test_base` break the moment `error_reason` is set. Update them to assert the reason explicitly rather than loosening to `status == "error"` only, or the new field goes untested.
+
+8. **`last_checked` semantics were reversed after the first draft.** Originally success-only (so a failing listing read stale) with a separate `last_failed_at`; now "last attempt, any outcome" and `last_failed_at` is gone. Known cost: the UI can't show *how long* a listing has been failing — only when it was last tried. The last good price time is still in `PriceHistory` if a "last succeeded" line is ever wanted. Anything written against the old semantics (docs, tests asserting `last_checked_at is None` after an error) must follow the new one.
+
+9. **Four places set `"error"`, not three.** Besides `process_item`'s branches, `_bounded_process_item`'s backstop and `IKEAScraper`'s own returns also produce it — miss either and the "no path leaves the reason `None`" criterion silently fails for that path.
+
 ## Key Differences
 
 | Aspect | Current | Target |
 |--------|---------|--------|
 | Error visibility | Logged only (`exc_info=True`), lost outside the container's log retention window | Persisted on the `Listing`, visible in the app itself |
 | `ok` + no price | Silent no-op, `last_scrape_status` unchanged | Explicit `"error"` with reason |
-| `last_checked` source | `MAX(PriceHistory.checked_at)` — blind to `"oos"` results | `Listing.last_checked_at` — set on `"ok"`/`"oos"` |
+| `last_checked` source | `MAX(PriceHistory.checked_at)` — blind to `"oos"` results | `Listing.last_checked_at` — set on every poll attempt, whatever the outcome |
 | Failed-listing UI | Just the word "Failed" | Badge tooltip (table row) + per-listing icon+tooltip (sheet panel) |
 
 ## Rollback Plan

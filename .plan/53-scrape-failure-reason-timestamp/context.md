@@ -12,9 +12,10 @@ Separately, while live-testing #54's IKEA out-of-stock fix, a related gap surfac
 1. `status="ok"` + `price is None` now transitions to `"error"` with its own reason — was previously an ambiguous silent no-op, decided to close that gap along with the others.
 2. Error text threads through a new `ScraperResult.error_reason: str | None` field, mirroring how `restock_at` was added this session for IKEA — no new architecture, one more optional field on the existing result object.
 3. The Cloudflare-vs-Akamai distinction is detected by **page content** (title/text signatures), not by threading a flag from `patchright_scraper.py`'s Cloudflare-specific wait logic — a flag-based approach would have missed #52's actual real case (Akamai's "Access Denied", not a Cloudflare "Just a moment" challenge).
-4. `last_scrape_error`/`last_failed_at` clear on the listing's next `"ok"` **or** `"oos"` scrape, not just `"ok"` — both are legitimate non-broken results.
+4. `last_scrape_error` clears on the listing's next `"ok"` **or** `"oos"` scrape, not just `"ok"` — both are legitimate non-broken results.
 5. No migration backfill for `last_checked_at` — accept a temporary blank state for existing listings, self-heals within one `poll_prices` cycle (≤6h).
-6. UI treatment differs by surface: watchlist table row keeps the existing badge-tooltip pattern (matches the shipped OOS tooltip); the sheet panel instead gets a small `CircleAlert` icon inline on each listing's own row (next to the external-link icon), not a separate "Error section" block.
+6. UI treatment differs by surface: watchlist table row keeps the existing badge-tooltip pattern (matches the shipped OOS tooltip); the sheet panel instead gets a small `CircleAlert` icon inline on each listing's own row (next to the external-link icon), not a separate "Error section" block. Both tooltips show the **reason only**.
+7. **Reversed mid-build:** `last_checked_at` is set on **every poll attempt** (`ok`, `oos` and `error`), not success-only. The first draft made a failed attempt *not* count, plus a separate `last_failed_at`, so a failing listing would read stale. Reversed because "last checked" literally means when we last tried, a failure is already loud (Failed badge + persisted reason), and a listing that stops being polled at all still goes stale. `last_failed_at` then always equalled `last_checked_at` while failed (and cleared on recovery), so it was dropped before shipping. The last *successful* price time is still in `PriceHistory`.
 
 ## Component / Route Summary
 
@@ -40,8 +41,8 @@ Separately, while live-testing #54's IKEA out-of-stock fix, a related gap surfac
 - `ScraperResult` gains `error_reason: str | None`.
 - Every `status="error"` return site populates it (network/timeout/launch-failure paths use the caught exception; Amazon retry exhaustion uses a fixed string; the previously-silent no-price-found path gets a content-detected reason).
 - `status="ok"` + `price is None` becomes a real `"error"` transition with its own reason.
-- `Listing` gains `last_scrape_error`, `last_failed_at`, `last_checked_at` — migration `0017`.
-- `jobs.py` writes these consistently, clears failure fields on `"ok"`/`"oos"`, sets `last_checked_at` on `"ok"`/`"oos"` only.
+- `Listing` gains `last_scrape_error` and `last_checked_at` — migration `0017`.
+- `jobs.py` writes these consistently: clears `last_scrape_error` on `"ok"`/`"oos"`, sets `last_checked_at` on every poll (including `"error"`).
 - `_fetch_last_checked_map` reads `last_checked_at` directly instead of aggregating `PriceHistory`.
 - `ListingResponse` schema exposes the new fields.
 - Frontend: `failedReasonLines` (mirrors `oosRestockLines`) feeds a tooltip on the "Failed" badge (table row + sheet header). Sheet panel's per-listing row gets a `CircleAlert` icon + tooltip when that specific listing is `"error"`.
@@ -52,12 +53,14 @@ Separately, while live-testing #54's IKEA out-of-stock fix, a related gap surfac
 - **`backend/app/services/scraper/result.py`** — add `error_reason` field
 - **`backend/app/services/scraper/base.py`** — content-based bot-block detector; thread `error_reason` through `_run_hierarchy`'s error return
 - **`backend/app/services/scraper/http_scraper.py`**, **`patchright_scraper.py`** — populate `error_reason` at each existing `except Exception:` site and the Amazon retry-exhaustion site
-- **`backend/app/models/watch_item.py`** — three new nullable columns
+- **`backend/app/services/scraper/ikea_scraper.py`** — populate `error_reason` at its three error returns (built under #54)
+- **`backend/app/services/scraper/base.py`** (also) — `_describe_exception` helper so persisted reasons are never empty or multi-line
+- **`backend/app/models/watch_item.py`** — two new nullable columns
 - **`backend/alembic/versions/0017_listing_failure_and_checked_at.py`** — new migration
-- **`backend/app/scheduler/jobs.py`** — populate/clear new fields across all three branches (`ok`/`oos`/`error`), plus the new `ok`+`None`-price → `error` transition
+- **`backend/app/scheduler/jobs.py`** — populate/clear new fields across all three branches (`ok`/`oos`/`error`), plus the new `ok`+`None`-price → `error` transition, and the `_bounded_process_item` unexpected-exception backstop (a fourth place that sets `"error"`)
 - **`backend/app/schemas/listing.py`** — expose new fields on `ListingResponse`
 - **`backend/app/api/items.py`** — `_build_listing_response`, `_fetch_last_checked_map` (switch source to `last_checked_at`)
-- **`frontend/src/lib/api/items.ts`** — `Listing` interface gains the three new fields
+- **`frontend/src/lib/api/items.ts`** — `Listing` interface gains `last_scrape_error`
 - **`frontend/src/app/watchlist/page.tsx`** — `failedReasonLines`, badge tooltip wiring, per-listing `CircleAlert` icon + tooltip
 
 ### Dependencies

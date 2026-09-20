@@ -32,13 +32,13 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ⬜ #51, ⬜ #52, ⬜ #53
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ✅ #52, ⬜ #53, ✅ #54
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
 
 **TradingAgents / AI Chat**
-✅ #9, ✅ #17, ⬜ #42, ⬜ #25, ⬜ #26, ⬜ #27, ⬜ #28, ⬜ #49
+✅ #9, ✅ #17, ⬜ #42, ✅ #25, ⬜ #26, ⬜ #27, ⬜ #28, ⬜ #49
 
 **Wealthsimple Import**
 ⬜ #32, ⬜ #33
@@ -87,7 +87,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #21.5 | Synology Storage Status API | feat / AFK | ~1h | #1.5 |
 | ⬜ Open | #22 | Overview Dashboard (`/`, Bentobox Summary) | feat / AFK | ~4h | #10.1–#10.5, #11, #19, #20, #21 |
 | ⬜ Open | #23 | Stock Price History Chart (Portfolio) | feat / AFK | ~3h | #19 |
-| ⬜ Open | #25 | Claude OAuth Auth Working in Docker | feat / AFK | ~1h | None |
+| ✅ Done | #25 | Claude OAuth Auth Working in Docker | feat / AFK | ~1h | None |
 | ⬜ Open | #26 | Per-Report Chat Backend (Non-Streaming) | feat / AFK | ~4h | #8, #25 |
 | ⬜ Open | #27 | Streaming Chat Responses | feat / AFK | ~1.5h | #26 |
 | ⬜ Open | #28 | Chat UI | feat / AFK | ~3h | #27, #11 |
@@ -103,6 +103,9 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #41 | Immediate First Scrape on Item/Listing Add | feat / AFK | ~3h | #40 |
 | ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
 | ✅ Done | #43 | Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix) | ops / HITL | ~1h | #13, #16 |
+| ✅ Done | #51 | Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule | feat / AFK | ~2.5h | None |
+| ✅ Done | #52 | Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (closed — environmental) | fix / AFK | ~1h | None |
+| ✅ Done | #54 | IKEA Real Stock Status + Out-of-Stock Status with Restock Tooltip | feat / AFK | ~4.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
 
@@ -1012,19 +1015,19 @@ No hard cap needed on concurrent backend SSE connections at this app's scale (si
 
 ### Acceptance criteria
 
-- [ ] `/watchlist` displays all real `Product`/`Listing` data from `GET /api/items` via the proxy — no mock data remains
-- [ ] `X-API-Key` header never appears in browser network tab (proxy confirmed)
-- [ ] A listing with `last_price: null` or `last_checked: null` renders a fallback (`—`), not `NaN`/`Invalid Date`
-- [ ] Table sparkline shows the min price across a product's retailers, correctly merged by day even when listings were scraped at different times within the same cycle
-- [ ] Sheet chart shows one line per retailer, using the same underlying history data as the sparkline
-- [ ] Backend emits an SSE push on every successful scrape, regardless of whether price changed
-- [ ] Frontend reflects a scrape's result (price, `last_checked`, sparkline point) without a 30-second polling delay — confirmed via network tab, no `refreshInterval` poll firing on this page
-- [ ] An alert-crossing scrape still triggers Pushover/email exactly as before (existing `Event`/queue path unaffected by the new broadcast)
-- [ ] SSE connection recovers after a browser network drop, via manual reconnect logic (not native auto-reconnect), without a manual page refresh
-- [ ] Reconnect attempts back off exponentially (1s → 2s → 4s → 8s...) during an extended outage, not a fixed retry hammering every ~3s
-- [ ] After a reconnect, the table (price/status/last_checked) reflects current truth immediately — sparkline lag for listings scraped mid-outage is acceptable, self-corrects on next scrape
-- [ ] UI shows a distinct "offline" state when `navigator.onLine` is false, and a separate "live updates unavailable" state for any other sustained connection failure
-- [ ] Manual test: rapidly mount/unmount the watchlist page (or toggle React StrictMode) in local dev — backend's SSE fan-out set doesn't grow (no leaked/duplicate connections from the open→close→open double-invoke)
+- [x] `/watchlist` displays all real `Product`/`Listing` data from `GET /api/items` via the proxy — no mock data remains
+- [x] `X-API-Key` header never appears in browser network tab (proxy confirmed)
+- [x] A listing with `last_price: null` or `last_checked: null` renders a fallback (`—`), not `NaN`/`Invalid Date`
+- [x] Table sparkline shows the min price across a product's retailers, correctly merged by day even when listings were scraped at different times within the same cycle
+- [x] Sheet chart shows one line per retailer, using the same underlying history data as the sparkline
+- [x] Backend emits an SSE push on every successful scrape, regardless of whether price changed
+- [x] Frontend reflects a scrape's result (price, `last_checked`, sparkline point) without a 30-second polling delay — confirmed via network tab, no `refreshInterval` poll firing on this page
+- [x] An alert-crossing scrape still triggers Pushover/email exactly as before (existing `Event`/queue path unaffected by the new broadcast)
+- [x] SSE connection recovers after a browser network drop, via manual reconnect logic (not native auto-reconnect), without a manual page refresh
+- [x] Reconnect attempts back off exponentially (1s → 2s → 4s → 8s...) during an extended outage, not a fixed retry hammering every ~3s
+- [x] After a reconnect, the table (price/status/last_checked) reflects current truth immediately — sparkline lag for listings scraped mid-outage is acceptable, self-corrects on next scrape
+- [x] UI shows a distinct "offline" state when `navigator.onLine` is false, and a separate "live updates unavailable" state for any other sustained connection failure
+- [x] Manual test: rapidly mount/unmount the watchlist page (or toggle React StrictMode) in local dev — backend's SSE fan-out set doesn't grow (no leaked/duplicate connections from the open→close→open double-invoke)
 
 ---
 
@@ -1321,15 +1324,15 @@ Deploy the full stack to Raspberry Pi and verify end-to-end alert flow over Tail
 
 ### Acceptance criteria
 
-- [ ] Pi and all Apple devices appear in Tailscale dashboard with stable IPs
-- [ ] `docker compose up -d` starts both containers on Pi without error
-- [ ] Containers restart automatically after `sudo reboot`
-- [ ] `.env` has `chmod 600`
-- [ ] `GET /api/health` reachable from iPhone over Tailscale (Tailscale IP)
-- [ ] Pushover push notification received on iPhone, iPad, Mac, and Apple Watch **from a real stock-alert trigger** (`POST /api/poll/stocks` crossing an actual threshold) — a generic Pushover API test (direct `curl` to `api.pushover.net`, no real alert) confirmed delivery infra works, but a real alert-triggered push is still untested: the attempt on a `.TO` ticker hit Finnhub's free-tier 403 on non-US symbols (unrelated to this issue), so this needs re-attempting against a US-ticker alert
-- [ ] PostgreSQL on NAS reachable from Pi after `docker compose restart` (verify via `GET /api/health`)
-- [ ] `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` succeeds
-- [ ] `POST /api/stockalerts/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
+- [x] Pi and all Apple devices appear in Tailscale dashboard with stable IPs
+- [x] `docker compose up -d` starts both containers on Pi without error
+- [x] Containers restart automatically after `sudo reboot`
+- [x] `.env` has `chmod 600`
+- [x] `GET /api/health` reachable from iPhone over Tailscale (Tailscale IP)
+- [x] Pushover push notification received on iPhone, iPad, Mac, and Apple Watch **from a real stock-alert trigger** (`POST /api/poll/stocks` crossing an actual threshold) — a generic Pushover API test (direct `curl` to `api.pushover.net`, no real alert) confirmed delivery infra works, but a real alert-triggered push is still untested: the attempt on a `.TO` ticker hit Finnhub's free-tier 403 on non-US symbols (unrelated to this issue), so this needs re-attempting against a US-ticker alert
+- [x] PostgreSQL on NAS reachable from Pi after `docker compose restart` (verify via `GET /api/health`)
+- [x] `docker compose exec backend /opt/tradingagents/.venv/bin/python -c "import tradingagents"` succeeds
+- [x] `POST /api/stockalerts/{id}/analyze` on a real alert completes end-to-end (`status`: `pending → running → done`), confirming the venv-in-container + volume mount actually work on the Pi, not just on Mac dev
 
 ---
 
@@ -1943,12 +1946,12 @@ A separate chart component (rather than extending #23's `StockHistoryChart` with
 - [x] `RecentActivityCard` expands/collapses per row and renders the approximated fields per the gap table above, without fabricating data the CSV doesn't provide
 - [x] Popular Assets' "View Details", each Holdings row, and each Watchlist row all navigate to `/market/{ticker}`
 - [x] `Nav`'s ticker search validates the entered ticker via `validate_ticker` before navigating; shows an error rather than navigating on an invalid symbol (currently navigates unconditionally)
-- [ ] `MarketDetailChart` presets (`1D`–`10Y`) fetch and render correctly, independent of #23's `StockHistoryChart`
-- [ ] "Notify me" creates a `StockAlert` for the viewed ticker via `POST /api/stockalerts`, `run_analysis` toggle included
-- [ ] `get_market_details()` results are cached in-memory (~30-60s) — confirmed via two near-simultaneous requests for the same ticker producing only one `Ticker(ticker).info` call
-- [ ] "Run TradingAgents" works on any ticker regardless of alert/holding/watchlist status, via `#35`'s `POST /api/analysis/{ticker}`
-- [ ] "View recent analysis report" is hidden when no `AnalysisResult` exists for the ticker; once one exists, shows the most recent result's status/JSON viewer, with older runs for the same ticker still reachable in the same section
-- [ ] News section renders headline/image/source/summary/link per article via Finnhub `/company-news`, fetched once on page load (works for both stocks and ETFs)
+- [x] `MarketDetailChart` presets (`1D`–`10Y`) fetch and render correctly, independent of #23's `StockHistoryChart`
+- [x] "Notify me" creates a `StockAlert` for the viewed ticker via `POST /api/stockalerts`, `run_analysis` toggle included
+- [x] `get_market_details()` results are cached in-memory (~30-60s) — confirmed via two near-simultaneous requests for the same ticker producing only one `Ticker(ticker).info` call
+- [x] "Run TradingAgents" works on any ticker regardless of alert/holding/watchlist status, via `#35`'s `POST /api/analysis/{ticker}`
+- [x] "View recent analysis report" is hidden when no `AnalysisResult` exists for the ticker; once one exists, shows the most recent result's status/JSON viewer, with older runs for the same ticker still reachable in the same section
+- [x] News section renders headline/image/source/summary/link per article via Finnhub `/company-news`, fetched once on page load (works for both stocks and ETFs)
 
 ### Implementation notes (added 2026-08-02, during #30 planning)
 
@@ -2000,7 +2003,7 @@ Kept separate from Group 4 (AI Analysis) deliberately — Group 4 is the Trading
 
 ---
 
-## [ ] Issue #25 — Claude OAuth Auth Working in Docker
+## [x] Issue #25 — Claude OAuth Auth Working in Docker
 
 **Type:** feat / AFK
 **Estimate:** ~1h
@@ -2020,9 +2023,9 @@ Without the volume mount, the container has no way to see the host's OAuth login
 
 ### Acceptance criteria
 
-- [ ] `~/.config/anthropic/` is mounted into the backend container in `docker-compose.yml`
-- [ ] A test call via a bare `Anthropic()` client succeeds from inside the container with no `ANTHROPIC_API_KEY` env var set
-- [ ] `anthropic_api_key` removed from `backend/app/core/config.py`
+- [x] `~/.config/anthropic/` is mounted into the backend container in `docker-compose.yml`
+- [x] A test call via a bare `Anthropic()` client succeeds from inside the container with no `ANTHROPIC_API_KEY` env var set
+- [x] `anthropic_api_key` removed from `backend/app/core/config.py`
 
 ---
 
@@ -2754,7 +2757,7 @@ User request, prompted directly by this session's musinsa/29CM investigation —
 
 ---
 
-## [ ] Issue #52 — Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (KitchenAid Cold Brew Listing)
+## [x] Issue #52 — Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (KitchenAid Cold Brew Listing)
 
 **Type:** fix / AFK
 **Estimate:** ~1h (investigation-only estimate — real fix scope unknown until retested; could be $0 if it self-resolves, or open-ended if it needs real Akamai mitigation)
@@ -2770,7 +2773,7 @@ Nothing yet — this issue exists to park an unresolved live debugging session, 
 
 **3. Lost the trail.** The original listing (id 21) was deleted mid-investigation and re-add was attempted with a cleaned URL (`srsltid` Google Shopping tracking param stripped) — got the same "URL could not be scraped by any available method" (`detect_scraper_type`, `router.py:73-86`, both `HTTPScraper` and `PatchrightScraper` errored). Rules out the tracking param as the cause. But `price_history`/logs for the original listing are gone (cascade delete), so there's no way to tell from history whether this predates today or started with today's testing.
 
-**4. Temporary debug patch still live.** `patchright_scraper.py`'s `get_price()` currently dumps the raw HTML to `/tmp/scrape-debug-<hostname>.html` and logs a warning whenever `_run_hierarchy` returns `status="error"` with no exception — added this session purely to capture the Akamai page above. Needs a decision: revert outright, or keep a permanent lightweight version (e.g. log the page `<title>` only, not a full file dump) so the next silent scrape failure — for any retailer, not just this one — isn't another blind debugging session.
+**4. Temporary debug patch still live.** `patchright_scraper.py`'s `get_price()` currently dumps the raw HTML to `/tmp/scrape-debug-<hostname>.html` and logs a warning whenever `_run_hierarchy` returns `status="error"` with no exception — added this session purely to capture the Akamai page above. Needs a decision: revert outright, or keep a permanent lightweight version (e.g. log the page `<title>` only, not a full file dump) so the next silent scrape failure — for any retailer, not just this one — isn't another blind debugging session. **Resolved:** reverted in the "Drop: temp scraper debug patch" commit — the dump code no longer exists; the generalized logging need is tracked in #53.
 
 ### Why (context)
 
@@ -2778,65 +2781,110 @@ User-reported "failed" status on the watchlist (home-server, not local dev) for 
 
 ### Acceptance criteria
 
-- [ ] Re-add the Crate & Barrel Canada listing after a genuine cooldown (hours, untouched — no manual pokes), single clean attempt, to separate "standing block" from "today's request-velocity artifact"
-- [ ] If still Access-Denied cold: decide whether to invest in Akamai-specific mitigation (referer header on `page.goto()`, per-domain request pacing/backoff, alternate egress) or mark this retailer unsupported for now
-- [ ] If it resolves on its own: close as environmental, no code change needed for this retailer specifically
-- [ ] Decide fate of the temporary `/tmp` HTML-dump debug patch in `patchright_scraper.py` — revert, or keep a permanent lightweight version
-- [ ] (Generalizable beyond this retailer) Consider always logging something identifying when `_run_hierarchy` hits its silent `status="error"` return (`base.py:622-623`) — today it's indistinguishable in logs from a timeout, a real exception, or any other failure mode, which is what made this investigation slower than it needed to be
+- [x] Re-add the Crate & Barrel Canada listing after a genuine cooldown (hours, untouched — no manual pokes), single clean attempt, to separate "standing block" from "today's request-velocity artifact" — retested 2026-09-20 (3 days after the block): added cleanly, `scraper_type=patchright`, `last_scrape_status=ok`, $139.95
+- [x] If still Access-Denied cold: decide whether to invest in Akamai-specific mitigation (referer header on `page.goto()`, per-domain request pacing/backoff, alternate egress) or mark this retailer unsupported for now — n/a, not blocked cold; no mitigation built
+- [x] If it resolves on its own: close as environmental, no code change needed for this retailer specifically — closed as environmental (see Resolution)
+- [x] Decide fate of the temporary `/tmp` HTML-dump debug patch in `patchright_scraper.py` — revert, or keep a permanent lightweight version — reverted ("Drop: temp scraper debug patch" commit)
+- [ ] (Generalizable beyond this retailer) Consider always logging something identifying when `_run_hierarchy` hits its silent `status="error"` return (`base.py:622-623`) — today it's indistinguishable in logs from a timeout, a real exception, or any other failure mode, which is what made this investigation slower than it needed to be — tracked as part of #53 (part 1, silent no-price-found path); left unchecked here until #53 ships
+
+### Resolution (2026-09-20)
+
+Closed as environmental. A cold retest three days after the block succeeded: the listing added normally and scraped `ok` at $139.95 via the Patchright path (plain HTTP still fails first and falls back, same as before — Akamai 403s plain clients regardless). The `?srsltid=` referral param was not the cause: the clean URL was also blocked on 2026-09-17, and the original referral-URL listing had scraped successfully at least once before being blocked (its "Crate & Barrel Canada" name came from a real page's `og:site_name`).
+
+Most likely cause is request velocity — the first failure preceded this session's debugging pokes, so the more probable source is the manual-rescrape testing for #51 just before (each click hits every listing; "rescrape all" allows a burst every 5 minutes). One data point can't prove it. **Reopen if it recurs** and run the same-IP experiment: Patchright on a Mac, direct product URL vs. homepage warm-up first, to separate a Linux/aarch64 fingerprint difference from a session warm-up need from outright automation detection. #53 will make a recurrence self-diagnosing (the UI will say "Akamai bot-block (access denied)" instead of a bare "Failed").
 
 ---
 
 ## [ ] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel
 
 **Type:** feat / AFK
-**Estimate:** ~3h
-**Blocked by:** None (related: #52 — surfaced by that investigation, but not dependent on its outcome)
+**Estimate:** ~5h
+**Blocked by:** None (related: #52 — surfaced by that investigation, closed as environmental; #54 — where the last-checked gap surfaced)
+**Status:** built and unit-tested locally (backend + frontend); pending deploy and live verification against a real failure. Full plan: `.plan/53-scrape-failure-reason-timestamp/`.
 
 ### What to build
 
-Today a failed listing only ever shows as the single word "failed" (`compute_status`, `product_status.py:39-40`) — no retailer-specific reason, no timestamp. Diagnosing the Crate & Barrel case (#52) required a live SSH-into-Pi-and-grep-logs session because none of this is persisted. Two parts:
+Today a failed listing only ever shows as the single word "failed" (`compute_status`, `product_status.py`) — no retailer-specific reason. Diagnosing the Crate & Barrel case (#52) required a live SSH-into-Pi-and-grep-logs session, plus a temporary code patch to dump raw HTML, because none of it is persisted. Separately, "last checked" was derived from `PriceHistory` and so never advanced for a listing that was out of stock or failing.
 
-**1. Persist a reason, not just a status.** Add two nullable columns to `Listing` (`watch_items`, `models/watch_item.py`) via a new Alembic migration:
-- `last_scrape_error: str | None` — a short machine-written reason, not a full traceback (that still belongs in logs only)
-- `last_failed_at: datetime | None` — set alongside it
+**1. Persist a reason.** New nullable `Listing.last_scrape_error` (migration `0017`), fed by a new `ScraperResult.error_reason: str | None`, populated at every path that produces `"error"`:
+- `HTTPScraper`, `PatchrightScraper`, `AmazonCAScraper` (launch failure → the exception; retry exhaustion → `"exhausted retries"`) and `IKEAScraper`'s three error returns.
+- `_describe_exception(exc)` — raw `str(exc)` isn't safe to persist (it can be empty, e.g. `httpx.ConnectError("")`, or a multi-line Playwright call log): `"TypeName: first line"`, type name alone when the message is empty, truncated to 200 chars.
+- The formerly silent no-price-found path in `base.py`'s `_run_hierarchy` — now content-detected by `_detect_bot_block`: Akamai "Access Denied" → `"Akamai bot-block (access denied)"`, Cloudflare "Just a moment" → `"Cloudflare bot-check challenge did not clear"`, otherwise `"no price found on page"`. Detected by page content, not by a flag threaded from `patchright_scraper.py`'s Cloudflare wait: #52's real case was Akamai, which a Cloudflare-specific flag would have missed. Two known signatures only, not an exhaustive detector.
+- `status="ok"` with `price is None` — was a silent no-op that left `last_scrape_status` untouched; now a real `"error"` (`"scraper returned ok status but no price was found"`).
+- `_bounded_process_item`'s backstop (an unexpected exception escaping `process_item`) — a fourth place that sets `"error"`.
 
-Populate `last_scrape_error` at every point a listing's `last_scrape_status` gets set to `"error"`, today split across several silent/semi-silent paths (see #52's failure-scenario table for the full breakdown):
-- Network error / navigation timeout / browser launch failure (`http_scraper.py:22-24`, `patchright_scraper.py:229,241-243,293`) — already caught with a real exception in hand; store `str(exc)` or exception type name
-- Amazon retry exhaustion (`patchright_scraper.py:327-328`) — store the last attempt's exception summary, not just "exhausted retries"
-- The silent no-price-found path (`base.py:622-623`) — currently zero information; needs a distinguishing reason string at minimum (e.g. `"no price found on page"`), ideally further split out whether a Cloudflare-style challenge was seen and never cleared (`patchright_scraper.py:231-234` currently swallows this distinction entirely — `except Exception: pass` with no flag threaded through)
-- `status="ok"` with `price is None` (`jobs.py:192-198`) — currently leaves `last_scrape_status` untouched (silently stale, not even marked `"error"`); decide whether this should now actually transition to `"error"` with its own reason, since right now a recurring extraction bug here is invisible forever
+`last_scrape_error` clears on the listing's next `"ok"` **or** `"oos"` scrape — both are legitimate non-broken results.
 
-Clear both columns (`None`) on the next `status == "ok"` scrape for that listing — a stale reason from 3 failures ago must not linger once scraping recovers.
+**2. Show it in the UI.**
+- **Watchlist table row:** hovering the "Failed" badge shows a tooltip, one line per failed listing, **reason only** (same shape as the "Out of Stock" badge's restock tooltip).
+- **Sheet panel:** the header badge gets the same tooltip, and each listing row gets a red `CircleAlert` icon next to its external-link icon when *that* listing is in `"error"`, its tooltip showing that listing's reason. (A separate always-visible "Error section" was considered and replaced by the inline icon.)
+- A listing that was already `"error"` before this shipped has no reason until its next scrape — the tooltips show `"no details recorded yet"` instead of `null`/`undefined`.
 
-**2. Show it in the UI.** Item sheet panel (watchlist, same panel #51 added the per-item manual-scrape button to) — for any listing currently in `"error"`/contributing to the product's `"failed"` status, show: retailer name (already shown), failure reason (`last_scrape_error`), and relative last-failed time (`last_failed_at`, e.g. "3h ago"). Only render this block when relevant — a healthy listing shows nothing extra.
+**3. API surface.** `last_scrape_error` on `ListingResponse` / the frontend `Listing` type.
 
-**3. API surface.** Add both fields to whichever response schema backs the sheet panel's listing data (`schemas/product.py` / `schemas/listing.py` — check current shape).
+**4. Fix `last_checked`.** Today it's `MAX(PriceHistory.checked_at)` per listing (`items.py`, `_fetch_last_checked_map`), and `PriceHistory` is only written on `"ok"` — so a listing that's out of stock or failing never advances, however often it's re-scraped (caught live testing #54's IKEA fix: a manual re-poll updated everything except "last checked"). New nullable `Listing.last_checked_at`, set on **every poll attempt, whatever the outcome** (`ok`, `oos` or `error`); `_fetch_last_checked_map` reads it instead. Nothing backfilled — existing listings show blank until their next scrape, which self-heals within one `poll_prices` cycle.
 
-**4. Fix `last_checked`'s freshness semantics (merged in from live #54 testing).** Today `last_checked` (product-level, `product_status.py`'s `compute_last_checked`) is derived entirely from `MAX(PriceHistory.checked_at)` per listing (`items.py:177-178`, `_fetch_last_checked_map`) — and a `PriceHistory` row is only ever written on the `"ok"` path in `jobs.py`. A listing that's genuinely `"oos"` never gets one, so its `last_checked` stays permanently stale no matter how many times it's actually re-scraped — caught live testing #54's IKEA OOS fix: a manual re-poll correctly updated the listing's price/status/restock date but left "last checked" showing a stale timestamp.
-
-Two distinct questions were being conflated into one field, and neither `last_checked` alone nor `last_failed_at` alone can answer both:
-- *"How fresh is my data?"* — should update on `"ok"` and `"oos"` alike (both are legitimate, informative results), not just `"ok"`
-- *"When did we last try and fail?"* — `last_failed_at` (above), kept separate — without it, a listing that's been failing for weeks and one that just started failing this cycle would look identical once `last_checked` also started counting `"error"` attempts (considered and rejected as a simpler single-field fix, see this issue's discussion trail)
-
-Add a third column, `last_checked_at: datetime | None`, set on every `"ok"`/`"oos"` scrape — not `"error"`, so a failed attempt doesn't read as "fresh" — and have `_fetch_last_checked_map`/`compute_last_checked` derive from this instead of `PriceHistory.checked_at`.
-
-**5. Show `last_failed_at` in the UI too.** "Failed" badge gets a hover tooltip ("Last attempted `<relative time>`"), same pattern as the "Out of Stock" badge's restock-date tooltip (already shipped, part of #54's work, ahead of the rest of this issue) — so a listing failing for weeks reads differently from one that just started failing, a distinction the "Failed" badge alone can't convey.
+*Design trail.* The first draft made `last_checked_at` success-only (`ok`/`oos`, not `error`) plus a separate `last_failed_at`, so a failing listing would read stale ("how long has it been broken"). Reversed before shipping: "last checked" literally means when we last tried, a failure is already loud (the Failed badge plus its persisted reason), and a listing that stops being polled at all still goes stale. `last_failed_at` would then always equal `last_checked_at` while failed (and clear on recovery), so it was dropped — the migration never shipped with it. The last *successful* price time is still in `PriceHistory`.
 
 ### Why (context)
 
-Directly prompted by #52's debugging session — confirming a scrape failure and its retailer took a DB query; finding *why* took SSH + log-grepping + a temporary code patch to dump raw HTML, because none of that information is persisted anywhere. This issue makes that information visible in the app itself, without needing a debugging session, for any future retailer that fails the same way.
-
-Part 4 (`last_checked_at`) was folded in later, surfaced live while testing #54's IKEA out-of-stock fix — same underlying gap (a listing's true "was this checked" state isn't persisted anywhere reliable), same migration, closely related enough not to split into a separate issue.
+Directly prompted by #52's debugging session — confirming a scrape failure and its retailer took a DB query; finding *why* took SSH, log-grepping and a temporary code patch, because none of that was persisted. Part 4 was folded in from live #54 testing — same gap (a listing's true "was this checked" state isn't reliably persisted), same migration.
 
 ### Acceptance criteria
 
-- [ ] New Alembic migration adds `last_scrape_error` (nullable string), `last_failed_at` (nullable timestamptz), and `last_checked_at` (nullable timestamptz) to `watch_items`
-- [ ] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error` — no path leaves it `None` while status is `"error"`
-- [ ] The silent no-price-found path (`base.py:622-623`) is no longer silent — has its own reason string, and distinguishes "challenge/interstitial never cleared" from "page loaded normally, no extractor matched" where the code has that information available
-- [ ] `status="ok"` + `price is None` (`jobs.py:192-198`) — decided and implemented: either transitions to `"error"` with its own reason, or is explicitly left as-is with a documented reason why the current stale-status behavior is intentional (not left ambiguous)
-- [ ] A listing's next successful scrape clears both `last_scrape_error` and `last_failed_at`
-- [ ] Sheet panel shows retailer + reason + relative last-failed time for any errored listing, hidden entirely for healthy ones
-- [ ] `last_checked_at` set on `"ok"` and `"oos"` scrapes, not on `"error"`; `_fetch_last_checked_map`/`compute_last_checked` derive from it instead of `PriceHistory.checked_at`
-- [ ] A listing stuck in `"oos"` shows an up-to-date `last_checked` after every re-scrape, not a permanently stale/blank one
-- [ ] "Failed" badge shows a hover tooltip with `last_failed_at`, same pattern as the "Out of Stock" badge's restock-date tooltip
-- [ ] Verified live against a real failure (e.g. re-triggering the Crate & Barrel case from #52, if still reproducible) — reason text shown in the UI matches what actually happened, not a generic placeholder
+- [ ] Migration `0017` adds `last_scrape_error` (nullable string) and `last_checked_at` (nullable timestamptz) to `watch_items` — applied locally, **not yet on the Pi/NAS**
+- [ ] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error`: each scraper's error return supplies `error_reason`, `process_item`'s `"error"` branch falls back to `"unknown scraper error"`, and the `ok`+no-price case and the `_bounded_process_item` backstop set their own
+- [ ] The formerly silent no-price-found path is no longer silent — Akamai / Cloudflare pages are named, everything else gets the generic reason
+- [ ] `status="ok"` + `price is None` transitions to `"error"` with its own reason
+- [ ] A listing's next `"ok"` or `"oos"` scrape clears `last_scrape_error`
+- [ ] `last_checked_at` is set on every poll (ok, oos and error); `_fetch_last_checked_map` derives from it instead of `PriceHistory.checked_at`, so a listing stuck in `"oos"` or failing shows an up-to-date "last checked" after every re-scrape
+- [ ] Watchlist table row: hovering "Failed" shows a reason-only tooltip; sheet panel: same on the header badge, plus a `CircleAlert` icon with the listing's reason on each failed listing's row; legacy rows show `"no details recorded yet"`
+- [ ] Verified live against a real failure (a served fake Akamai deny page, or #52's Crate & Barrel case if it recurs) — the reason in the UI matches what actually happened
+
+### Known limitations
+
+- The UI can't show how long a listing has been failing — "last checked" is the last attempt, and the last good price time lives only in `PriceHistory`. A "last succeeded" line in the tooltip is a small follow-up if it's ever wanted.
+- A product with several failed listings shows unlabeled reason lines in the badge tooltip (same tradeoff as the Out of Stock tooltip); the per-listing icon has no such ambiguity.
+---
+
+## [x] Issue #54 — IKEA Real Stock Status + Out-of-Stock Status with Restock Tooltip
+
+**Type:** feat / AFK
+**Estimate:** ~4.5h *(retroactive — written up after shipping)*
+**Blocked by:** None
+
+### What to build
+
+IKEA's product page ships a generic JSON-LD `offers.availability` that always says `"InStock"` regardless of real inventory, so the generic extraction hierarchy reported sold-out IKEA items as normal, buyable, watchable listings. Real per-store stock only exists behind a separate fragment request IKEA's own frontend fires after page load. Separately, `compute_status()` had no branch for a listing's `"oos"` scrape result at all — even a correctly-detected out-of-stock listing on any retailer fell through to `"watching"`.
+
+**Backend:**
+- `IKEAScraper` (`services/scraper/ikea_scraper.py`) — dedicated, browser-free scraper registered as `"ikea.com"` in `RETAILER_MAP` (strict, no fallback — same convention as `AmazonCAScraper`). Hits `lower-funnel-fragments/product-availability/?itemNo=…&inline`, parses the `<script type="text/hydrate">` JSON, reads price/currency plus the hardcoded store's `isOutOfStock`/`restocks`. Item number is parsed from the URL **path** only, so a tracking/variant query string can't corrupt it. `IKEA_STORE_ID = "256"` (IKEA Burlington) lives in `config.py` — IKEA picks "your store" client-side via a cookie/geolocation prompt the scraper doesn't have; for a single-household app a constant is the right call.
+- `ScraperResult.restock_at` + `Listing.restock_at` (migration `0016`) — set alongside `"oos"`, cleared on the next `"ok"` scrape; exposed on `ListingResponse`.
+- `jobs.py` stores `scrape.price` on an `"oos"` result when the scraper provides one (IKEA exposes price and availability separately); otherwise the listing's prior last-known price is preserved rather than overwritten with null.
+- `compute_status()` gains `"out_of_stock"`, ranked after `"failed"` (a broken scraper is more actionable than a confirmed OOS) and before `"triggered"`.
+
+**Frontend:**
+- `WatchStatus`, `STATUS_BADGE`, and the `draftStatus()` mirror gain `"out_of_stock"`; the watchlist stat row gets an "Out of Stock" count (`--status-warning`).
+- New `components/ui/tooltip.tsx` (Base UI-backed, mirrors `popover.tsx`); hovering the "Out of Stock" badge — table row and sheet header — shows `Available <date range>` (or `no restock date available`).
+- `Badge` now forwards its ref (`React.forwardRef`) — Base UI's `render` prop needs a real DOM ref to anchor the tooltip, which a plain function component can't provide on React 18.
+
+### Why (context)
+
+Surfaced live: a newly-added IKEA ALPSTUGA sensor sat at "Watching" with a live price while IKEA's own page showed "Currently unavailable" for both delivery and the local store. Root-caused across several rounds — the JSON-LD `"InStock"` is boilerplate, a plain substring match on the page is useless (the "Currently unavailable" text in the static HTML is IKEA's i18n string table, present on every product page), and the real answer only exists in the fragment endpoint. Once the scraper reported `"oos"` correctly, the missing `compute_status()` branch turned out to be a pre-existing gap affecting every retailer.
+
+### Acceptance criteria
+
+- [x] `IKEAScraper` reports `status="oos"` with the real price and a restock date range for the hardcoded store; live-verified against the real ALPSTUGA listing
+- [x] Item number extraction ignores query strings (tracking param and numeric-variant-param regression tests)
+- [x] `"oos"` listings roll up to a distinct `"out_of_stock"` product status instead of `"watching"` — backend `compute_status()` and frontend `draftStatus()` in sync
+- [x] `restock_at` persists on `"oos"`, clears on the next `"ok"`; migration `0016` applied locally and on the Pi/NAS
+- [x] An `"oos"` result with no price signal preserves the listing's prior `last_price` instead of nulling it
+- [x] "Out of Stock" badge tooltip shows `Available <date range>` on both the table row and the sheet header
+- [x] Test coverage: `tests/scraper/test_ikea.py` (12 cases), plus new/updated cases in `test_product_status.py` and `test_jobs.py`
+
+### Known limitations
+
+- Store ID is hardcoded; delivery-to-postal-code availability (a separate answer on IKEA's page) is not reflected — only the store's stock is.
+- The fragment endpoint is IKEA-internal and undocumented; a change on their side would surface as `"error"` (no fallback by design).
+- A product with several OOS listings shows unlabeled `Available …` lines in the tooltip (retailer prefix was deliberately dropped on request).
+- `last_checked` doesn't advance for `"oos"` listings (derived from `PriceHistory`) — fixed by #53 part 4.

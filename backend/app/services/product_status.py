@@ -55,9 +55,12 @@ def compute_status(
 
 def compute_last_checked(listing_last_checked: list[datetime | None]) -> datetime | None:
     """Product-level last-checked is the *stalest* listing's own last-checked
-    timestamp, so a silently-broken retailer poll stays visible even if a
-    sibling listing is updating fine. `None` entries (never scraped) are
-    excluded unless every listing is unscraped."""
+    timestamp (its last poll attempt, whatever the outcome — issue #53), so a
+    listing that has stopped being polled at all stays visible even if a
+    sibling listing is updating fine. A listing that's polled but failing is
+    flagged by its own "failed" status instead, not by staleness. `None`
+    entries (never scraped) are excluded unless every listing is
+    unscraped."""
     known = [value for value in listing_last_checked if value is not None]
     if not known:
         return None

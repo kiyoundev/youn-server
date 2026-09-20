@@ -67,7 +67,8 @@ async def test_get_price_launches_lazily_when_context_missing() -> None:
     mock_start.assert_awaited_once()
     mock_page.goto.assert_awaited_once()
     mock_page.close.assert_awaited_once()
-    assert result == ScraperResult(price=None, status="error", currency="CAD")  # no price signals in "<html></html>"
+    # no price signals in "<html></html>" — the generic no-price-found reason
+    assert result == ScraperResult(price=None, status="error", currency="CAD", error_reason="no price found on page")
 
 
 @pytest.mark.asyncio
@@ -76,7 +77,7 @@ async def test_get_price_returns_error_when_launch_fails() -> None:
     degrades to status="error" rather than letting the exception propagate."""
     with patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=RuntimeError("boom"))):
         result = await PatchrightScraper().get_price("https://example.com/product")
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(price=None, status="error", error_reason="RuntimeError: boom")
 
 
 @pytest.mark.asyncio
@@ -432,4 +433,4 @@ async def test_amazon_ca_scraper_error_path_leaves_currency_none() -> None:
     with patch.object(PatchrightScraper, "start_browser", AsyncMock(side_effect=fake_start_browser)):
         result = await scraper.get_price("https://www.amazon.ca/dp/B0DGJJKWW7")
 
-    assert result == ScraperResult(price=None, status="error", currency=None)
+    assert result == ScraperResult(price=None, status="error", currency=None, error_reason="exhausted retries")

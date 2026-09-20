@@ -93,6 +93,7 @@ def _listing(
     last_price: float | None = None,
     last_scrape_status: str | None = None,
     restock_at: str | None = None,
+    last_scrape_error: str | None = None,
     product_id: int = 1,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -102,6 +103,7 @@ def _listing(
         last_price=last_price,
         last_scrape_status=last_scrape_status,
         restock_at=restock_at,
+        last_scrape_error=last_scrape_error,
         product_id=product_id,
         created_at=datetime.now(timezone.utc),
     )
@@ -184,6 +186,27 @@ async def test_list_items_returns_products_with_computed_fields() -> None:
     assert result[0].status == "watching"
     assert result[0].listings[0].last_price == 90.0
     assert result[0].last_checked is not None
+
+
+@pytest.mark.asyncio
+async def test_list_items_exposes_failure_reason() -> None:
+    """Issue #53 — why a listing failed reaches the API response, and a
+    failed listing still rolls the product up to "failed"."""
+    listing = _listing(
+        listing_id=1,
+        last_scrape_status="error",
+        last_scrape_error="Akamai bot-block (access denied)",
+        product_id=5,
+    )
+    product = _product(product_id=5, target_price=100.0, listings=[listing])
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[_list_result([product]), _rows_result([])])
+
+    result = await items.list_items(db)
+
+    assert result[0].status == "failed"
+    assert result[0].listings[0].last_scrape_error == "Akamai bot-block (access denied)"
 
 
 @pytest.mark.asyncio

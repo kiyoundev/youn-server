@@ -109,7 +109,9 @@ async def test_missing_hydrate_script_returns_error() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(
+        price=None, status="error", error_reason="availability data missing from IKEA response"
+    )
 
 
 @pytest.mark.asyncio
@@ -121,7 +123,8 @@ async def test_malformed_json_in_hydrate_script_returns_error() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=None, status="error")
+    assert result.status == "error"
+    assert result.error_reason.startswith("JSONDecodeError")
 
 
 @pytest.mark.asyncio
@@ -131,7 +134,8 @@ async def test_http_error_status_returns_error() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=None, status="error")
+    assert result.status == "error"
+    assert result.error_reason.startswith("HTTPStatusError")
 
 
 @pytest.mark.asyncio
@@ -141,13 +145,13 @@ async def test_connection_error_returns_error() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(price=None, status="error", error_reason="ConnectError: refused")
 
 
 @pytest.mark.asyncio
 async def test_url_with_no_trailing_item_number_returns_error() -> None:
     result = await IKEAScraper().get_price("https://www.ikea.com/ca/en/p/some-page-with-no-id/")
-    assert result == ScraperResult(price=None, status="error")
+    assert result == ScraperResult(price=None, status="error", error_reason="no item number found in URL")
 
 
 @pytest.mark.asyncio

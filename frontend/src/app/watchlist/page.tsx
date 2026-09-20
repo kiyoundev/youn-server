@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { PriceSparkline } from "@/components/ui/price-sparkline";
 import { ProductPriceChart } from "@/components/ui/product-price-chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ExternalLink, LoaderCircle, MoreVertical, Plus, RefreshCw, Search, Pencil, Trash2, ClockAlert } from "lucide-react";
+import { CircleAlert, ExternalLink, LoaderCircle, MoreVertical, Plus, RefreshCw, Search, Pencil, Trash2, ClockAlert } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
@@ -112,6 +112,13 @@ const formatLastChecked = (iso: string | null) => {
   if (diffHours < 24) return `${diffHours}h ago`;
   return `${Math.round(diffHours / 24)}d ago`;
 };
+
+// Issue #53 — why a listing is in "error", shared by the Failed badge tooltip
+// and each listing's own error icon. Reason only: when it was tried is the
+// Last checked column's job. Null for a listing that was already failed
+// before the field existed, until its next scrape — a placeholder instead of
+// rendering null/undefined.
+const describeFailure = (listing: Listing) => listing.last_scrape_error || "no details recorded yet";
 
 function fmtValue(value: number) {
   return `$${Math.round(value).toLocaleString("en-US")}`;
@@ -384,13 +391,23 @@ function ProductRow({
   // Sheet-panel-only badge preview, draft-aware (see draftStatus above) —
   // the table row's own badge above stays on `status`/product.status
   // unconditionally, real server truth only.
-  const sheetStatus = STATUS_BADGE[draftStatus(product, draft.active)];
+  const sheetStatusKey = draftStatus(product, draft.active);
+  const sheetStatus = STATUS_BADGE[sheetStatusKey];
   // Feeds the "Out of Stock" badge's tooltip (both table row and sheet
   // header) — one line per OOS listing, since a multi-retailer product can
   // have some listings OOS and others not, each with its own restock date.
   const oosRestockLines = product.listings
     .filter((l) => l.last_scrape_status === "oos")
     .map((l) => (l.restock_at ? `Available ${l.restock_at}` : "no restock date available"));
+  // Issue #53 — same shape for the "Failed" badge: one line per failed
+  // listing, reason + how long ago.
+  const failedReasonLines = product.listings.filter((l) => l.last_scrape_status === "error").map(describeFailure);
+  // Only these two statuses have anything worth a hover; everything else
+  // renders a plain badge.
+  const tooltipLinesFor = (s: WatchStatus) =>
+    s === "out_of_stock" ? oosRestockLines : s === "failed" ? failedReasonLines : null;
+  const rowTooltipLines = tooltipLinesFor(product.status);
+  const sheetTooltipLines = tooltipLinesFor(sheetStatusKey);
   const best = bestPrice(product);
   const sparklineData = mergeMinByDay(product.listings, historyByListing);
   // Chart wants per-retailer series, unmerged — same underlying per-listing
@@ -433,12 +450,12 @@ function ProductRow({
           </TableCell>
           <TableCell>{fmtPrice(product.target_price, product.currency)}</TableCell>
           <TableCell>
-            {product.status === "out_of_stock" ? (
+            {rowTooltipLines ? (
               <Tooltip>
                 <TooltipTrigger render={<Badge variant={status.variant}>{status.label}</Badge>} />
                 <TooltipContent>
-                  {oosRestockLines.map((line) => (
-                    <div key={line}>{line}</div>
+                  {rowTooltipLines.map((line, i) => (
+                    <div key={`${i}-${line}`}>{line}</div>
                   ))}
                 </TooltipContent>
               </Tooltip>
@@ -550,12 +567,12 @@ function ProductRow({
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
               <div className="flex items-center gap-2">
-                {draftStatus(product, draft.active) === "out_of_stock" ? (
+                {sheetTooltipLines ? (
                   <Tooltip>
                     <TooltipTrigger render={<Badge variant={sheetStatus.variant}>{sheetStatus.label}</Badge>} />
                     <TooltipContent>
-                      {oosRestockLines.map((line) => (
-                        <div key={line}>{line}</div>
+                      {sheetTooltipLines.map((line, i) => (
+                        <div key={`${i}-${line}`}>{line}</div>
                       ))}
                     </TooltipContent>
                   </Tooltip>
@@ -645,6 +662,21 @@ function ProductRow({
                       >
                         <ExternalLink size={14} strokeWidth={1.5} />
                       </a>
+                      {/* Issue #53 — this specific retailer's own scrape
+                          failure, next to its link; the badge tooltip above
+                          is the product-level rollup. */}
+                      {listing.last_scrape_status === "error" && (
+                        <Tooltip>
+                          <TooltipTrigger
+                            aria-label={`${listing.retailer} scrape failed`}
+                            className="-mr-1 inline-flex items-center justify-center rounded-md p-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                            style={{ color: "var(--status-error)" }}
+                          >
+                            <CircleAlert size={14} strokeWidth={1.5} />
+                          </TooltipTrigger>
+                          <TooltipContent>{describeFailure(listing)}</TooltipContent>
+                        </Tooltip>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       {/* Stacked, not inline (issue #45 follow-up) — the

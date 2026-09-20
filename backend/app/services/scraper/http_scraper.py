@@ -3,7 +3,7 @@ import random
 
 import httpx
 
-from app.services.scraper.base import BaseScraper, USER_AGENTS, _build_headers
+from app.services.scraper.base import BaseScraper, USER_AGENTS, _build_headers, _describe_exception
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
 from app.services.scraper.result import ScraperResult
 
@@ -19,6 +19,6 @@ class HTTPScraper(BaseScraper):
             ) as client:
                 resp = await client.get(url, headers=_build_headers(ua))
             return await self._run_hierarchy(resp.text, url)
-        except Exception:
+        except Exception as exc:
             _log.warning("HTTPScraper error for %s", url, exc_info=True)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))

@@ -5,7 +5,7 @@ import tempfile
 
 from patchright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
-from app.services.scraper.base import BaseScraper, _parse_price
+from app.services.scraper.base import BaseScraper, _describe_exception, _parse_price
 from app.services.scraper.config import (
     AMAZON_MAX_RETRIES,
     CLOUDFLARE_CHALLENGE_TIMEOUT_MS,
@@ -238,9 +238,9 @@ class PatchrightScraper(BaseScraper):
             finally:
                 PatchrightScraper._active_scrapes -= 1
             return await self._run_hierarchy(html, url)
-        except Exception:
+        except Exception as exc:
             _log.warning("PatchrightScraper error for %s", url, exc_info=True)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))
 
 
 class AmazonCAScraper(PatchrightScraper):
@@ -289,9 +289,9 @@ class AmazonCAScraper(PatchrightScraper):
             # Same lazy-launch call as the base class — explicit PatchrightScraper
             # reference so this subclass shares the one browser, not a second one.
             await PatchrightScraper.start_browser()
-        except Exception:
+        except Exception as exc:
             _log.warning("AmazonCAScraper: browser launch failed for %s", url, exc_info=True)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))
         # Counts as one in-flight scrape for the whole retry loop below, not once
         # per attempt — matches PatchrightScraper.get_price()'s tracking, which
         # close_if_idle() checks before closing the shared context.
@@ -325,6 +325,6 @@ class AmazonCAScraper(PatchrightScraper):
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
             _log.warning("AmazonCAScraper exhausted retries for %s", url)
-            return ScraperResult(price=None, status="error")
+            return ScraperResult(price=None, status="error", error_reason="exhausted retries")
         finally:
             PatchrightScraper._active_scrapes -= 1

@@ -11,6 +11,7 @@ from app.models.product import Product
 from app.models.watch_item import Listing
 from app.services.fx import refresh_fx_rates
 from app.services.scrape_tracking import clear_in_flight, mark_in_flight
+from app.services.scraper.base import _describe_exception
 from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.scraper.router import (
     RETAILER_DISPLAY_NAMES,
@@ -131,6 +132,25 @@ async def refresh_fx_rates_job() -> None:
             await refresh_fx_rates(session)
 
 
+def _record_failure(listing: Listing, reason: str, now: datetime) -> None:
+    """Issue #53 — the one place an "error" outcome gets written, shared by
+    process_item's error paths and _bounded_process_item's backstop so no
+    path can set last_scrape_status="error" without also persisting a
+    reason. A failed attempt still counts as a check (last_checked_at) —
+    "last checked" is when we last tried, and the Failed badge already says
+    it didn't work."""
+    listing.last_scrape_status = "error"
+    listing.last_scrape_error = reason
+    listing.last_checked_at = now
+
+
+def _clear_failure(listing: Listing) -> None:
+    """A real result ("ok" or "oos") supersedes any earlier failure — a
+    stale reason from three failures ago must not linger once scraping
+    recovers."""
+    listing.last_scrape_error = None
+
+
 async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
     async with AsyncSessionLocal() as session:
         listing = await session.get(Listing, item_id)
@@ -176,11 +196,14 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
         broadcast({"product_id": listing.product_id, "listing_id": listing.id})
         try:
             scrape = await router.get_price(listing.url, scraper_type=listing.scraper_type)
+            now = datetime.now(timezone.utc)
 
             if scrape.status == "oos":
                 _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
                 listing.last_scrape_status = "oos"
                 listing.restock_at = scrape.restock_at
+                listing.last_checked_at = now
+                _clear_failure(listing)
                 # Some retailers (e.g. IKEAScraper) expose price and
                 # availability as separate attributes — a real price
                 # alongside "oos" is kept, not discarded. Others (the
@@ -195,23 +218,33 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
 
             if scrape.status == "error":
                 _log.warning("scraper error for listing %d (%s)", listing.id, listing.retailer)
-                listing.last_scrape_status = "error"
+                # `or` fallback guarantees a non-empty reason even if a
+                # scraper ever returns "error" without setting one.
+                _record_failure(listing, scrape.error_reason or "unknown scraper error", now)
                 await session.commit()
                 return
 
             if scrape.price is None:
+                # Anomalous "ok" with no price. Previously a bare warning-and-
+                # return that left last_scrape_status untouched — a recurring
+                # extraction bug here was invisible forever (issue #53).
+                # Functionally the same as the silent no-price-found case, so
+                # it's a real "error" now.
                 _log.warning(
-                    "scraper returned ok with None price for listing %d (%s), skipping",
+                    "scraper returned ok with None price for listing %d (%s)",
                     listing.id,
                     listing.retailer,
                 )
+                _record_failure(listing, "scraper returned ok status but no price was found", now)
+                await session.commit()
                 return
 
-            now = datetime.now(timezone.utc)
             session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
             listing.last_price = scrape.price
             listing.last_scrape_status = "ok"
             listing.restock_at = None
+            listing.last_checked_at = now
+            _clear_failure(listing)
 
             # Retailer-name inference (issue #44) — guarded: only overwrite while
             # listing.retailer still equals what _derive_retailer(hostname) would
@@ -351,13 +384,13 @@ async def _bounded_process_item(listing_id: int, semaphore: asyncio.Semaphore, q
     async with semaphore:
         try:
             await process_item(listing_id, RetailerRouter(), queue)
-        except Exception:
+        except Exception as exc:
             _log.error("bounded scrape failed for listing %d", listing_id, exc_info=True)
             try:
                 async with AsyncSessionLocal() as session:
                     listing = await session.get(Listing, listing_id)
                     if listing is not None and listing.last_scrape_status is None:
-                        listing.last_scrape_status = "error"
+                        _record_failure(listing, _describe_exception(exc), datetime.now(timezone.utc))
                         await session.commit()
             except Exception:
                 _log.error(
