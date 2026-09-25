@@ -3,9 +3,12 @@
 import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Search, Upload } from "lucide-react";
+import { LoaderCircle, Search, Upload } from "lucide-react";
 import { Command as CommandPrimitive } from "cmdk";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
+import { ApiError } from "@/lib/api/items";
+import { importActivities } from "@/lib/api/activities";
 import { Command, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { holdingsData, stockWatchlistData, mockTickerDirectory } from "@/lib/mock-portfolio";
 import { useNavSlotRegistration } from "@/components/nav-slot";
@@ -29,7 +32,7 @@ const Nav = () => {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
@@ -60,9 +63,24 @@ const Nav = () => {
     }, 150);
   };
 
-  const handleCsvSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    setCsvFileName(e.target.files?.[0]?.name ?? null);
-    e.target.value = "";
+  const handleCsvSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    try {
+      await importActivities(file);
+      toast.success("Import complete");
+    } catch (err) {
+      // persist: true — a rejection tells the user what to fix (e.g. which
+      // date to re-export from), so it shouldn't vanish on a timer.
+      toast.error(err instanceof ApiError ? err.detail : "Failed to import activities", { persist: true });
+    } finally {
+      setIsImporting(false);
+      // Cleared on every path, so picking the same file again re-fires onChange.
+      input.value = "";
+    }
   };
 
   return (
@@ -150,14 +168,18 @@ const Nav = () => {
                 </CommandList>
               )}
             </Command>
-            {csvFileName && <span className="text-muted-foreground max-w-[140px] truncate text-xs">{csvFileName}</span>}
             <button
               type="button"
               aria-label="Upload Wealthsimple CSV"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted"
+              disabled={isImporting}
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => csvInputRef.current?.click()}
             >
-              <Upload className="size-4 shrink-0 opacity-50" />
+              {isImporting ? (
+                <LoaderCircle className="size-4 shrink-0 animate-spin opacity-50" />
+              ) : (
+                <Upload className="size-4 shrink-0 opacity-50" />
+              )}
             </button>
             <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvSelect} />
           </>

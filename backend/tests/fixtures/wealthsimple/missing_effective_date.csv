@@ -1,0 +1,3 @@
+effective_date,effective_time,settlement_date,account_id,account_type,activity_type,activity_sub_type,description,direction,symbol,name,currency,quantity,unit_price,commission,net_cash_amount
+2026-01-05,09:30:00,,TEST-ACCT-0001,NON_REGISTERED,MoneyMovement,EFT,Electronic funds transfer in,,,,CAD,5000.00,,0.00,5000.00
+,,2026-01-09,TEST-ACCT-0001,NON_REGISTERED,Trade,BUY,"AAPL - Apple Inc.: Bought 10.0000 shares (executed at 2026-01-08), FX Rate: 1.4500",LONG,AAPL,Apple Inc.,CAD,10.0000,300.00,0.00,-3000.00

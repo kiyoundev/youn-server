@@ -79,6 +79,50 @@ One `Product` (shared name + target price) can have many `Listing` rows (one per
 
 **Live progress while `status: "running"`:** `GET /api/stockalerts/{id}/analysis` reflects `llm_calls`, `tokens_in`, `tokens_out`, `tool_calls`, and `last_heartbeat_at`, updated as the subprocess emits heartbeat lines — an idle timer (`tradingagents_idle_timeout_seconds`, default 10min) resets on each heartbeat rather than killing the run on a flat total-elapsed timeout. A hard cap (`tradingagents_hard_cap_seconds`, default 2h) applies regardless of heartbeats. On `status: "failed"`, `error_reason` distinguishes `"idle_timeout"` / `"subprocess_error"` / `"invalid_output"` / `"max_runtime_exceeded"`.
 
+### Activities (Wealthsimple Import)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/activities/import` | Import a Wealthsimple "activities export" CSV — `multipart/form-data`, one `file` field — response: `{ accounts: AccountImportResult[] }` — 422 with a structured `detail` on any rejection |
+| `DELETE` | `/api/activities` | Reset one account's ledger — query: `?account_id=` (required) — response: `{ account_id, deleted }` |
+
+**POST /api/activities/import** turns an export into a durable ledger of `Activity` rows (issue #33). The ledger is the source of truth — there is no `Position` table; holdings, average cost and cash are derived on read (`services/positions.py`). Wealthsimple exports carry no row id and cap at 12 months, so uploads overlap and rows can't be matched. Merging rests on date ranges instead, per `account_id`:
+
+- **Frozen past** — stored rows older than (newest stored date − 7 days) are never touched; the file's copies of them are skipped. That's what makes re-uploading the same file safe.
+- **Tail refresh** — only when the file reaches the newest stored row: from the boundary onward, stored rows are deleted and replaced wholesale by the file's rows (covers late-settling trades and half-day exports). A row dated exactly on the boundary counts as tail. A file that ends *before* the newest stored row (say, re-uploading an older export) never deletes anything — whatever it has in the tail window is skipped and the tail stays exactly as stored.
+- **Prepend** — rows older than the earliest stored date are added, so older history can be imported later. This is **not** checked for contiguity: a file containing only older rows is accepted even if it leaves a gap before the earliest stored row (a deliberate deviation from the original spec's "contiguous on the older side" — an account's history starts at its first deposit, so there's normally nothing older to import; enforce it if that ever changes).
+- **Reach-back** — a file that reaches the newest stored row must also reach back to the boundary, or it's rejected with `coverage_gap` and the date to re-export from. A file that ends earlier isn't replacing the tail, so it can't leave a hole in it and isn't checked.
+
+Writes to one account are serialized with a transaction-scoped Postgres advisory lock (also taken by the reset route), so two overlapping imports can't both plan against the same stored range and double-insert — there's no unique key to catch that. Everything is parsed and validated first, then `compute_positions` runs on the merged ledger as an integrity check (cash or shares going negative, or one symbol mixing FX-present and FX-absent trades, rejects the file) — all before anything is written. The write is **one transaction across every account in the file**: either all of it lands or none of it does. The calendar dates written into `message` and the `coverage_gap` text are `America/Toronto` dates (the ledger's own timezone), not UTC — a 23:41 local deposit is still that day. Timestamps in `coverage` and in error extras are ISO instants with an offset.
+
+Response, per account — `{ account_id, added, replaced, skipped, coverage: { earliest, newest }, message, warnings }`. `added` = rows new to the ledger outside the refreshed tail (every row on a first import, otherwise only rows older than the previous earliest date); `replaced` = rows written into the refreshed tail; `skipped` = frozen rows ignored. `message` is `"Ledger runs A → B; next time export from B − 7 days or earlier."` and `warnings` currently carries at most "ledger doesn't start with a funding deposit" (non-fatal).
+
+**Rejections** are all `422`, with `detail: { code, message, ...extras }` (datetimes in extras are ISO strings) and nothing written:
+
+| `code` | When | Extras |
+|--------|------|--------|
+| `invalid_file` | upload isn't valid UTF-8, or the `csv` module can't read it (e.g. a large non-CSV text file) | — |
+| `missing_columns` | required header columns absent | `missing: string[]` |
+| `empty_file` | header but no data rows | — |
+| `malformed_row` | unparseable number or date on a row | `line`, `field?` |
+| `missing_effective_date` | a row has a blank `effective_date`/`effective_time` (not backfilled from `settlement_date`) | `line` |
+| `unsupported_currency` | a row's `currency` isn't `CAD` (every row is stamped CAD, even USD stock trades — a USD holding is detected from `FX Rate:` text in the description instead) | `line`, `currency` |
+| `unknown_activity_type` | an `(activity_type, activity_sub_type)` pair isn't in the confirmed allowlist | `types: [{ activity_type, activity_sub_type, direction, count, example }]` |
+| `coverage_gap` | file reaches the tail but not back to the boundary | `re_export_from` |
+| `negative_cash` | running cash balance goes below 0 — earlier history is likely missing | `date` |
+| `negative_holdings` | a sell exceeds the shares held | `account_id`, `symbol`, `date` |
+| `mixed_native_currency` | one symbol has trades both with and without an FX rate | `account_id`, `symbol` |
+
+An upload over 5 MB is refused with **`413`** and `{ code: "file_too_large", message }` before anything is parsed (a real export is tens of KB). FastAPI's own validation failure (no `file` field) is also `422` but with `detail` as an array of `{ type, loc, msg, input }`; a proxy with no `API_KEY` is a `500` with a string `detail`.
+
+Only `Trade`/`BUY`, `MoneyMovement`/`EFT`, `MoneyMovement`/`E_TRFIN`, `Interest`, `Dividend` and `Tax`/`NRT` rows are recognized. **A sell is rejected as `unknown_activity_type` on purpose** — its real `activity_sub_type`/`direction` strings haven't been seen yet; the rejection's `types` entry carries the exact strings to map once one appears (and `negative_holdings` can't fire until then). Rejecting the whole file rather than skipping the row keeps a later re-upload working — a skipped row would be stranded by the frozen-past rule.
+
+**DELETE /api/activities** deletes every `Activity` row for one `account_id` — the recovery path for the frozen-past limitation (a correction to an already-frozen row is never picked up by a normal import, so it needs a reset and a full re-import). Backend-only: no frontend caller, deliberately — it's rare and destructive enough that a `curl` with the API key is the right amount of friction. Deleting an account with no rows returns `deleted: 0`.
+
+There is no read endpoint for holdings here — `GET /api/positions` and the rest belong to `.doc/issues.md` `#19`, which calls `compute_positions` against the committed rows.
+
+**Frontend**: the Upload button in the nav POSTs the file to `/api/proxy/activities/import` — a dedicated route handler, not the JSON catch-all `[...path]`, which forces `Content-Type: application/json` and would corrupt the multipart boundary. It forwards the raw body and `Content-Type` verbatim (buffered, not streamed) with the `X-API-Key` added server-side. It refuses an oversized upload up front (`413`, from `Content-Length`, before buffering it) and gives the backend 30 seconds — a timeout answers `504` and an unreachable backend `502`, each with a plain string `detail`. Success shows an "Import complete" toast; a rejection shows the `message` in a persistent error toast, with the full `detail` logged to the browser console.
+
 ### TradingAgents Management
 
 | Method | Path | Description |
@@ -213,5 +257,20 @@ export interface StorageResponse {
   available: number; // TB
   used: number; // TB
   reserved: number; // TB
+}
+
+// POST /api/activities/import — mirrors frontend/src/lib/api/activities.ts
+export interface AccountImportResult {
+  account_id: string;
+  added: number;
+  replaced: number;
+  skipped: number;
+  coverage: { earliest: string; newest: string };
+  message: string;
+  warnings: string[];
+}
+
+export interface ImportResult {
+  accounts: AccountImportResult[];
 }
 ```

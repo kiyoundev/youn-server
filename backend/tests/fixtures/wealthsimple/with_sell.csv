@@ -1,0 +1,11 @@
+effective_date,effective_time,settlement_date,account_id,account_type,activity_type,activity_sub_type,description,direction,symbol,name,currency,quantity,unit_price,commission,net_cash_amount
+2026-01-05,09:30:00,,TEST-ACCT-0001,NON_REGISTERED,MoneyMovement,EFT,Electronic funds transfer in,,,,CAD,5000.00,,0.00,5000.00
+2026-01-06,10:15:22,,TEST-ACCT-0001,NON_REGISTERED,MoneyMovement,E_TRFIN,Interac e-Transfer in from Test Person,,,,CAD,1000.00,,0.00,1000.00
+2026-01-08,10:02:11,2026-01-09,TEST-ACCT-0001,NON_REGISTERED,Trade,BUY,"AAPL - Apple Inc.: Bought 10.0000 shares (executed at 2026-01-08), FX Rate: 1.4500",LONG,AAPL,Apple Inc.,CAD,10.0000,300.00,0.00,-3000.00
+2026-01-12,11:40:05,2026-01-13,TEST-ACCT-0001,NON_REGISTERED,Trade,BUY,"AAPL - Apple Inc.: Bought 5.0000 shares (executed at 2026-01-12), FX Rate: 1.4600",LONG,AAPL,Apple Inc.,CAD,5.0000,306.60,0.00,-1533.00
+2026-01-15,14:20:00,2026-01-16,TEST-ACCT-0001,NON_REGISTERED,Trade,BUY,XEQT - iShares Core Equity ETF Portfolio: Bought 20.0000 shares (executed at 2026-01-15),LONG,XEQT.TO,iShares Core Equity ETF Portfolio,CAD,20.0000,30.00,0.00,-600.00
+2026-01-20,00:00:00,,TEST-ACCT-0001,NON_REGISTERED,Dividend,-,AAPL - Apple Inc.: Cash dividend,,AAPL,Apple Inc.,CAD,2.50,,0.00,2.50
+2026-01-20,00:00:00,,TEST-ACCT-0001,NON_REGISTERED,Tax,NRT,Non-resident tax on AAPL dividend,,,,CAD,-0.38,,0.00,-0.38
+2026-01-31,00:00:00,,TEST-ACCT-0001,NON_REGISTERED,Interest,-,"Stock lending interest: USD source, FX Rate: 1.4500",,,,CAD,0.01,,0.00,0.01
+2026-01-31,00:00:00,,TEST-ACCT-0001,NON_REGISTERED,Interest,-,Stock lending interest: CAD source,,,,CAD,0.01,,0.00,0.01
+2026-02-03,10:30:00,2026-02-04,TEST-ACCT-0001,NON_REGISTERED,Trade,SELL,"AAPL - Apple Inc.: Sold 5.0000 shares (executed at 2026-02-03), FX Rate: 1.4400",SHORT,AAPL,Apple Inc.,CAD,5.0000,315.00,0.00,1575.00

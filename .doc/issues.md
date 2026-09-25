@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ✅ #52, ⬜ #53, ✅ #54
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ⬜ #53, ✅ #54
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -41,13 +41,13 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 ✅ #9, ✅ #17, ⬜ #42, ✅ #25, ⬜ #26, ⬜ #27, ⬜ #28, ⬜ #49
 
 **Wealthsimple Import**
-⬜ #32, ⬜ #33
+✅ #32, ✅ #33
 
 **Infra / Deploy / Ops**
 ✅ #1.5, ✅ #13, ✅ #13.1, ✅ #13.2, ✅ #16, ⬜ #20, ⬜ #21, ✅ #21.5, ✅ #34, ✅ #43
 
 **Core Backend Foundation** (shared plumbing + cross-cutting frontend shell, not owned by one domain)
-✅ #1, ✅ #2, ✅ #5, ✅ #6, ✅ #7, ⬜ #18, ✅ #8, ✅ #10.5, ⬜ #22, ⬜ #14, ⬜ #29
+✅ #1, ✅ #2, ✅ #5, ✅ #6, ✅ #7, ⬜ #18, ✅ #8, ✅ #10.5, ⬜ #22, ⬜ #14, ⬜ #29, ⬜ #55 (optional)
 
 ---
 
@@ -81,7 +81,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #16 | Tailscale MagicDNS (Human-Readable Hostnames) | ops / HITL | ~0.5h | #13 |
 | ✅ Done | #17 | TradingAgents Progress Heartbeat + Idle Timeout | feat / AFK | ~2h | #9 |
 | ⬜ Open | #18 | DB Connection Resilience (pool_pre_ping + Pending-Event Rescan) | feat / AFK | ~1.5h | #6, #7 |
-| ⬜ Open | #19 | Manual Portfolio Position Tracking | feat / AFK | ~4h | #8, #10.1–#10.5 |
+| ⬜ Open | #19 | Portfolio Holdings: Derived Positions, Prices & Summary | feat / AFK | ~4h | #33 |
 | ⬜ Open | #20 | youn-server Self-Update (Version Check + Auto-Apply) | feat / AFK | ~3h | #8, #13 |
 | ⬜ Open | #21 | System/Infra Status API (Docker, Pi Resources, Services, Schedules) | feat / AFK | ~3h | #8, #20 |
 | ✅ Done | #21.5 | Synology Storage Status API | feat / AFK | ~1h | #1.5 |
@@ -94,6 +94,8 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #29 | Frontend Test Suite (Vitest Setup + Watchlist Components + Proxy Route) | test / AFK | ~3h | None |
 | ⬜ Open | #30 | Trending/Popular Assets (Portfolio) | feat / AFK | ~4h | #19 |
 | ✅ Done | #31 | Ticker Detail Page (Market Details Navigation) | feat / AFK | ~5h | #19, #23, #30 |
+| ✅ Done | #32 | Wealthsimple CSV Upload Trigger (Frontend Stub) | feat / AFK | ~1h | None |
+| ✅ Done | #33 | Wealthsimple Activity Import (Parse, Persist & Derive Positions) | feat / AFK | ~8h | #32 |
 | ✅ Done | #34 | DNS-Based Ad Blocking (Pi-hole) | ops / HITL | ~1h | None |
 | ✅ Done | #36 | Wishlist Page (Real Data + Live Price History via SSE) | feat / AFK | ~6h | #8, #24 |
 | ⬜ Open | #37 | Stocks/Portfolio Page — Live Updates via SSE (Finnhub Tick Broadcast) | feat / AFK | ~4h | #36, #10.4 |
@@ -104,7 +106,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #42 | TradingAgents on Pi: LLM Provider Config, Report Migration & Storage Strategy | ops / HITL | ~2.5h | #13, #9 |
 | ✅ Done | #43 | Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix) | ops / HITL | ~1h | #13, #16 |
 | ✅ Done | #51 | Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule | feat / AFK | ~2.5h | None |
-| ✅ Done | #52 | Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (closed — environmental) | fix / AFK | ~1h | None |
+| ⬜ Open | #52 | Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (reopened — recurred) | fix / AFK | ~1h | None |
 | ✅ Done | #54 | IKEA Real Stock Status + Out-of-Stock Status with Restock Tooltip | feat / AFK | ~4.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
@@ -137,7 +139,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | 17 | **#16** | Tailscale MagicDNS (human-readable hostnames) | ~0.5h | #13 |
 | 18 | **#17** | TradingAgents progress heartbeat + idle timeout | ~2h | #9 |
 | 19 | **#18** | DB connection resilience | ~1.5h | #6, #7 |
-| 20 | **#19** | Manual portfolio position tracking | ~4h | #8, #10.1–#10.5 |
+| 20 | **#19** | Portfolio holdings: derived positions, prices & summary | ~4h | #33 |
 | 21 | **#20** | youn-server self-update (check + auto-apply) | ~3h | #8, #13 |
 | 22 | **#21** | System/infra status API (Docker, Pi resources, services, schedules) | ~3h | #8, #20 |
 | 23 | **#22** | Overview dashboard (`/`, bentobox summary) | ~4h | #10.1–#10.5, #11, #19, #20, #21 |
@@ -212,7 +214,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 
 #10.1–#10.5
   ├── #11 — Analysis Results UI   [also needs #9]
-  └── #19 — Manual Portfolio Position Tracking
+  └── #19 — Portfolio Holdings (derived positions, prices & summary)   [re-scoped: also needs #33]
 ```
 
 **Group 6 — Deployment**
@@ -1193,63 +1195,57 @@ Reachable identically from all four entry points already established in `#31` (P
 
 ---
 
-## [ ] Issue #19 — Manual Portfolio Position Tracking
+## [ ] Issue #19 — Portfolio Holdings: Derived Positions, Prices & Summary
 
 **Type:** feat / AFK
-**Estimate:** ~4h
-**Blocked by:** #8, #10.1–#10.5
+**Estimate:** ~4h *(re-estimated from ~4h original → ~3h → ~4h: the manual CRUD is gone, but the balance card, two price providers and the symbol rule are new)*
+**Blocked by:** #33
+**Status:** design settled 2026-09-20 (grill session). Originally "Manual Portfolio Position Tracking" — superseded when a real Wealthsimple activities export turned out to contain the complete ledger (see #33), so nothing needs to be entered by hand.
 
 ### What to build
 
-Portfolio insights page — holdings, invested amount, current value, unrealized P&L. Positions are entered manually, not synced from a brokerage; user keeps trading directly on Wealthsimple and updates a position here after buying/selling more, the same way `StockAlert` rows are already managed by hand.
+Portfolio insights page — holdings, invested amount, current value, unrealized P&L, cash and account balance — **computed from the activity ledger (#33), not entered by hand.** There is no manually maintained `Position` table and no add/edit/delete flow: after trading on Wealthsimple, the user re-uploads an activities export.
 
-**`Position` model** (new): `id`, `ticker`, `shares: float`, `avg_cost: float` (average price paid per share), `notes: str | None`, `created_at`, `updated_at`. One row per ticker (aggregate position, not per-lot) — updated in place when the user buys or trims.
+**Read API (`app/api/positions.py`):**
+- `GET /api/positions` — the holdings derived by #33's `compute_positions()`, each enriched at read time with `current_price` in the holding's **native currency**.
+- `GET /api/portfolio/summary` — invested, market value, unrealized gain and gain % as **per-currency subtotals** (USD and CAD), the cash balance, and the **account balance**.
+- No `POST`/`PATCH`/`DELETE` — the manual-entry routes from the original design are dropped.
 
-**`app/api/positions.py`:**
-- `GET /api/positions` — list all positions, each enriched at read-time with `current_price`: for a ticker with an active `StockAlert`, read `StockAlert.last_price` (see correction under "Live price source" below — this is **not** a live/current price despite the field name, only as fresh as the alert's last threshold crossing); for a ticker with no alert, `current_price` comes from a REST `get_price()` call instead. Also computes `market_value = shares * current_price`, `unrealized_gain = (current_price - avg_cost) * shares`, `unrealized_gain_pct`
-- `POST /api/positions` — add position — body `{ ticker, shares, avg_cost, notes? }`, validates ticker via Finnhub REST same as `POST /api/stockalerts`. Does **not** call `FinnhubClient.subscribe()` — adding a position never touches the websocket subscription list, see below
-- `PATCH /api/positions/{id}` — update shares/avg_cost/notes
-- `DELETE /api/positions/{id}` — remove (e.g. fully sold). No `FinnhubClient.unsubscribe()` call — there's nothing to unsubscribe, since `Position` never subscribes in the first place
-- `GET /api/portfolio/summary` — aggregate `total_invested`, `total_market_value`, `total_unrealized_gain`, `total_unrealized_gain_pct` across all positions, same per-ticker price-source split as above
+**Account balance (decided 2026-09-20):** total balance = today's market value of holdings + the derived cash balance, shown in CAD (USD holdings converted with the existing `fx_rates`, #45 — the same "native + CAD equivalent" treatment the watchlist uses). Realized gains, dividends, interest and tax are already inside the cash balance, so nothing is added on top — adding realized gain separately would double-count it. It will differ slightly from Wealthsimple's own figure because their FX rate and price timing differ from ours.
 
-**Live price source (revised 2026-08-10 — supersedes the 2026-08-02 decision to auto-subscribe every `Position`; corrected 2026-08-12 — see below):** `FinnhubClient`'s websocket subscription list stays **exclusively `StockAlert`-driven** — a `Position` never calls `subscribe()`/`unsubscribe()` on its own, regardless of how many positions exist. `GET /api/positions`/`GET /api/portfolio/summary` read `StockAlert.last_price` for a ticker with an active alert, and fall back to a per-ticker REST `get_price()` call for any position with no alert on it.
+**Native-currency display (decided 2026-09-20):** each holding shows its price, value and gain in its own currency — CAD-listed securities (`.TO` tickers, CAD-hedged CDRs) in CAD, US-listed in USD — with no per-holding conversion. A USD holding's cost basis comes from #33 (the CAD unit price ÷ the trade's FX rate), so its gain is exact in USD without today's FX rate. Only the balance and grand total mix currencies.
 
-**Correction (2026-08-12) — no live in-memory price cache actually exists.** Earlier revisions of this note (and `.doc/architecture.md`'s callout) described alert-backed tickers as reading from "`FinnhubClient`'s in-memory websocket-fed cache." Checked against the actual code (`stocks.py`): `_AlertState` (the only thing `FinnhubClient._cache` stores) has no price field at all, and `StockAlert.last_price` is written in exactly one place — inside `_fire_event`, which only runs at the instant a threshold *crosses* (`_check_threshold:192`). A tick that moves the price without crossing never touches it; recovery (`_clear_alerted_at`) doesn't touch it either. So `last_price` is **not** a live/current price — it's "the price the last time this alert fired," `null` if it's never fired, and stale indefinitely between crossings despite Finnhub actively streaming ticks for that ticker the whole time. `GET /api/positions`' enrichment for an alert-backed ticker inherits this same staleness — it is correctly described as "avoids a redundant REST call," not as "gets a fresh live price." Building an actual live per-tick cache (closer to the original 2026-08-02 design's `{ticker: {price, updated_at}}` proposal) is a real, separate piece of work against already-shipped `#4` code, not something this issue does.
+**Price sources (verified 2026-09-20 with the app's own key):**
+- **USD-native holdings → Finnhub REST `get_price()`.** Finnhub's free tier returns `403` for `.TO` tickers, so it cannot price the Canadian holdings.
+- **CAD-native holdings → yfinance** (already in the stack for history, #4): free, no key, unofficial, so it can break or rate-limit — acceptable for a couple of tickers.
+- **Quote-symbol rule:** derive the quote symbol from the native currency #33 infers. A CAD-native holding gets `.TO` appended if it's missing (an `AVGO` CDR → `AVGO.TO`); a USD-native holding is used as is. A config override map covers oddities (e.g. a CDR that only exists on `.NE`).
+- **Currency cross-check:** yfinance reports each quote's currency; if it doesn't match the inferred native currency, show no price and flag it, so a CDR can never be priced as the US listing with the same symbol (probe: US `AVGO` is ~360 USD, the CDR `AVGO.TO` ~13.70 CAD).
+- **All holdings use REST plus a short TTL cache** (~15s, shared server-side so open tabs don't multiply calls). The earlier branch that read `StockAlert.last_price` for alert-backed tickers is dropped — that field is only written at a threshold crossing and is stale by design — unless #4's unbuilt in-memory per-tick cache extension is built.
 
-Rationale: the websocket is one connection shared across the whole app, capped at ~50 symbols (corroborated across multiple sources, not confirmed against Finnhub's own primary docs) — not scoped per-holding. A portfolio of normal size (20-30+ positions is unremarkable) risked exhausting that budget on its own under the original design, and unlike an alert (explicit, user-managed, naturally stays small) a holding is rarely removed once bought — the subscribed count would only ratchet upward over time with no natural release valve. A held-but-un-alerted position only needs *display-fresh* pricing (matters while a page is open); it doesn't need *alert-grade* pricing (must fire even when nobody's looking) — REST `get_price()` + the frontend's existing SWR poll already covers that without spending a scarce, effectively-permanent resource on it. Full reasoning: `.doc/architecture.md` → "Finnhub WebSocket Flow" callout.
+**Finnhub rate limit (measured):** the free tier allows **60 REST calls per minute** for the whole key (`x-ratelimit-limit: 60`). At a 30s poll with the shared cache, holdings (~3 US tickers) cost ~6 calls/min, and with the `/portfolio` watchlist tile (~10 tickers) plus occasional alert checks the total is roughly 30 of 60. Keep the poll at 30s or slower, keep the cache, and on a rate-limit or upstream error show the **last known price** instead of blanking the row. The websocket is a separate channel and doesn't count against the REST limit.
 
-Frontend still does plain REST + SWR polling against `GET /api/positions` — same convention as `#10.1`/`#10.4`/`#30`, unaffected by this revision either way (a websocket/SSE channel to the browser was never proposed for Positions, before or after).
+**Live price transport:** REST plus a 30-second SWR poll, no SSE — the same convention as #10.1/#10.4/#30. Portfolio data changes only when the user imports (a synchronous POST) or prices move (polled REST); the one true push source is Finnhub's websocket, which by design covers only alert-bearing US tickers (#37 remains the path to live ticks for those, and only those). The Finnhub websocket subscription list stays exclusively `StockAlert`-driven — a holding never calls `subscribe()`/`unsubscribe()`.
 
-**Backend caching (added 2026-08-12):** `get_price()` (`stocks.py:237`) gets a short in-memory TTL cache (`{ticker: (price, fetched_at)}`, ~10-15s), added once — not per-caller. Doesn't reduce staleness (the poll interval already governs that); it collapses redundant Finnhub REST calls when the same un-alerted ticker gets requested from more than one place at nearly the same moment — e.g. two browser tabs polling `GET /api/positions` at slightly different alignment, or a ticker that's both an un-alerted `Position` here and independently shown on `#31`'s `/market/{ticker}/details` page in another tab. `#30`'s `GET /api/market/trending` already does an equivalent server-side shared cache (`issues.md`'s `#30` section) — this extends the same principle to `get_price()`, the other REST call path.
+**Logo (decided 2026-08-02):** rendered directly in the frontend as `<img src="https://static2.finnhub.io/file/publicdatany/finnhubimage/stock_logo/{ticker}.png">`, no backend call — an unauthenticated static asset (`200` for real stock tickers, `404` for ETFs and invalid tickers). `onError` falls back to the existing colored-placeholder box.
 
-Shared-subscription accounting between `Position` and `StockAlert` (refcounting, etc.) is no longer applicable — `Position` never subscribes, so there's nothing to refcount. Simpler than the original design specifically because of this revision.
-
-**Logo (decided 2026-08-02):** rendered directly in the frontend as `<img src="https://static2.finnhub.io/file/publicdatany/finnhubimage/stock_logo/{ticker}.png">` — no backend call at all. Live-tested as an unauthenticated static asset (no API key needed): `200`/real PNG for real stock tickers (including ones with punctuation, e.g. `BRK.B`), `404`/JSON error body for ETFs and invalid tickers. `onError` on the `<img>` falls back to the existing colored-placeholder box. No caching needed beyond normal browser/CDN HTTP caching — this isn't an authenticated or rate-limited call, so there's nothing to protect it from.
-
-**`/portfolio` page (dashboard):**
-- Holdings table: real ticker logo (or placeholder fallback), ticker, shares, avg cost, current price, market value, unrealized gain ($ and %), color-coded
-- Summary card: total portfolio value, total invested, total gain/loss
-- Add/edit/delete position form
+**`/portfolio` page (dashboard):** replaces `mock-portfolio.ts`.
+- Holdings table: logo (or placeholder), ticker, shares, avg cost, current price, market value, unrealized gain ($ and %, color-coded) — each in the holding's native currency.
+- Summary card: per-currency subtotals, cash, and the account balance (CAD).
+- Realized gain is not shown for now (see #33's possible future features).
 
 ### Why (context)
 
-User wants portfolio insights in-app while continuing to trade directly on Wealthsimple. Wealthsimple has no official API. Investigated two alternatives:
-- Unofficial reverse-engineered libraries (`wsimple`, `ws-api-python`, etc.) — real account-lockout risk (ToS bans automated scraping; trading-via-API is actively detected and enforced, read-only access is an unenforced gray area but still technically covered by the ToS's scraping clause), and they require holding real Wealthsimple credentials/session tokens directly in this app's infra.
-- SnapTrade — a legitimate paid third-party aggregator with OAuth-style, default-read-only Wealthsimple integration. Avoids the credential-custody problem, but adds cost (pricing not confirmed) and a new third-party trust dependency.
-
-Decided: manual entry for now. No new external dependency, no credential-security surface, consistent with how the rest of this app already works (user tells it what to track — nothing auto-discovered). SnapTrade sync remains an option later if manual upkeep becomes annoying enough to be worth paying for.
+User wants portfolio insights in-app while continuing to trade directly on Wealthsimple, which has no official API. Unofficial reverse-engineered libraries risk account lockout (the ToS bans automated scraping) and require holding real credentials in this app; SnapTrade is a paid third-party aggregator with its own trust dependency. The original decision here was manual entry. It was superseded by #33's CSV import once a real export showed it contains the complete ledger — user-initiated, no scraping, no credential custody, and no retyping.
 
 ### Acceptance criteria
 
-- [ ] `POST /api/positions` creates a position, validates ticker via Finnhub REST — does **not** subscribe it on `FinnhubClient`
-- [ ] Adding/removing/updating a `Position` never calls `FinnhubClient.subscribe()`/`unsubscribe()` — the websocket subscription list is affected only by `StockAlert` CRUD (`#4`), unchanged by this issue
-- [ ] `GET /api/positions` reads `current_price` from `StockAlert.last_price` for a ticker with an active alert (accepting that field's known staleness — see "Correction," above), and from a REST `get_price()` call for a position with no alert
-- [ ] `get_price()` results are cached in-memory for ~10-15s — confirmed via two near-simultaneous requests for the same un-alerted ticker producing only one Finnhub REST call
-- [ ] `PATCH /api/positions/{id}` updates shares/avg_cost/notes
-- [ ] `GET /api/portfolio/summary` returns correct aggregate totals using the same per-ticker price-source split (cache for alerted tickers, REST for the rest)
-- [ ] `/portfolio` page displays holdings table (with real per-ticker logos, placeholder fallback on load error) + summary card
-- [ ] Manual add/edit/delete flow works end-to-end in the UI
-
+- [ ] `GET /api/positions` returns the holdings derived from #33 with `current_price` in each holding's native currency; no manual create/update/delete routes exist
+- [ ] Holdings never call `FinnhubClient.subscribe()`/`unsubscribe()` — the websocket subscription list is affected only by `StockAlert` CRUD (#4)
+- [ ] USD-native holdings are priced via Finnhub REST and CAD-native ones via yfinance, with the `.TO` symbol rule; a CDR is never priced as the US listing, and a currency mismatch shows no price rather than a wrong one
+- [ ] All holdings share one server-side TTL cache (~15s) — two near-simultaneous requests for the same ticker produce one upstream call — and a rate-limit or upstream error shows the last known price
+- [ ] USD holdings' gain is computed in USD against their USD cost basis; CAD holdings' in CAD
+- [ ] `GET /api/portfolio/summary` returns per-currency subtotals, the cash balance, and the account balance (holdings market value + cash, CAD-equivalent via `fx_rates`)
+- [ ] `/portfolio` displays the holdings table (real logos, placeholder fallback on load error) and summary card from real data — no mock data remains
 ---
 
 ## Group 6 — iOS
@@ -2137,7 +2133,7 @@ OAuth refresh tokens hard-expire — they don't slide with use, so even active d
 
 ---
 
-## [ ] Issue #32 — Wealthsimple CSV Upload Trigger (Frontend Stub)
+## [x] Issue #32 — Wealthsimple CSV Upload Trigger (Frontend Stub)
 
 **Type:** feat / AFK
 **Estimate:** ~1h
@@ -2153,50 +2149,123 @@ User wants to import Wealthsimple account activity CSV exports (sample confirmed
 
 ### Acceptance criteria
 
-- [ ] Icon button visible on the Holdings tile
-- [ ] Clicking it opens the OS file picker restricted to `.csv`
-- [ ] Selecting a file displays its filename in the UI
-- [ ] No network request or parsing happens yet — purely local file selection
+- [x] Icon button visible on the Holdings tile
+- [x] Clicking it opens the OS file picker restricted to `.csv`
+- [x] Selecting a file displays its filename in the UI
+- [x] No network request or parsing happens yet — purely local file selection
 
+
+### Implementation note (2026-09-20)
+
+Built in the global nav (`components/nav.tsx`, top right beside the ticker search) rather than on the Holdings tile: it shows on every route except `/watchlist`, which swaps in its own nav controls (`NAV_SLOT_ROUTES`). It uses a hidden `<input type="file" accept=".csv">`. `handleCsvSelect` keeps only `files[0].name` — the `File` itself isn't retained — and resets the input value, so #33 must hold or POST the `File` directly.
 ---
 
-## [ ] Issue #33 — Wealthsimple Activity Import (Parse & Persist)
+## [x] Issue #33 — Wealthsimple Activity Import (Parse, Persist & Derive Positions)
 
 **Type:** feat / AFK
-**Estimate:** ~6h
-**Blocked by:** #19, #32
+**Estimate:** ~8h *(re-estimated from ~6h — it now owns deriving positions, the coverage rules and the integrity checks)*
+**Blocked by:** #32 (done)
+**Blocks:** #19 (re-scoped — reads the positions this issue derives)
+**Status:** done 2026-09-26 (plan: `.plan/33-wealthsimple-activity-import/`) — parser, planner, positions, model + migration `0018`, routes and the nav upload are built, tested (83 tests, 100% line + branch coverage of the new modules), code-reviewed, committed, and migration `0018` is applied on both the local DB and the Pi. Verified live against a real export on the local stack (import, then re-import: 0 added / 2 replaced / 18 skipped). The follow-ups at the end of this issue are things that can't be checked until real events happen, or were never run live — none block this issue.
 
 ### What to build
 
-Backend pipeline that turns an uploaded Wealthsimple "activities export" CSV into durable `Activity` rows, which `Position` (#19) aggregates get computed from — so re-uploading a fresh export after every trade keeps holdings in sync without manual re-entry.
+Turn an uploaded Wealthsimple "activities export" CSV into a durable ledger of `Activity` rows and **derive holdings from it** — shares, average cost, cash — so re-uploading an export keeps the portfolio in sync with no manual entry. The ledger is the source of truth; there is no manually maintained `Position` table (that was #19's original design, superseded — a real export turned out to contain the complete ledger, so nothing needs to be typed in). Positions are derived on read; nothing derived is stored.
 
-**Confirmed CSV shape** (sample file, 2026-07-29 export): header row `transaction_date,settlement_date,account_id,account_type,activity_type,activity_sub_type,description,direction,symbol,name,currency,quantity,unit_price,commission,net_cash_amount`, followed by data rows, followed by a blank line and a trailing footer line `"As of <timestamp> GMT-04:00"` that must be skipped during parsing. Two `activity_type` values observed:
-- `Trade` (`activity_sub_type: BUY`, `direction: LONG`) — has `symbol`/`name`/`quantity`/`unit_price`; these are the rows that feed Position shares/avg_cost. Only `BUY` has been observed in the one sample file on hand; expected additional real-world values per Wealthsimple's actual order types (used elsewhere in the account but not yet present in a sample export): `MARKET_BUY`, `LIMIT_BUY`, `STOP_LIMIT_BUY`, `STOP_MARKET_BUY`, `RECURRING_BUY`, plus presumably `SELL` variants — literal enum strings unconfirmed, validate parsing against those once a matching export is available rather than assuming the current single-value handling generalizes.
-- `MoneyMovement` (`activity_sub_type: EFT` or `E_TRFIN`) — no `symbol`/`quantity`/`unit_price`, just a cash `net_cash_amount` (deposits/e-Transfers). Recorded but not applied to any Position.
+**Confirmed CSV shape** (a real export, 2026-09-20: a small single-account export whose first row is the account's first deposit, i.e. a complete ledger). Header: `effective_date,effective_time,settlement_date,account_id,account_type,activity_type,activity_sub_type,description,direction,symbol,name,currency,quantity,unit_price,commission,net_cash_amount`. *(Corrected 2026-09-22 against the real export — there is no separate `transaction_date` column, and the earlier claim of a blank line plus an `"As of <timestamp> GMT-04:00"` footer on a 2026-07-29 sample was never verified against a real file and is now doubted by the user; the confirmed 2026-09-20 export has no footer. The parser does not handle a footer at all.)* The parser requires `effective_date`/`effective_time` on every row (rejects the file otherwise — not expected in practice, and `settlement_date` runs ~1 day late on trades so it's not used as a fallback). There is **no unique row id** column.
 
-FX rate isn't a structured column — for cross-currency buys it's embedded as free text inside `description` (e.g. `"...FX Rate: 1.4510"`); rows for CAD-hedged instruments (e.g. an AVGO CDR) have no FX rate text since no conversion happens. Extract it via regex at import time and store it structured (see `fx_rate` below) rather than re-parsing `description` every time it's displayed — #31's `RecentActivityCard` needs this as a plain field.
+Activity types observed:
 
-**`Activity` model** (new): one row per CSV line — `id`, `transaction_date`, `settlement_date: date | None`, `account_id`, `account_type`, `activity_type`, `activity_sub_type`, `description`, `direction: str | None`, `symbol: str | None`, `name: str | None`, `currency`, `quantity: float | None`, `unit_price: float | None`, `fx_rate: float | None` (parsed from `description` at import time, see above), `commission: float`, `net_cash_amount: float`, `created_at`. New Alembic migration, following the existing numbered-revision convention in `backend/alembic/versions/`.
+| `activity_type` | `activity_sub_type` | Notes |
+|---|---|---|
+| `Trade` | `BUY` (`direction: LONG`) | Has `symbol`/`name`/`quantity`/`unit_price`; the only rows that change holdings. |
+| `MoneyMovement` | `EFT`, `E_TRFIN` | Deposits and e-Transfers; cash only. |
+| `Interest` | `-` | Stock-lending interest; cash only, no symbol. |
+| `Dividend` | `-` | Cash dividend, has a `symbol`; cash only. |
+| `Tax` | `NRT` | Non-resident withholding tax, negative cash, no symbol. |
 
-**`POST /api/activities/import`** (new route, `app/api/activities.py`): accepts multipart `UploadFile`, parses CSV server-side, skips the footer line, inserts rows. Dedups on a composite key (e.g. `transaction_date` + `account_id` + `symbol` + `net_cash_amount`) so re-uploading an export with overlapping date ranges doesn't double-insert — Wealthsimple's export tool doesn't guarantee non-overlapping windows between exports.
+Quirks the parser must handle:
+- **`quantity` is overloaded.** On `MoneyMovement`/`Interest`/`Dividend`/`Tax` rows it holds the *cash amount*, not shares. Shares are read from `Trade` rows only — otherwise a $1,000 deposit would look like 1,000 shares.
+- `effective_time` is the real execution/credit time on trades and on deposits and e-Transfers, and `00:00:00` on the automatic postings (interest, dividend, tax). `effective_date` + `effective_time` is therefore unique for trades and deposits but collides on same-day postings, which differ by type or description. `settlement_date` is populated only on trades (always +1 day so far). Ordering key: `effective_date` + `effective_time`.
+- **Everything is in CAD** (the account currency), including US stocks: `unit_price` and `net_cash_amount` are already converted. The conversion rate appears only as free text in `description` (`... FX Rate: 1.4510`) — on US trades and on USD-sourced interest rows; CAD-listed securities (a `.TO` ticker, a CAD-hedged CDR) carry none.
+- **No sells yet.** Wealthsimple's literal `activity_sub_type`/`direction` strings for a sell (and for other order types) are unconfirmed — see the unknown-type rule below.
+- **The originally proposed dedup key collides on real data.** `transaction_date + account_id + symbol + net_cash_amount` matches two same-day $0.01 interest rows that differ only in description. Superseded by the import rules below, which need no row matching.
 
-**Position sync:** `Trade`/`BUY` activities update the matching `Position` row's `shares`/`avg_cost` (weighted-average cost on each new buy) in the same transaction as the import, creating the `Position` if it doesn't exist yet for that ticker.
+**Import semantics (settled).** Wealthsimple caps an export at the last 12 months or a custom range, and rows have no id, so the ledger is built up from overlapping uploads without matching rows:
+- **Coverage is remembered by the app.** Per account it tracks the earliest and newest stored `effective_date`, and tells the user after every import: "Ledger runs A → B; next time export from B − 7 days or earlier." The user never has to remember the last span.
+- **Reach-back rule.** An export must reach back to 7 days before the newest stored date (and be contiguous with the stored range on the older side); otherwise it is rejected with the date to re-export from. *(Implementation note 2026-09-25: the older-side contiguity part is **not** enforced — a file of only older rows is prepended even if it leaves a gap. Deliberate; an account's history starts at its first deposit, so there is normally nothing older to import.)* A hole can never enter the ledger, because overlap is the proof of contiguity.
+- **The past is frozen.** Stored rows dated before (newest stored date − 7 days) are never touched: the file's copies of them are skipped, so a re-upload cannot duplicate anything and no row identity is needed. Rows dated *before the earliest stored date* are added (older history can be prepended).
+- **The tail is refreshed.** Everything from (newest stored date − 7 days) onward is replaced wholesale by the file's rows. The window covers a half-day export and late-appearing rows (trades settle in 1 business day — about 4 calendar days at most over a long weekend). The tail is refreshed only when the file actually reaches the newest stored date; a file that ends earlier can only prepend older rows.
+- **Transactional.** The whole file is parsed and validated first; the write is one transaction; empty files are rejected. The response summarizes rows added / replaced / skipped.
+- **Known limit:** a correction to an already-frozen row is not picked up. An explicit "reset ledger and re-import" action covers it. Wealthsimple exports only confirmed activity, so cancelled-then-ghost rows are not expected.
 
-**Frontend:** wire #32's file input `onChange` to `POST` the selected file via `FormData` to `/api/activities/import` instead of just displaying the filename; show import result (rows added, rows skipped as duplicates).
+**Also settled (with the user, 2026-09-20):**
+1. **Positions derive from `Activity`** with weighted-average cost, ordered by `effective_date` + `effective_time`. A buy adds shares and cost; a sell reduces shares at the running average (the average cost of what remains is unchanged).
+2. **Native currency per holding, inferred from the FX text.** A trade whose description carries `FX Rate: x` is a USD-denominated security; one without it is CAD-native. *(Revised 2026-09-21: the earlier "a US trade lacking the FX text is rejected" rule is dropped — a CAD-hedged CDR looks identical to a US trade with the FX text missing, so the CSV can't distinguish them. A symbol whose trades mix FX-present and FX-absent fails loudly instead.)*
+3. **USD cost basis** for a USD holding = the CAD `unit_price` ÷ that trade's FX rate, per trade, then weighted-averaged (e.g. 300.00 CAD at 1.4500 → 206.90 USD per share). USD holdings' gains are then exact in USD with no current FX; CAD holdings stay in CAD. The parsed rate is stored as `Activity.fx_rate`.
+4. **Cost is the cash actually paid** (`−net_cash_amount` on a buy), so any commission Wealthsimple folds in is included and cost stays consistent with the cash balance (`quantity × unit_price` carries rounding noise). The `commission` column is stored but not used separately. *(Revised 2026-09-22: the earlier reconcile-or-reject check on a non-zero commission is dropped — the real export confirms self-directed Wealthsimple trades always carry `commission: 0`, so the check was dead code against real data.)* A sell's proceeds are `net_cash_amount`.
+5. **Cash balance is derived** — the sum of `net_cash_amount` over every row. Dividends, interest, tax and realized gains all flow through it.
+6. **Unknown activity types reject the whole file.** Any unrecognized `(activity_type, activity_sub_type)` fails the import before anything is stored, with a copy-pasteable error (type, sub_type, direction, count, an example description). Reject-whole rather than skip keeps re-uploading after a mapping is added working — a skipped row would be stranded by the frozen-past rule. **The first sell will trip this on purpose**: its strings are unconfirmed, so the real row is confirmed before a mapping is added.
+7. **Integrity checks in the derivation.** Shares and cash may never go negative (a sell exceeding holdings means earlier history is missing → fail loudly); if the earliest row is not a funding deposit, warn that the history probably starts mid-way.
+8. **Single account for now.** `account_id` is stored on every row and coverage and derivation are keyed by it, so a future second account can never silently mix in; no multi-account aggregation or UI until one exists.
+9. **Dividends, interest and tax are ledger + cash only** — no income UI. #31's `RecentActivityCard` is fed from the ledger with that ticker's trades and dividends (interest and tax rows carry no symbol, so they cannot attach to a ticker).
+10. **Realized gain is not computed or shown now** (see possible future features).
+11. **Transport:** the import is a plain synchronous multipart POST that returns the summary (hundreds of rows, milliseconds). No SSE or progress stream.
+12. **Tests use a synthetic fixture** with the same shape (fake account id and values; include the same-day duplicate-looking rows and a sell). A real export contains an account number and holdings — it is never committed.
+
+**`Activity` model** (new; migration following the numbered-revision convention): `id`, `effective_at` (from date + time), `settlement_date: date | None`, `account_id`, `account_type`, `activity_type`, `activity_sub_type`, `description`, `direction: str | None`, `symbol: str | None`, `name: str | None`, `currency`, `quantity: float | None` (shares only for `Trade`), `unit_price: float | None`, `fx_rate: float | None`, `commission: float`, `net_cash_amount: float`, `created_at`.
+
+**`POST /api/activities/import`** (new, `app/api/activities.py`): multipart `UploadFile`, header-driven parsing, applies the import semantics above, returns the summary plus the new coverage. A separate explicit endpoint/action resets an account's ledger.
+
+**Derivation:** `compute_positions(activities)` returns, per (account, holding): shares, native currency, native average cost and CAD average cost — plus the cash balance. #19's read endpoints consume it.
+
+**Frontend:** #32's file input keeps only the filename today (`handleCsvSelect`); change it to hold or POST the `File` via `FormData` to `/api/activities/import`, show the import summary and the coverage message, and surface rejections (gap, unknown type) with their copy-pasteable detail.
+
+**Verification items (need real data):**
+- After the next trade, export right away and again a day later — confirm the row is present immediately with its settlement date filled in. (If it isn't, the 7-day tail window already catches it.)
+- After the first sell, send the real row so its strings can be mapped.
+
+**Possible future features (not in scope):** realized gain per symbol and in total (computed from the sell math; hide fully sold positions from the table but keep their gain in the total); an income line on `/portfolio` (dividends + interest − withholding tax); **total return = account balance − net deposits**, which includes everything without separate bookkeeping.
+
+**Security note.** `frontend/src/lib/mock-market.ts` contains an account id that matches a real export (committed 2026-08-02, `5ec2f2a`; the rest of that mock is fake). The repo is private, but this is still a low-level exposure risk: an account number alone does not grant access, yet it is personally identifying, and git history keeps it. Replace it with a fake id before the repo is ever made public (removing it from history would need a rewrite and force-push). The real export itself must never be committed.
 
 ### Why (context)
 
-Wealthsimple has no official API (see #19's rejection of direct API integration over ToS/account-lockout risk). CSV export is user-initiated, not scraping, so it sidesteps that risk while still automating away manual position bookkeeping. Chose persist-and-recompute over a stateless parse-only preview: durable across repeated monthly uploads, and Position stays in sync automatically rather than requiring the user to retype numbers from a preview table every time.
+Wealthsimple has no official API. Unofficial reverse-engineered libraries carry real account-lockout risk (the ToS bans automated scraping) and mean holding Wealthsimple credentials in this app; SnapTrade is a paid third-party aggregator with its own trust dependency. A user-initiated CSV export is neither scraping nor credential custody. Persist-and-derive was chosen over a stateless preview so holdings stay in sync across repeated uploads without retyping.
 
 ### Acceptance criteria
 
-- [ ] `Activity` model + migration created, matching confirmed CSV column shape
-- [ ] `POST /api/activities/import` parses a real Wealthsimple export (including trailing footer line) without error
-- [ ] Re-uploading an export with overlapping rows does not create duplicate `Activity` rows
-- [ ] `Trade`/`BUY` rows update or create the matching `Position`'s shares/avg_cost correctly
-- [ ] `MoneyMovement` rows are stored but do not affect any `Position`
-- [ ] `fx_rate` is correctly parsed from `description` for cross-currency rows and left `None` for CAD-hedged rows with no FX text
-- [ ] Frontend upload button (#32) triggers the import and shows a result summary
+- [x] `Activity` model + migration created, matching the confirmed 2026-09-20 shape *(migration `0018` applied locally; not yet on the Pi/NAS)*
+- [x] A row with blank `effective_date`/`effective_time` rejects the whole file
+- [x] Unknown activity types reject the whole file before anything is stored, with a copy-pasteable error *(the API's `types` list carries the exact strings; the UI toast shows only the `message`, the full detail goes to the browser console)*
+- [x] `quantity` is read as shares only for `Trade` rows
+- [x] Coverage is tracked per account; an export that doesn't reach back to newest stored date − 7 days is rejected with the date to re-export from
+- [x] Stored rows before that window are never modified; rows before the earliest stored date are prepended; the tail from that window onward is replaced by the file's rows; re-uploading the same file changes nothing *(verified live: re-uploading the real export → 0 added, 2 replaced, 18 skipped)*
+- [x] Both same-day $0.01 interest rows survive an import and a re-import
+- [x] `compute_positions` on a synthetic fixture yields the expected shares, native and CAD average cost, and cash balance; cost of a buy is the cash actually paid
+- [ ] Buys and sells are both handled (weighted-average cost); shares or cash going negative fails loudly; the sell strings are confirmed against a real export after the first sell *(handling is built and tested with placeholder `SELL`/`SHORT` strings — **open** until a real sell is exported and its strings are mapped)*
+- [x] A USD holding's native cost comes from the per-trade FX rate; a trade without FX text is CAD-native; a symbol mixing both fails loudly
+- [x] An explicit reset-ledger action clears an account's ledger for a full re-import *(`DELETE /api/activities?account_id=`, backend-only; route-tested, not yet run against the live DB)*
+- [x] The frontend file input POSTs the `File`; success shows an "Import complete" toast and a rejection shows its `message` in a persistent error toast *(simplified 2026-09-24 from a summary + coverage message — the counts and the "export from" advice are still in the API response)*
+- [x] No real export is committed; tests use a synthetic fixture
+
+### Implementation notes (2026-09-25)
+
+Built as three pure modules plus a thin route — `services/wealthsimple_csv.py` (parse), `services/ledger_import.py` (merge), `services/positions.py` (derive + integrity checks) — so the tricky logic is tested without a DB; `api/activities.py` is the only place that touches one. 83 tests, none needing a live database.
+
+**Dropped from the write-up above after checking the real export:** the `transaction_date` header and the `settlement_date` fallback (neither exists — a blank effective date/time rejects the file); the `"As of … GMT-04:00"` footer handling (never seen in a real file); the commission reconcile-or-reject check (commission is always `0` on self-directed trades); and rejecting a US trade that lacks FX text (a CAD-hedged CDR looks identical, so a symbol mixing FX-present and FX-absent trades fails with `mixed_native_currency` instead).
+
+**Added:** an `unsupported_currency` guard (every row is CAD, even USD stocks — a USD holding is detected from the `FX Rate:` text, not the `currency` column); an `invalid_file` rejection for non-UTF-8 uploads; `compute_positions` returns `(holdings, cash, warnings)` so the deposit-history warning can reach the response; fully sold positions are omitted from its output.
+
+**Bugs found in review and fixed:** a file ending between the tail boundary and the newest stored row deleted the newer stored rows and restored nothing (re-uploading an older export would have wiped recent data) — the tail is now refreshed only by a file that reaches the newest row, as this spec always said; a `Trade` row with a blank symbol/quantity/price crashed with a 500 instead of a 422; datetimes inside an error `detail` made FastAPI return a bare 500 instead of the 422 (`coverage_gap`, `negative_cash`, `negative_holdings`) — invisible to tests that call the handler directly, so there are now tests through the real response layer; and dates in the response text were UTC or Toronto depending on whether a row was freshly parsed or read back from Postgres, which could tell the user to export from a day too late — they're now always Toronto dates (`ledger_date`).
+
+**Hardening from the review:** uploads over 5 MB are refused (`413`) on both the proxy and the backend; the proxy times out after 30 s; a non-CSV text file that the `csv` module can't read is a clean `invalid_file` (it was a 500); a $0 buy counts as a buy; the missing-field check in `compute_positions` no longer depends on `assert`. **Concurrency:** import and reset take a per-account Postgres advisory lock, so overlapping requests can't double-insert (there's no unique key to catch it). **Deliberately left as-is:** no older-side contiguity check on a prepend (see the Reach-back note above); a coverage-gap rejection can repeat a date that was already tried when nothing happened early in the window (going wider always works; the message is unchanged now that the success toast no longer shows any export advice); no read endpoint (that's #19); `DELETE /api/activities` has no UI; the frontend proxy route buffers the upload rather than streaming it; warnings aren't shown in the UI; multi-account files are handled per account inside one transaction, but the UI only assumes one.
+### Follow-ups (not blocking — closed 2026-09-26 without these)
+
+- **Map the real sell strings.** A sell is rejected as `unknown_activity_type` on purpose until one has been seen. After the first real sell, export and read the rejection's `types` entry (in the API response, or the browser console), then add that `(activity_type, activity_sub_type)` pair to `_ACTIVITY_ALLOWLIST` in `services/wealthsimple_csv.py` and replace the placeholder `SELL`/`SHORT` in `tests/fixtures/wealthsimple/with_sell.csv`. `negative_holdings` can't fire through the API until then. This is the one acceptance criterion left unticked above.
+- **Check the settlement date.** After the next trade, export right away and again a day later, and confirm the row appears immediately with its `settlement_date` filled in (if not, the 7-day tail window already catches it).
+- **Never exercised against a real database:** the coverage-gap rejection with a trimmed export, `DELETE /api/activities` followed by a full re-import, and the per-account advisory lock's SQL (`pg_advisory_xact_lock`) against Postgres. All are route-tested with a mocked session only. If a first import on the Pi fails with a database error, look at the lock statement first.
+- **Not verified either way:** whether a "Import complete" toast on the Pi's Tailscale HTTPS URL behaves the same as locally (the upload goes through the same proxy route).
 
 ---
 
@@ -2757,11 +2826,12 @@ User request, prompted directly by this session's musinsa/29CM investigation —
 
 ---
 
-## [x] Issue #52 — Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (KitchenAid Cold Brew Listing)
+## [ ] Issue #52 — Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (KitchenAid Cold Brew Listing)
 
 **Type:** fix / AFK
 **Estimate:** ~1h (investigation-only estimate — real fix scope unknown until retested; could be $0 if it self-resolves, or open-ended if it needs real Akamai mitigation)
 **Blocked by:** None
+**Status:** reopened 2026-09-20 — closed as environmental that afternoon, recurred the same evening. Cause not isolated yet: a fingerprint verdict vs. a tight per-client rate limit (see the update at the end).
 
 ### What to build
 
@@ -2782,17 +2852,46 @@ User-reported "failed" status on the watchlist (home-server, not local dev) for 
 ### Acceptance criteria
 
 - [x] Re-add the Crate & Barrel Canada listing after a genuine cooldown (hours, untouched — no manual pokes), single clean attempt, to separate "standing block" from "today's request-velocity artifact" — retested 2026-09-20 (3 days after the block): added cleanly, `scraper_type=patchright`, `last_scrape_status=ok`, $139.95
-- [x] If still Access-Denied cold: decide whether to invest in Akamai-specific mitigation (referer header on `page.goto()`, per-domain request pacing/backoff, alternate egress) or mark this retailer unsupported for now — n/a, not blocked cold; no mitigation built
-- [x] If it resolves on its own: close as environmental, no code change needed for this retailer specifically — closed as environmental (see Resolution)
+- [ ] If still Access-Denied cold: decide whether to invest in Akamai-specific mitigation (referer header on `page.goto()`, per-domain request pacing/backoff, alternate egress) or mark this retailer unsupported for now — reopened: it recurred (see the update); this is now the live question
+- [ ] If it resolves on its own: close as environmental, no code change needed for this retailer specifically — was closed as environmental, then recurred; superseded by the update
 - [x] Decide fate of the temporary `/tmp` HTML-dump debug patch in `patchright_scraper.py` — revert, or keep a permanent lightweight version — reverted ("Drop: temp scraper debug patch" commit)
-- [ ] (Generalizable beyond this retailer) Consider always logging something identifying when `_run_hierarchy` hits its silent `status="error"` return (`base.py:622-623`) — today it's indistinguishable in logs from a timeout, a real exception, or any other failure mode, which is what made this investigation slower than it needed to be — tracked as part of #53 (part 1, silent no-price-found path); left unchecked here until #53 ships
+- [x] (Generalizable beyond this retailer) Consider always logging something identifying when `_run_hierarchy` hits its silent `status="error"` return (`base.py:622-623`) — today it's indistinguishable in logs from a timeout, a real exception, or any other failure mode, which is what made this investigation slower than it needed to be — shipped in #53 and deployed: this recurrence was diagnosed straight from the UI (`Akamai bot-block (access denied)`), no log-grepping
+- [ ] Overnight check, hands-off: `last_scrape_status` for listing 24 after the next scheduled poll (~00:08 EDT / 04:08 UTC, 6h after the 22:08 UTC boot poll), with nothing else touching the listing — `ok` supports a recovery-window / per-client-allowance explanation; still denied means the block outlasts 6h or isn't rate-like
+- [ ] Experiment E1 (same-IP Mac, after the overnight check so it can't muddy it): default Patchright fingerprint, then the same browser with a changed JS-visible identity (locale, timezone, viewport, DPR) ~3 min later — a pass on the second points at a fingerprint-keyed verdict; both denied means it isn't the JS fingerprint (TLS/IP-level, or a sticky flag)
+- [ ] Experiment E2 (delayed repeat): default fingerprint again after several hours — how long a denial lasts
+- [ ] Decide the mitigation from those results: per-domain minimum interval (pacing), fingerprint hardening (human-like mouse/scroll and a 5–10s dwell before reading, realistic desktop UA/platform, avoid software WebGL), or mark the retailer unsupported
 
-### Resolution (2026-09-20)
+### First resolution (2026-09-20 afternoon) — superseded
+
+*Superseded: it recurred the same evening — see the update below. Kept for the trail.*
 
 Closed as environmental. A cold retest three days after the block succeeded: the listing added normally and scraped `ok` at $139.95 via the Patchright path (plain HTTP still fails first and falls back, same as before — Akamai 403s plain clients regardless). The `?srsltid=` referral param was not the cause: the clean URL was also blocked on 2026-09-17, and the original referral-URL listing had scraped successfully at least once before being blocked (its "Crate & Barrel Canada" name came from a real page's `og:site_name`).
 
 Most likely cause is request velocity — the first failure preceded this session's debugging pokes, so the more probable source is the manual-rescrape testing for #51 just before (each click hits every listing; "rescrape all" allows a burst every 5 minutes). One data point can't prove it. **Reopen if it recurs** and run the same-IP experiment: Patchright on a Mac, direct product URL vs. homepage warm-up first, to separate a Linux/aarch64 fingerprint difference from a session warm-up need from outright automation detection. #53 will make a recurrence self-diagnosing (the UI will say "Akamai bot-block (access denied)" instead of a bare "Failed").
 
+
+### Update — recurrence and same-IP probe (2026-09-20 evening)
+
+**Recurrence.** Listing 24 failed again on the first poll after the Pi deploy: the boot poll, 22:08:24 UTC, 24s into the cycle. This was the first live confirmation of #53 — the UI showed `Akamai bot-block (access denied)` straight from `last_scrape_error`. The new container's logs hold exactly one C&B request and no manual polls in the window; the earlier attempt (the afternoon add, roughly 2h before) lives in the old container's logs, lost on recreate.
+
+**Same-IP Mac probe** (scratch script, not in the repo — Patchright with real Chrome, a fresh profile each time, the app's own `_run_hierarchy` applied to the page):
+
+| Time (local) | Attempt | Result |
+|---|---|---|
+| 18:21 | A: direct product URL | 200, real page, `ok`, $139.95 |
+| 18:24 | B: homepage first, 6s pause, then the product URL | homepage 200; product **403 Access Denied** → `Akamai bot-block (access denied)` |
+
+The detector also named a real Akamai deny page correctly.
+
+**Ruled out:** a blanket IP ban (the Mac passed at 18:21, 13 minutes after the Pi was denied at 18:08 on the same public IP); homepage warm-up as a fix (the warm-up attempt was the denied one); the Pi's Linux/aarch64 build as the only cause (real Chrome on a Mac is denied on its second request too); the `?srsltid=` param (already excluded on Sep 17); cookie carry-over (B used a fresh profile).
+
+**Pattern across every observation:** a client's first request in a while passes, and a second within minutes to hours is denied. The original listing scraped ok, then was blocked on later polls; the Sep 20 add (after three quiet days) passed and the boot poll about 2h later was denied; Mac A passed and B was denied 3 minutes later. That's three pass-then-deny pairs (about 1 in 8 by chance if the outcomes were independent coin flips) — suggestive, not proof.
+
+**Correction to the first resolution:** it blamed request velocity at normal polling cadence and treated one success as closure. Two requests in about 2h is far below normal cadence, so that version was wrong as stated. What survives is that the block is keyed to the *client*, not the IP. Either (a) a fingerprint verdict: the first request is judged on network-level signals only, then the page's sensor script reports automation tells (CDP, no mouse events, software WebGL on the Pi) and marks the client — and we read the HTML and close the browser after it has already fired; or (b) a tight per-client rate limit. The observations can't yet tell (a) from (b).
+
+**Extra requests we generate without thinking of them as polls:** the boot poll on every container start (`next_run_time=now`, so every deploy re-polls everything), manual rescrapes, and add-time probes.
+
+**Mitigation options, by cause:** a fingerprint verdict → make the browser look and behave more human (an arms race, possibly only partly fixable on a headless Pi); a rate limit → a per-domain minimum interval for bot-protected retailers, so deploy boot-polls and manual rescrapes don't spend the allowance; neither → mark unsupported. Any change belongs in a retailer-scoped scraper registered in `RETAILER_MAP` (like Amazon/IKEA), so BestBuy and SSENSE — which pass today — can't regress.
 ---
 
 ## [ ] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel
@@ -2888,3 +2987,31 @@ Surfaced live: a newly-added IKEA ALPSTUGA sensor sat at "Watching" with a live 
 - The fragment endpoint is IKEA-internal and undocumented; a change on their side would surface as `"error"` (no fallback by design).
 - A product with several OOS listings shows unlabeled `Available …` lines in the tooltip (retailer prefix was deliberately dropped on request).
 - `last_checked` doesn't advance for `"oos"` listings (derived from `PriceHistory`) — fixed by #53 part 4.
+
+---
+
+## [ ] Issue #55 — Shared Domain Exception Type for Route-Layer Error Handling (Optional, Speculative)
+
+**Type:** refactor / AFK
+**Estimate:** ~1h (just the extraction + one call site migrated, if picked up)
+**Blocked by:** None
+**Status:** optional — not scheduled, no Recommended Work Order slot. Revisit only once a second real call site wants it (rule of three); don't build ahead of that.
+
+### What to build
+
+Surfaced while planning #33: `app/services/ledger_errors.py`'s `LedgerImportError` (code + message + details, raised by the pure parser/planner/positions functions, caught once at the `api/activities.py` route boundary and turned into an `HTTPException`) is a clean small pattern. The question was whether to generalize it into a shared base other parts of the app inherit from.
+
+**Conclusion from that discussion: not the scraper.** `app/api/items.py`'s `_resolve_one` and `app/scheduler/jobs.py`'s `_bounded_process_item` are explicitly documented "never raises" — both run per-item inside `asyncio.gather()` batches, and without `return_exceptions=True` a single raised exception cancels every other in-flight item in that batch. The scraper's `ScraperResult.error_reason: str | None` (result object, not exception) and `_describe_exception` exist specifically to keep failures from ever propagating as raises. Forcing scraper errors into an exception hierarchy would break that isolation — a good, deliberate design, not something to unwind.
+
+**The more plausible candidate is `items.py`'s own route bodies**, which raise `HTTPException` inline with hardcoded duplicate strings — `"An item with this URL already exists"` appears 4 separate times, `"Product not found"` / `"Listing not found"` each appear more than once. A shared `NotFoundError` / `DuplicateURLError`-style domain exception, mapped to `HTTPException` at one place (mirroring `LedgerImportError`'s pattern), could remove that duplication in a request-per-call, all-or-nothing route — the same shape #33's import already fits, unlike the scraper's per-item batch.
+
+### Why (context)
+
+Genuinely optional: there's currently exactly one real consumer of this pattern (#33's ledger import). Generalizing now would mean guessing the abstraction's shape (is `details` always a dict? does every domain need a `code`?) against zero evidence from a second real caller — the classic premature-abstraction trap. Logged here so the idea isn't lost, not because it's committed work.
+
+### Acceptance criteria (if picked up)
+
+- [ ] Confirm at least 2 real call sites in `items.py` (or elsewhere) would collapse into fewer lines/less duplication before starting — if not, close as won't-do
+- [ ] Shared exception type extracted (or `LedgerImportError` promoted/renamed) with a single `except` → `HTTPException` mapping point per router
+- [ ] Scraper/scheduler code is explicitly *not* touched — their result-object pattern stays as-is
+- [ ] No behavior change to any existing route response (status code, `detail` shape)

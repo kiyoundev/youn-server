@@ -7,6 +7,27 @@ Generated from the live SQLAlchemy models via [paracelsus](https://github.com/te
 <!-- BEGIN_SQLALCHEMY_DOCS -->
 ```mermaid
 erDiagram
+  activities {
+    INTEGER id PK
+    VARCHAR account_id
+    VARCHAR account_type
+    VARCHAR activity_sub_type
+    VARCHAR activity_type
+    FLOAT commission
+    DATETIME created_at
+    VARCHAR currency
+    VARCHAR description
+    VARCHAR direction "nullable"
+    DATETIME effective_at
+    FLOAT fx_rate "nullable"
+    VARCHAR name "nullable"
+    FLOAT net_cash_amount
+    FLOAT quantity "nullable"
+    DATE settlement_date "nullable"
+    VARCHAR symbol "nullable"
+    FLOAT unit_price "nullable"
+  }
+
   analysis_results {
     INTEGER id PK
     INTEGER event_id FK "nullable"
@@ -46,9 +67,11 @@ erDiagram
 
   products {
     INTEGER id PK
+    BOOLEAN active
     DATETIME alerted_at "nullable"
     DATETIME created_at
-    VARCHAR name
+    VARCHAR currency "nullable"
+    VARCHAR name "nullable"
     FLOAT target_price
   }
 
@@ -74,10 +97,12 @@ erDiagram
   watch_items {
     INTEGER id PK
     INTEGER product_id FK
-    BOOLEAN active
     DATETIME created_at
+    DATETIME last_checked_at "nullable"
     FLOAT last_price "nullable"
+    VARCHAR last_scrape_error "nullable"
     VARCHAR last_scrape_status "nullable"
+    VARCHAR restock_at "nullable"
     VARCHAR retailer
     VARCHAR scraper_type "nullable"
     VARCHAR url UK
@@ -185,6 +210,31 @@ class AnalysisResult(Base):
     error_reason: str | None     # "idle_timeout" | "subprocess_error" | "invalid_output" | "max_runtime_exceeded" — set only when status="failed"
     created_at: datetime
     completed_at: datetime | None
+
+
+class Activity(Base):            # one Wealthsimple activity-export row (issue #33) — the ledger of record
+    __tablename__ = "activities"
+    # index: (account_id, effective_at) — every query is keyed by account_id
+    # NO unique constraint — see "Activity ledger" under Key Design Decisions
+
+    id: int (PK)
+    effective_at: datetime       # export's effective_date + effective_time, read as America/Toronto (timestamptz)
+    settlement_date: date | None # populated on trades only; never used to derive effective_at
+    account_id: str              # every import/coverage/derivation query is keyed by it
+    account_type: str            # e.g. "TFSA"
+    activity_type: str           # "Trade" | "MoneyMovement" | "Interest" | "Dividend" | "Tax"
+    activity_sub_type: str       # "BUY" | "EFT" | "E_TRFIN" | "NRT" | "-" ...
+    description: str
+    direction: str | None        # "LONG" on buys; the sell value is unconfirmed
+    symbol: str | None           # Trade + Dividend rows only
+    name: str | None
+    currency: str                # always "CAD" (the account currency — even USD stock trades); anything else is rejected
+    quantity: float | None       # SHARES, and only on Trade rows — the raw CSV column is overloaded (cash amount on every other type)
+    unit_price: float | None     # CAD, already FX-converted by Wealthsimple
+    fx_rate: float | None        # parsed from "FX Rate: x" in description; present => USD-listed, absent => CAD-native
+    commission: float            # stored, never used or validated — self-directed trades are always 0
+    net_cash_amount: float       # signed CAD cash movement; a buy's cost basis is -net_cash_amount
+    created_at: datetime
 ```
 
 ## Key Design Decisions
@@ -222,6 +272,12 @@ class AnalysisResult(Base):
 **`AnalysisResult.status` lifecycle** — `pending` (event claimed, subprocess not yet started) → `running` (subprocess spawned) → `done` (output parsed and stored) → `failed` (subprocess error or timeout).
 
 **Idle-timeout, not flat timeout** — the TradingAgents subprocess logs a `HEARTBEAT` line to stderr on every LLM/tool call start; each heartbeat resets an idle timer (`tradingagents_idle_timeout_seconds`, default 10min) and updates `llm_calls`/`tokens_in`/`tokens_out`/`tool_calls`/`last_heartbeat_at` on the row, so a long-but-alive run isn't killed just for taking a while. A separate hard cap (`tradingagents_hard_cap_seconds`, default 2h) kills the process regardless of heartbeats, setting `error_reason="max_runtime_exceeded"` (distinct from `error_reason="idle_timeout"`).
+
+**Activity ledger — positions are derived, never stored** (issue #33) — there is no `Position` table. `Activity` rows are the source of truth; holdings, weighted-average cost and the cash balance are recomputed from them on every read by `services/positions.py`'s `compute_positions`. A buy adds shares and cost (cost = cash actually paid, `-net_cash_amount`); a sell removes shares at the running average, leaving the average cost of what remains unchanged; cash is the sum of `net_cash_amount` over every row (deposits, dividends, interest and tax included). A USD holding's native cost is `unit_price ÷ fx_rate` per trade, weighted-averaged; its CAD cost is the cash paid.
+
+**No unique key on `Activity`, on purpose** — the export has no row id, and two legitimate rows can be identical apart from `description` (real data has same-day $0.01 interest postings). A dedup key built from the other columns collided on exactly those. Overlapping uploads are merged by date range instead (see `.doc/api.md`, "Activities"): rows before (newest stored date − 7 days) are frozen and never touched, and everything from there onward is deleted and re-inserted from the file, per `account_id`, in one transaction.
+
+**Timezone** — the export's times are naive local times. They're read as `America/Toronto` and stored as `timestamptz` (UTC in Postgres); anything shown to a user as a calendar date is converted back to Toronto first, since the same instant can fall on two different days in UTC and local time.
 
 ## Infrastructure
 
