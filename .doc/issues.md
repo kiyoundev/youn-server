@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ⬜ #53, ✅ #54
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -107,6 +107,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ✅ Done | #43 | Tailscale HTTPS for Frontend (Web Locks Secure-Context Fix) | ops / HITL | ~1h | #13, #16 |
 | ✅ Done | #51 | Manual Scrape Buttons (Per-Item + Global), Outside the 6h Schedule | feat / AFK | ~2.5h | None |
 | ⬜ Open | #52 | Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (reopened — recurred) | fix / AFK | ~1h | None |
+| ✅ Done | #53 | Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel | feat / AFK | ~5h | None |
 | ✅ Done | #54 | IKEA Real Stock Status + Out-of-Stock Status with Restock Tooltip | feat / AFK | ~4.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
@@ -2894,12 +2895,12 @@ The detector also named a real Akamai deny page correctly.
 **Mitigation options, by cause:** a fingerprint verdict → make the browser look and behave more human (an arms race, possibly only partly fixable on a headless Pi); a rate limit → a per-domain minimum interval for bot-protected retailers, so deploy boot-polls and manual rescrapes don't spend the allowance; neither → mark unsupported. Any change belongs in a retailer-scoped scraper registered in `RETAILER_MAP` (like Amazon/IKEA), so BestBuy and SSENSE — which pass today — can't regress.
 ---
 
-## [ ] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel
+## [x] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel
 
 **Type:** feat / AFK
 **Estimate:** ~5h
 **Blocked by:** None (related: #52 — surfaced by that investigation, closed as environmental; #54 — where the last-checked gap surfaced)
-**Status:** built and unit-tested locally (backend + frontend); pending deploy and live verification against a real failure. Full plan: `.plan/53-scrape-failure-reason-timestamp/`.
+**Status:** done. Full plan: `.plan/53-scrape-failure-reason-timestamp/`.
 
 ### What to build
 
@@ -2931,14 +2932,14 @@ Directly prompted by #52's debugging session — confirming a scrape failure and
 
 ### Acceptance criteria
 
-- [ ] Migration `0017` adds `last_scrape_error` (nullable string) and `last_checked_at` (nullable timestamptz) to `watch_items` — applied locally, **not yet on the Pi/NAS**
-- [ ] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error`: each scraper's error return supplies `error_reason`, `process_item`'s `"error"` branch falls back to `"unknown scraper error"`, and the `ok`+no-price case and the `_bounded_process_item` backstop set their own
-- [ ] The formerly silent no-price-found path is no longer silent — Akamai / Cloudflare pages are named, everything else gets the generic reason
-- [ ] `status="ok"` + `price is None` transitions to `"error"` with its own reason
-- [ ] A listing's next `"ok"` or `"oos"` scrape clears `last_scrape_error`
-- [ ] `last_checked_at` is set on every poll (ok, oos and error); `_fetch_last_checked_map` derives from it instead of `PriceHistory.checked_at`, so a listing stuck in `"oos"` or failing shows an up-to-date "last checked" after every re-scrape
-- [ ] Watchlist table row: hovering "Failed" shows a reason-only tooltip; sheet panel: same on the header badge, plus a `CircleAlert` icon with the listing's reason on each failed listing's row; legacy rows show `"no details recorded yet"`
-- [ ] Verified live against a real failure (a served fake Akamai deny page, or #52's Crate & Barrel case if it recurs) — the reason in the UI matches what actually happened
+- [x] Migration `0017` adds `last_scrape_error` (nullable string) and `last_checked_at` (nullable timestamptz) to `watch_items`
+- [x] Every path that sets `last_scrape_status = "error"` also sets a non-empty `last_scrape_error`: each scraper's error return supplies `error_reason`, `process_item`'s `"error"` branch falls back to `"unknown scraper error"`, and the `ok`+no-price case and the `_bounded_process_item` backstop set their own
+- [x] The formerly silent no-price-found path is no longer silent — Akamai / Cloudflare pages are named, everything else gets the generic reason
+- [x] `status="ok"` + `price is None` transitions to `"error"` with its own reason
+- [x] A listing's next `"ok"` or `"oos"` scrape clears `last_scrape_error`
+- [x] `last_checked_at` is set on every poll (ok, oos and error); `_fetch_last_checked_map` derives from it instead of `PriceHistory.checked_at`, so a listing stuck in `"oos"` or failing shows an up-to-date "last checked" after every re-scrape
+- [x] Watchlist table row: hovering "Failed" shows a reason-only tooltip; sheet panel: same on the header badge, plus a `CircleAlert` icon with the listing's reason on each failed listing's row; legacy rows show `"no details recorded yet"`
+- [x] Verified live against a real failure (a served fake Akamai deny page, or #52's Crate & Barrel case if it recurred) — the reason in the UI matches what actually happened
 
 ### Known limitations
 
