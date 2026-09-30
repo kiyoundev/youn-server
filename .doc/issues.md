@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ⬜ #60, ⬜ #61, ⬜ #62, ⬜ #63
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -109,6 +109,14 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #52 | Crate & Barrel Canada: Akamai Bot-Block on PatchrightScraper (reopened — recurred) | fix / AFK | ~1h | None |
 | ✅ Done | #53 | Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel | feat / AFK | ~5h | None |
 | ✅ Done | #54 | IKEA Real Stock Status + Out-of-Stock Status with Restock Tooltip | feat / AFK | ~4.5h | None |
+| ⬜ Open | #56 | Watchlist Table: Sortable Columns | feat / AFK | ~2h | None |
+| ✅ Done | #57 | Watchlist Quick Search: Match Retailer Label | feat / AFK | ~1h | None |
+| ⬜ Open | #58 | Uniqlo Scraper Fails: Diagnose and Fix | fix / AFK | ~2h | None |
+| ⬜ Open | #59 | Manual Scrape: Live Sheet Refresh + Completion Toast | fix / AFK | ~2h | None |
+| ⬜ Open | #60 | Amazon Scraper: Track New vs Used Pricing | feat / AFK | ~4h | None |
+| ⬜ Open | #61 | Push Notification on Restock (Out-of-Stock → In-Stock) | feat / AFK | ~3h | #54 |
+| ⬜ Open | #62 | Watchlist Table Chart: Price Tolerance Flat-Line | fix / AFK | ~1h | None |
+| ⬜ Open | #63 | Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override | fix / AFK | ~2.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
 
@@ -150,6 +158,14 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | 27 | **#27** | Streaming chat responses | ~1.5h | #26 |
 | 28 | **#28** | Chat UI | ~3h | #27, #11 |
 | 29 | **#29** | Frontend test suite (Vitest setup + watchlist components + proxy route) | ~3h | — |
+| 30 | **#59** | Manual scrape: live sheet refresh + completion toast | ~2h | — |
+| 31 | **#63** | Wrong currency inferred (Dickies) + manual currency override | ~2.5h | — |
+| 32 | **#58** | Uniqlo scraper: diagnose and fix | ~2h | — |
+| 33 | **#62** | Table chart price-tolerance flat-line | ~1h | — |
+| 34 | **#56** | Watchlist sortable columns | ~2h | — |
+| 35 | **#57** | Quick search matches retailer label | ~1h | — |
+| 36 | **#60** | Amazon new vs used pricing | ~4h | — |
+| 37 | **#61** | Restock push notification | ~3h | #54 (soft: #60) |
 
 ---
 
@@ -3016,3 +3032,233 @@ Genuinely optional: there's currently exactly one real consumer of this pattern 
 - [ ] Shared exception type extracted (or `LedgerImportError` promoted/renamed) with a single `except` → `HTTPException` mapping point per router
 - [ ] Scraper/scheduler code is explicitly *not* touched — their result-object pattern stays as-is
 - [ ] No behavior change to any existing route response (status code, `detail` shape)
+
+---
+
+## [ ] Issue #56 — Watchlist Table: Sortable Columns
+
+**Type:** feat / AFK
+**Estimate:** ~2h
+**Blocked by:** None
+
+### What to build
+
+The `/watchlist` table currently only sorts by date added. Make the column headers clickable to sort ascending/descending.
+
+- **Columns to confirm before building:** name, current (best) price, target price, status, date added. Default stays date added, newest first.
+- **Price sorts by the product's best price** — the lowest available listing price, the same value the row already displays. Products with no available listing sort last in both directions.
+- **Status sorts by the existing status rank** (the order `compute_status()` uses), not alphabetically.
+- Sorting happens on the client over the already-fetched products. Sort state is not persisted across reloads unless that turns out to be cheap.
+- Sorting must not interfere with the live SSE updates (#36): a price update re-sorts in place rather than resetting the sort.
+
+### Why (context)
+
+Requested while using the watchlist: with more than a handful of products, finding the biggest drop or the ones already triggered means scanning the whole table.
+
+### Acceptance criteria
+
+- [ ] Clicking a sortable header sorts by it; clicking again reverses; the active column and direction are indicated
+- [ ] Price sort uses the product's best available listing price; products with no price sort last either way
+- [ ] Status sort follows the existing status rank
+- [ ] Default order (date added, newest first) unchanged when no header has been clicked
+- [ ] An SSE price update keeps the current sort applied
+
+---
+
+## [x] Issue #57 — Watchlist Quick Search: Match Retailer Label
+
+**Type:** feat / AFK
+**Estimate:** ~1h
+**Blocked by:** None
+
+### What to build
+
+Extend the existing `/watchlist` quick-search box so a query also matches the retailer label shown on a product's listings (e.g. typing "amazon" or "ikea" shows every product with a listing from that retailer). This is the same box, not a new control. Matching stays case-insensitive and substring-based, and a product matches if **any** of its listings' retailer labels matches.
+
+### Why (context)
+
+Search currently matches only the product name, so "show me everything I'm tracking at IKEA" isn't possible.
+
+### Acceptance criteria
+
+- [x] A query matches a product when it matches the name **or** any listing's retailer label
+- [x] Matching is case-insensitive and substring-based
+- [x] The label matched is the one displayed in the UI, not the internal `retailer` slug (e.g. "Amazon", not `amazon_ca`)
+- [x] Empty query still shows everything
+
+---
+
+## [ ] Issue #58 — Uniqlo Scraper Fails: Diagnose and Fix
+
+**Type:** fix / AFK
+**Estimate:** ~2h (diagnosis first; the fix estimate depends on the finding)
+**Blocked by:** None (related: #52 — the same bot-block failure class; #53 — its persisted `last_scrape_error` is the first place to look)
+
+### What to build
+
+Uniqlo listings don't scrape, and none of the extraction strategies we've defined and explored work on them (JSON-LD, OpenGraph, Shopify, Next.js `__NEXT_DATA__`, the generic hierarchy). Either the page is a different shape than any of those, or it is bot-blocked like #52.
+
+1. **Diagnose first.** Read the listing's `last_scrape_error` (#53) and capture the raw HTML the scraper actually receives, via `HTTPScraper` and via `PatchrightScraper`. Determine whether it is a bot-block (Akamai, Cloudflare or similar), a client-rendered price that needs the browser to wait, or a price served from a separate API call (like IKEA's fragment endpoint in #54).
+2. **Then fix**, most likely one of:
+   - a dedicated scraper registered in `RETAILER_MAP` (strict, no fallback, same convention as `IKEAScraper` and `AmazonCAScraper`), if the price comes from an internal endpoint;
+   - a selector or wait-condition entry, if it's client-rendered;
+   - or a documented won't-fix, with the reason recorded in this issue, if it's a bot-block that's unfixable at this app's scale (the same conclusion as #52).
+
+### Why (context)
+
+Reported: adding a Uniqlo URL fails, and the retailers that already have explicit handling don't apply.
+
+### Acceptance criteria
+
+- [ ] Root cause identified and written into this issue (bot-block, client-rendered or API-sourced), with evidence
+- [ ] Either a real Uniqlo listing scrapes to the correct price, live-verified, **or** a documented won't-fix
+- [ ] If a fix ships: regression fixture and test in `tests/scraper/`
+- [ ] A failure still surfaces a specific `last_scrape_error`, not the generic "no price found on page"
+
+---
+
+## [ ] Issue #59 — Manual Scrape: Live Sheet Refresh + Completion Toast
+
+**Type:** fix / AFK
+**Estimate:** ~2h
+**Blocked by:** None (related: #51 — the manual scrape buttons; #36 — SSE live updates)
+
+### What to build
+
+Two symptoms of one gap in #51's manual scrape flow: the UI has no signal that a manual scrape has **finished**. Root cause not yet verified; confirm before fixing.
+
+1. **Sheet panel doesn't refresh.** After a manual scrape from the button, the price change and the price-history chart in the side-panel detail sheet don't update. The table row may update while the open sheet holds a stale snapshot, or the SWR cache isn't revalidated on completion. Find which one it is, and make the open sheet reflect the new price, status and chart data as soon as the scrape lands.
+2. **Completion toast never appears.** The button shows a "scraping" toast, but nothing follows on success (and, worth checking, on failure). Show a success toast on completion. On failure, show one carrying the `last_scrape_error` reason (#53).
+
+Fix them together: whatever signals "scrape finished" (await the request, the SSE event, or a revalidate) should drive both the toast and the sheet refresh.
+
+### Why (context)
+
+Reported live: the manual scrape appears to do nothing, because the user has to close and reopen the sheet, or reload, to see the result.
+
+### Acceptance criteria
+
+- [ ] Root cause of the stale sheet identified and noted here
+- [ ] After a manual scrape (per-item and global), the open sheet's price, status and chart update without closing or reloading
+- [ ] The "scraping" toast is replaced by a success toast on completion, and by an error toast with the reason on failure
+- [ ] The global "scrape all" button behaves the same: one completion toast, not one per item
+- [ ] No regression to the SSE live updates (#36)
+
+---
+
+## [ ] Issue #60 — Amazon Scraper: Track New vs Used Pricing
+
+**Type:** feat / AFK
+**Estimate:** ~4h
+**Blocked by:** None
+
+### What to build
+
+`AmazonCAScraper` reads a single price off the product page and can't tell a **new** price from a **used** one — when the buy box is a used or third-party offer, the tracked price silently becomes a used price.
+
+- **Track the new price only, by default.** The scraper identifies the buy-box condition and reports a used-only buy box as unavailable for new, not as a price (`"oos"`, or a distinct result that #61's restock logic can key off).
+- **Used as a separate, opt-in listing**, not a second price on the same listing: the data model already has one price per listing, and a Product/Listing split (#24) fits "same product, different condition" naturally. This needs a condition marker on `Listing` (e.g. `condition: "new" | "used"`, migration required) and a way to add the used variant in the UI.
+- Decide on the used-price source during implementation (the "Other sellers" / used-offers section of the page, or the offer-listing page); check how bot-protected each one is before choosing.
+
+### Why (context)
+
+Reported: Amazon shows both new and used offers, and the scraper doesn't distinguish them, so a "price drop" can just be a used offer taking the buy box.
+
+### Acceptance criteria
+
+- [ ] A listing whose buy box is a used offer no longer records that price as the new price
+- [ ] `Listing.condition` (`new` default) persists via a migration applied locally and on the Pi/NAS
+- [ ] A used-condition listing of the same product can be added and tracked separately
+- [ ] The UI labels the condition where an Amazon listing is shown
+- [ ] Test coverage with fixtures for new buy box, used-only buy box and both offers present
+
+### Known limitations
+
+- Depends on Amazon's markup, which changes; failure surfaces as a scrape error rather than a wrong price.
+
+---
+
+## [ ] Issue #61 — Push Notification on Restock (Out-of-Stock → In-Stock)
+
+**Type:** feat / AFK
+**Estimate:** ~3h
+**Blocked by:** #54 (done). Soft dependency on #60, since a used-only Amazon result may count as out-of-stock for new.
+
+### What to build
+
+When a listing that was `"oos"` becomes available again (its next scrape returns `"ok"`), send a push notification through the existing event pipeline: `jobs.py` inserts an event of a new type `RESTOCK` (alongside `PRICE_DROP` and `STOCK_THRESHOLD`), and the dispatcher's consumer sends it through `send_alert()`.
+
+- **Fire only on the transition** `oos → ok`, detected by comparing the listing's previous `last_scrape_status` against the new result. Not on a first-ever scrape, not on repeated `"oos"`, and not on `error → ok`.
+- **Independent of the target price.** A restock notifies even if the price is above target. The message includes the current price, formatted in the product's currency (#45), and the retailer.
+- **One notification per restock, not per scrape.** Because the previous status is compared on each scrape, the notification fires once per transition. A manual scrape that races a scheduled one must not double-send.
+- Applies to every retailer that reports `"oos"` (IKEA today, any others that gain it). The same path covers manual and scheduled scrapes.
+
+### Why (context)
+
+#54 made out-of-stock a visible status with a restock date, but the moment an item comes back is exactly when the user wants to be told, since sold-out items often go again quickly.
+
+### Acceptance criteria
+
+- [ ] `oos → ok` inserts one `RESTOCK` event and one push is sent, with product, retailer and current price
+- [ ] No event on a first scrape, repeated `"oos"`, `error → ok`, or `ok → ok`
+- [ ] Works for manual and scheduled scrapes without duplicate sends
+- [ ] Test coverage in `test_jobs.py` for each transition
+- [ ] Live-verified with an IKEA listing (or a simulated `oos → ok` flip)
+
+---
+
+## [ ] Issue #62 — Watchlist Table Chart: Price Tolerance Flat-Line
+
+**Type:** fix / AFK
+**Estimate:** ~1h
+**Blocked by:** None
+
+### What to build
+
+The sidepanel's price chart flat-lines small price movements: a swing of about ±$1 draws as a flat line instead of exaggerating noise. The `/watchlist` table's price-history sparkline (`components/ui/price-sparkline.tsx`) doesn't, so the same small change looks like a big swing in the table.
+
+- Find the tolerance logic the sidepanel chart (`components/ui/product-price-chart.tsx`) uses, and extract it into one shared helper and constant so the two charts can't drift apart.
+- Apply it in the sparkline: when the price range across the plotted points falls within the tolerance, render a flat line.
+- Confirm whether the tolerance is an absolute amount or a percentage, and whether it is currency-aware. A ±$1 tolerance means something different for a ₩ price than for a CAD one (#45).
+
+### Why (context)
+
+Reported: a ±$1 change draws as a steep spike in the table while the sidepanel chart correctly shows it flat, so the two views disagree about whether the price really moved.
+
+### Acceptance criteria
+
+- [ ] One shared tolerance helper and constant used by both the table sparkline and the sidepanel chart
+- [ ] A series whose range is within tolerance renders flat in the table sparkline
+- [ ] A series beyond tolerance renders as before
+- [ ] Tolerance behaves sensibly for KRW (not a raw ₩1 threshold)
+
+---
+
+## [ ] Issue #63 — Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override
+
+**Type:** fix / AFK
+**Estimate:** ~2.5h
+**Blocked by:** None (related: #45 — multi-currency support)
+
+### What to build
+
+Adding `https://www.dickies.com/en-ca/products/relaxed-fit-sanded-duck-carpenter-pants-dk0du336rsl?variant=45194598383804` infers **USD** although it's the Canadian storefront (`/en-ca/`, priced in CAD).
+
+**Root cause (verified against the live page).** `_extract_currency` (`services/scraper/base.py`) trusts the page's own metadata first. Dickies' Product JSON-LD says `"price": "61.0"` with `"priceCurrency": "USD"`, on the CAD storefront. The page's other data blocks say CAD, and the site's own Yotpo widget also says `USD`. The inference isn't buggy; the retailer's markup is wrong, so no on-page heuristic can be trusted here. (The plain-text `\bUSD\b` scan would also fire on the Yotpo block if the JSON-LD were absent.)
+
+Two complementary fixes:
+
+1. **Manual override (the reliable one).** The backend already accepts `currency` on create and update (`Literal["USD","CAD","KRW"]`, `items.py`), but the frontend has no picker: the add-item form doesn't ask for one, and the sheet shows only a `$`/`₩` symbol next to the target price. Add a currency select to the add form (default **auto**, meaning the scraper's inference) and to the sheet's edit mode. Changing it on an existing product only relabels the stored prices; it does not rescale them (the stored numbers are already in the retailer's own currency). Worth confirming during implementation that this is the wanted behaviour, and warning in the UI if not.
+2. **Locale signal in the inference.** The URL path carries an explicit locale on many storefronts (`/en-ca/`, `/fr-ca/`, `/en-us/`, `/ko-kr/`). Use it as a tie-break **before** the metadata, or only when the metadata conflicts with it. This must not break the existing case #45 protects (muddygeorge.com, a Canadian retailer on a plain `.com`, has no locale path, so the metadata and default still decide). Keep it narrow: a small locale-to-currency map for `-ca`, `-us` and `-kr`, not a general locale parser.
+
+### Why (context)
+
+A wrong currency mislabels every price, target and chart on the product, and gives the wrong FX-converted CAD equivalent (#45), so a price-drop alert can fire against the wrong number. Since a retailer's own markup can be wrong (proven here), the user needs a way to state the currency explicitly.
+
+### Acceptance criteria
+
+- [ ] The Dickies URL above infers CAD
+- [ ] The add-item form has a currency selector (auto / CAD / USD / KRW); an explicit choice overrides the inference, auto keeps today's behaviour
+- [ ] The sheet's edit mode can change a product's currency; the change relabels without rescaling stored prices
+- [ ] A locale path segment (`/en-ca/`, `/en-us/`, `/ko-kr/`) is honoured when the metadata conflicts with it
+- [ ] Regression fixture for the Dickies page; existing #45 fixtures (muddygeorge.com, goyowear.kr) still pass

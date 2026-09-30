@@ -964,8 +964,15 @@ export default function WatchlistPage() {
   const fxRates = fxRatesData?.rates ?? {};
   const fxStale = fxRatesData?.stale ?? false;
 
+  // Issue #57 — matches the product name or any listing's retailer label
+  // (listing.retailer is the displayed text, e.g. "Amazon", not a slug).
+  const query = search.toLowerCase();
   const filtered = products
-    .filter((product) => (product.name ?? "").toLowerCase().includes(search.toLowerCase()))
+    .filter(
+      (product) =>
+        (product.name ?? "").toLowerCase().includes(query) ||
+        product.listings.some((listing) => listing.retailer.toLowerCase().includes(query)),
+    )
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   // FX-converted to CAD before summing (issue #45) — products can be
