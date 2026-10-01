@@ -1,6 +1,7 @@
 "use client";
 
 import { Line, LineChart, YAxis } from "recharts";
+import { PRICE_NOISE_THRESHOLD, flatPlotPrice } from "@/lib/price-noise";
 
 interface PriceSparklineProps {
   data: { date: string; price: number }[];
@@ -15,28 +16,29 @@ function PriceSparkline({ data, width = 64, height = 24 }: PriceSparklineProps) 
 
   const firstPrice = data[0].price;
   const lastPrice = data[data.length - 1].price;
-  // Scraper noise tolerance — different scrape paths for the same retailer
-  // can record slightly different decimal precision for what's really the
-  // same listed price (e.g. $799.99 vs $799.00), so a swing this small or
-  // smaller is treated as unchanged rather than a real price move. Native-
-  // currency units, so this is effectively USD/CAD-only in practice (KRW
-  // amounts are large enough that $1 ~= exact-equality, no regression).
-  const NOISE_THRESHOLD = 1;
+  // Scraper noise tolerance (see lib/price-noise.ts) — a swing this small
+  // or smaller is treated as unchanged rather than a real price move.
   const diff = lastPrice - firstPrice;
   const color =
-    Math.abs(diff) <= NOISE_THRESHOLD
+    Math.abs(diff) <= PRICE_NOISE_THRESHOLD
       ? "var(--muted-foreground)"
       : diff < 0
         ? "var(--status-success)"
         : "var(--status-error)";
 
-  const prices = data.map((d) => d.price);
+  // Issue #62 — a series that never leaves the noise band is drawn as a
+  // truly flat line, not stretched to fill the chart height (the axis fits
+  // tightly to the data, so even a $1 wiggle would otherwise spike).
+  const flat = flatPlotPrice(data.map((d) => d.price));
+  const plotted = flat === null ? data : data.map((d) => ({ ...d, price: flat }));
+
+  const prices = plotted.map((d) => d.price);
   const min = Math.min(...prices);
   const max = Math.max(...prices);
   const padding = (max - min) * 0.1 || max * 0.05;
 
   return (
-    <LineChart width={width} height={height} data={data}>
+    <LineChart width={width} height={height} data={plotted}>
       <YAxis domain={[min - padding, max + padding]} hide />
       <Line
         type="monotone"

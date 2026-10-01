@@ -115,7 +115,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #59 | Manual Scrape: Live Sheet Refresh + Completion Toast | fix / AFK | ~2h | None |
 | ⬜ Open | #60 | Amazon Scraper: Track New vs Used Pricing | feat / AFK | ~4h | None |
 | ⬜ Open | #61 | Push Notification on Restock (Out-of-Stock → In-Stock) | feat / AFK | ~3h | #54 |
-| ⬜ Open | #62 | Watchlist Table Chart: Price Tolerance Flat-Line | fix / AFK | ~1h | None |
+| ⬜ Open | #62 | Price Tolerance Flat-Line on Both Charts (Table Sparkline + Sheet) | fix / AFK | ~1h | None |
 | ⬜ Open | #63 | Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override | fix / AFK | ~2.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
@@ -3207,7 +3207,7 @@ When a listing that was `"oos"` becomes available again (its next scrape returns
 
 ---
 
-## [ ] Issue #62 — Watchlist Table Chart: Price Tolerance Flat-Line
+## [x] Issue #62 — Price Tolerance Flat-Line on Both Charts (Table Sparkline + Sheet)
 
 **Type:** fix / AFK
 **Estimate:** ~1h
@@ -3215,22 +3215,34 @@ When a listing that was `"oos"` becomes available again (its next scrape returns
 
 ### What to build
 
-The sidepanel's price chart flat-lines small price movements: a swing of about ±$1 draws as a flat line instead of exaggerating noise. The `/watchlist` table's price-history sparkline (`components/ui/price-sparkline.tsx`) doesn't, so the same small change looks like a big swing in the table.
+A price series that never moves more than ±$1 (`PRICE_NOISE_THRESHOLD`) should draw as a **flat line** on both the `/watchlist` table's sparkline and the side sheet's price chart.
 
-- Find the tolerance logic the sidepanel chart (`components/ui/product-price-chart.tsx`) uses, and extract it into one shared helper and constant so the two charts can't drift apart.
-- Apply it in the sparkline: when the price range across the plotted points falls within the tolerance, render a flat line.
-- Confirm whether the tolerance is an absolute amount or a percentage, and whether it is currency-aware. A ±$1 tolerance means something different for a ₩ price than for a CAD one (#45).
+**What existed before (corrected from this issue's first draft).** Neither chart had flattening. The only tolerance was `debdab1`'s `NOISE_THRESHOLD = 1` in `price-sparkline.tsx`, and it only picked the line *colour* (gray instead of green or red, comparing first vs last point). Both charts fit their Y-axis to the data (sparkline: min/max ±10% of the range; sheet: ±5% of the price), so a $1 wiggle still drew as a spike in the sparkline, and in the sheet looked calm only on expensive items. This is the same mismatch behind `d7cd6d0` (a real $0.99 drop looked flat in the sheet and like a cliff in the table).
+
+**Design.**
+- New `lib/price-noise.ts`: `PRICE_NOISE_THRESHOLD = 1`, `isWithinNoise()` and `flatPlotPrice()`, shared by both charts so they can't drift.
+- A series is "within noise" when `max - min <= 1` over the plotted window (range-based, not first-vs-last).
+- Sparkline: a within-noise series is plotted at its latest price (truly flat); the colour check uses the shared constant.
+- Sheet chart: flattening is **per listing**. A within-noise listing is plotted flat at its latest price while other listings that moved are drawn as-is. The Y-domain fits the plotted values. Each point's real price is kept in the row, so the tooltip still shows the real value, not the flattened one.
+- Native-currency units, same as before: effectively USD/CAD-only; for KRW, ₩1 is ≈ exact equality, so KRW series aren't flattened in practice.
 
 ### Why (context)
 
-Reported: a ±$1 change draws as a steep spike in the table while the sidepanel chart correctly shows it flat, so the two views disagree about whether the price really moved.
+Reported: a ±$1 change draws as a steep spike in the table while the sheet shows it flat, so the two views disagree about whether the price really moved. Confirmed on the AirPods Max 2 item, though that one's real $160 rise (639 → 799) is correctly red and *not* affected by this change.
 
 ### Acceptance criteria
 
-- [ ] One shared tolerance helper and constant used by both the table sparkline and the sidepanel chart
-- [ ] A series whose range is within tolerance renders flat in the table sparkline
-- [ ] A series beyond tolerance renders as before
-- [ ] Tolerance behaves sensibly for KRW (not a raw ₩1 threshold)
+- [x] One shared `PRICE_NOISE_THRESHOLD` helper (`lib/price-noise.ts`) used by the table sparkline (colour and flat check) and the sheet chart
+- [x] A series within ±$1 renders as a flat line in the table sparkline
+- [x] A within-noise listing renders flat in the sheet chart; a listing that moved more than $1 renders as before
+- [x] The sheet tooltip shows each point's real price, never the flattened value
+- [x] A series that moved more than $1 renders as before in both charts
+- [x] KRW series behave as before (₩1 is not a meaningful tolerance)
+
+### Known limitations
+
+- No unit tests: the frontend test suite doesn't exist yet (#29). Verified by type-check, lint and a manual check in the browser.
+- The colour check still compares the first and last points over the 30-day window, so one old outlier can keep a long-stable listing red or green.
 
 ---
 

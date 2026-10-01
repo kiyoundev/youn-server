@@ -16,6 +16,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { fmtPrice } from "@/lib/format";
+import { flatPlotPrice } from "@/lib/price-noise";
 
 interface Listing {
   retailer: string;
@@ -38,6 +39,8 @@ interface ProductPriceChartProps {
 // (e.g. the "." in "Amazon.ca") — this key drives generated CSS, so it's
 // kept separate from the retailer name used for display (label/tooltip/legend).
 const seriesKey = (retailer: string) => retailer.replace(/[^a-zA-Z0-9_-]/g, "_");
+// Row key holding a point's real (un-flattened) price, read by the tooltip.
+const realKey = (retailer: string) => `${seriesKey(retailer)}__real`;
 
 function ProductPriceChart({
   listings,
@@ -50,11 +53,22 @@ function ProductPriceChart({
     new Set(listings.flatMap((l) => l.priceHistory.map((h) => h.date))),
   ).sort();
 
+  // Issue #62 — a listing whose history stays within the noise band
+  // (lib/price-noise.ts) is plotted flat at its latest price. The real
+  // price still rides along under realKey so the tooltip never shows the
+  // flattened value.
+  const flatByListing = new Map(
+    listings.map((l) => [l.retailer, flatPlotPrice(l.priceHistory.map((h) => h.price))]),
+  );
+
   const data = dates.map((date) => {
     const row: Record<string, string | number> = { date };
     listings.forEach((l) => {
       const point = l.priceHistory.find((h) => h.date === date);
-      if (point) row[seriesKey(l.retailer)] = point.price;
+      if (point) {
+        row[seriesKey(l.retailer)] = flatByListing.get(l.retailer) ?? point.price;
+        row[realKey(l.retailer)] = point.price;
+      }
     });
     return row;
   });
@@ -64,7 +78,11 @@ function ProductPriceChart({
   // that a real (if small) price move flattened out to invisible. A
   // target that falls outside this domain just isn't drawn at all (see
   // targetInRange below) rather than forcing the axis wide to fit it.
-  const allPrices = listings.flatMap((l) => l.priceHistory.map((h) => h.price));
+  // Fit to the plotted (possibly flattened) values, not the raw history.
+  const allPrices = listings.flatMap((l) => {
+    const flat = flatByListing.get(l.retailer);
+    return l.priceHistory.map((h) => flat ?? h.price);
+  });
   const rawMin = Math.min(...allPrices);
   const rawMax = Math.max(...allPrices);
   const paddedMin = rawMin - (rawMin > 0 ? rawMin * 0.05 : 0);
@@ -133,6 +151,7 @@ function ProductPriceChart({
                 // tooltip's pre-existing missing-`$` bug).
                 formatter={(value, name, item) => {
                   const indicatorColor = item.payload?.fill ?? item.color;
+                  const realPrice = item.payload?.[realKey(String(name))];
                   return (
                     <>
                       <div
@@ -147,7 +166,7 @@ function ProductPriceChart({
                       <div className="flex flex-1 items-center justify-between leading-none">
                         <span className="text-muted-foreground">{name}</span>
                         <span className="font-mono font-medium text-foreground tabular-nums">
-                          {fmtPrice(Number(value), currency)}
+                          {fmtPrice(Number(realPrice ?? value), currency)}
                         </span>
                       </div>
                     </>
