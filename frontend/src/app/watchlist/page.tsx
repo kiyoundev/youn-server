@@ -25,6 +25,8 @@ import { useNavSlot } from "@/components/nav-slot";
 import { useListingHistory, bucketByLocalDay, listingHistoryKey } from "@/lib/hooks/use-listing-history";
 import { subscribeToListingEvents, type ConnectionStatus } from "@/lib/sse-leader";
 import { fmtPrice, fmtCadEquivalent, toCad } from "@/lib/format";
+import { bestPrice, nextSort, sortProducts, type SortKey, type SortState } from "@/lib/watchlist-sort";
+import { SortableHead } from "@/components/ui/sortable-head";
 import {
   createProduct,
   createListing,
@@ -42,13 +44,6 @@ import {
   type FxRates,
 } from "@/lib/api/items";
 import { toast } from "@/lib/toast";
-
-// null when every listing's last_price is null (e.g. every retailer OOS/errored) —
-// callers render a "—" fallback rather than treating this as 0.
-const bestPrice = (product: Product): number | null => {
-  const prices = product.listings.map((l) => l.last_price).filter((p): p is number => p !== null);
-  return prices.length > 0 ? Math.min(...prices) : null;
-};
 
 type HistoryPoint = { date: string; price: number };
 
@@ -807,6 +802,7 @@ function ProductRow({
 export default function WatchlistPage() {
   const navSlotEl = useNavSlot();
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SortState | null>(null);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -967,13 +963,24 @@ export default function WatchlistPage() {
   // Issue #57 — matches the product name or any listing's retailer label
   // (listing.retailer is the displayed text, e.g. "Amazon", not a slug).
   const query = search.toLowerCase();
-  const filtered = products
-    .filter(
+  // Issue #56 — derived on every render from `products`, so an SSE price
+  // update re-sorts in place; the only state is which column/direction.
+  const filtered = sortProducts(
+    products.filter(
       (product) =>
         (product.name ?? "").toLowerCase().includes(query) ||
         product.listings.some((listing) => listing.retailer.toLowerCase().includes(query)),
-    )
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    ),
+    sort,
+    fxRates,
+  );
+  const sortHead = (key: SortKey, label: string) => (
+    <SortableHead
+      label={label}
+      direction={sort?.key === key ? sort.dir : null}
+      onSort={() => setSort((current) => nextSort(current, key))}
+    />
+  );
 
   // FX-converted to CAD before summing (issue #45) — products can be
   // mixed-currency, so a raw sum would add e.g. a KRW price and a USD
@@ -1175,12 +1182,12 @@ export default function WatchlistPage() {
           <Table>
             <TableHeader className="[&_th]:h-auto [&_th]:px-4 [&_th]:pt-4 [&_th]:pb-4">
               <TableRow className="hover:bg-transparent">
-                <TableHead>Name</TableHead>
-                <TableHead>Retailer</TableHead>
-                <TableHead>Best Price</TableHead>
-                <TableHead>Target Price</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last Checked</TableHead>
+                {sortHead("name", "Name")}
+                {sortHead("retailer", "Retailer")}
+                {sortHead("best_price", "Best Price")}
+                {sortHead("target_price", "Target Price")}
+                {sortHead("status", "Status")}
+                {sortHead("last_checked", "Last Checked")}
                 <TableHead>Price History</TableHead>
                 <TableHead className="w-10" />
               </TableRow>

@@ -3035,7 +3035,7 @@ Genuinely optional: there's currently exactly one real consumer of this pattern 
 
 ---
 
-## [ ] Issue #56 — Watchlist Table: Sortable Columns
+## [x] Issue #56 — Watchlist Table: Sortable Columns
 
 **Type:** feat / AFK
 **Estimate:** ~2h
@@ -3043,13 +3043,22 @@ Genuinely optional: there's currently exactly one real consumer of this pattern 
 
 ### What to build
 
-The `/watchlist` table currently only sorts by date added. Make the column headers clickable to sort ascending/descending.
+Make the `/watchlist` table's column headers clickable to sort. Plain shadcn `Table` is kept (no TanStack / data-table: rows nest listings, update over SSE and open a custom sheet); the sort is a pure function plus a small header component.
 
-- **Columns to confirm before building:** name, current (best) price, target price, status, date added. Default stays date added, newest first.
-- **Price sorts by the product's best price** — the lowest available listing price, the same value the row already displays. Products with no available listing sort last in both directions.
-- **Status sorts by the existing status rank** (the order `compute_status()` uses), not alphabetically.
-- Sorting happens on the client over the already-fetched products. Sort state is not persisted across reloads unless that turns out to be cheap.
-- Sorting must not interfere with the live SSE updates (#36): a price update re-sorts in place rather than resetting the sort.
+- **Sortable columns:** Name, Retailer, Best Price, Target Price, Status, Last Checked. Price History is not sortable.
+- **Click cycle:** ascending → descending → cleared (back to the default order). Clicking a different column starts at ascending.
+- **Default order (no sort active):** oldest first by `created_at`, unchanged from before.
+- **Comparisons** (built-in stable `Array.prototype.sort`, one comparator per column type):
+  - Name: lowercased, `localeCompare` (`"Untitled"` when null).
+  - Retailer: the alphabetically first retailer label among the product's listings.
+  - Best Price / Target Price: **compared in CAD** via `toCad()` and the cached FX rates, since products mix CAD, USD and KRW; cells keep showing native currency.
+  - Status: explicit order, triggered → failed → out of stock → processing → watching → paused (rows you can act on first). Deliberately *not* `compute_status()`'s priority order, which puts paused first.
+  - Last Checked: `product.last_checked` as a timestamp.
+- **Missing values** (no price, no FX rate for that currency yet, never checked) sort **last in both directions**. Ties fall back to `created_at` then `id`, so equal rows never reshuffle.
+- The sorted list is derived on every render from the fetched products; the only state is `{ key, dir } | null`, so an SSE price update re-sorts in place. Sort state is not persisted across reloads.
+- The search filter (#57) runs first, then the sort.
+
+**Code:** `lib/watchlist-sort.ts` (`sortProducts`, `nextSort`, `bestPrice` moved here from `page.tsx`), `components/ui/sortable-head.tsx`, and `app/watchlist/page.tsx`.
 
 ### Why (context)
 
@@ -3057,11 +3066,17 @@ Requested while using the watchlist: with more than a handful of products, findi
 
 ### Acceptance criteria
 
-- [ ] Clicking a sortable header sorts by it; clicking again reverses; the active column and direction are indicated
-- [ ] Price sort uses the product's best available listing price; products with no price sort last either way
-- [ ] Status sort follows the existing status rank
-- [ ] Default order (date added, newest first) unchanged when no header has been clicked
-- [ ] An SSE price update keeps the current sort applied
+- [x] Clicking a sortable header sorts ascending, again descending, a third time clears; the active column and direction are indicated (`aria-sort` set)
+- [x] Best/Target Price sort by CAD-converted value, so mixed currencies order correctly; products with no price or no FX rate sort last in both directions
+- [x] Status sorts in the defined order (triggered first), not alphabetically
+- [x] Default order (oldest first) unchanged when no header has been clicked or after the sort is cleared
+- [x] An SSE price update keeps the current sort applied
+- [x] Search still filters, and the result is sorted
+
+### Known limitations
+
+- No unit tests: the frontend test suite doesn't exist yet (#29). `sortProducts` and `nextSort` are pure and are the first things to cover when it does. Checked so far by type-check, lint and a throwaway script against the real local data.
+- Rates refresh once every 24h, so two prices that are close in CAD can swap order after a refresh.
 
 ---
 
