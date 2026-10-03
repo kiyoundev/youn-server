@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import useSWR, { mutate } from "swr";
+
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,13 +21,15 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LoadingScreen } from "@/components/ui/loading-screen";
-import { cn } from "@/lib/utils";
 import { useNavSlot } from "@/components/nav-slot";
+import { SortableHead } from "@/components/ui/sortable-head";
+import { CurrencyToggle } from "@/components/ui/currency-toggle";
+
+import { cn } from "@/lib/utils";
 import { useListingHistory, bucketByLocalDay, listingHistoryKey } from "@/lib/hooks/use-listing-history";
 import { subscribeToListingEvents, type ConnectionStatus } from "@/lib/sse-leader";
 import { fmtPrice, fmtCadEquivalent, toCad } from "@/lib/format";
 import { bestPrice, nextSort, sortProducts, type SortKey, type SortState } from "@/lib/watchlist-sort";
-import { SortableHead } from "@/components/ui/sortable-head";
 import {
   createProduct,
   createListing,
@@ -42,6 +45,7 @@ import {
   type Listing,
   type WatchStatus,
   type FxRates,
+  type Currency,
 } from "@/lib/api/items";
 import { toast } from "@/lib/toast";
 
@@ -130,7 +134,40 @@ function StaleFxIcon() {
   );
 }
 
-const emptyNewItem = { name: "", targetPrice: "", urls: "" };
+// Issue #63 — "auto" is frontend-only (never sent): the backend infers the
+// currency from the first scrape. Any other value overrides that inference.
+type NewItemCurrency = "auto" | Currency;
+
+const emptyNewItem: { name: string; targetPrice: string; urls: string; currency: NewItemCurrency } = {
+  name: "",
+  targetPrice: "",
+  urls: "",
+  currency: "auto",
+};
+
+// Symbol shown before the target price input; none while the currency is
+// still undetermined (auto).
+const CURRENCY_PREFIX: Record<NewItemCurrency, string | null> = {
+  auto: null,
+  CAD: "$",
+  USD: "$",
+  KRW: "₩",
+};
+
+const NEW_ITEM_CURRENCY_OPTIONS: readonly { value: NewItemCurrency; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "CAD", label: "CAD" },
+  { value: "USD", label: "USD" },
+  { value: "KRW", label: "KRW" },
+];
+
+// No "Auto" in the sheet — the backend ignores a null currency on update, so
+// a product can't be set back to "undetected" from here.
+const SHEET_CURRENCY_OPTIONS: readonly { value: Currency; label: string }[] = [
+  { value: "CAD", label: "CAD" },
+  { value: "USD", label: "USD" },
+  { value: "KRW", label: "KRW" },
+];
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -185,6 +222,10 @@ type ProductDraft = {
   name: string;
   target_price: string;
   active: boolean;
+  // Issue #63 — null while the product's currency hasn't been inferred yet
+  // and the user hasn't picked one; the sheet then falls back to the
+  // product's own value for display.
+  currency: Currency | null;
 };
 
 function draftFromProduct(product: Product): ProductDraft {
@@ -195,6 +236,7 @@ function draftFromProduct(product: Product): ProductDraft {
     // folds it into `status` server-side) — derived the same way the
     // pre-batch Switch's `checked` prop already was.
     active: product.status !== "paused",
+    currency: product.currency,
   };
 }
 
@@ -218,7 +260,9 @@ function isProductDirty(product: Product, draft: ProductDraft): boolean {
   const nameChanged = trimmedName !== "" && trimmedName !== (product.name ?? "");
   const priceChanged = price !== null && price !== product.target_price;
   const activeChanged = draft.active !== (product.status !== "paused");
-  return nameChanged || priceChanged || activeChanged;
+  // A null draft currency is "no choice made", never a change.
+  const currencyChanged = draft.currency !== null && draft.currency !== product.currency;
+  return nameChanged || priceChanged || activeChanged || currencyChanged;
 }
 
 // Fires one updateProduct call with only the fields that actually changed —
@@ -235,6 +279,7 @@ async function saveProduct(product: Product, draft: ProductDraft) {
   if (price !== null && price !== product.target_price) payload.target_price = price;
   const activeChanged = draft.active !== (product.status !== "paused");
   if (activeChanged) payload.active = draft.active;
+  if (draft.currency !== null && draft.currency !== product.currency) payload.currency = draft.currency;
   if (Object.keys(payload).length > 0) {
     await updateProduct(product.id, payload);
   }
@@ -329,6 +374,9 @@ function ProductRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSheetOpen]);
   const dirty = isProductDirty(product, draft) || hasRetailerActivity;
+  // Issue #63 — the sheet previews the draft currency before Save (same
+  // idea as sheetStatusKey below); the table row keeps the saved value.
+  const displayCurrency = draft.currency ?? product.currency;
 
   const handleCancelEdits = () => {
     setDraft(draftFromProduct(product));
@@ -399,8 +447,7 @@ function ProductRow({
   const failedReasonLines = product.listings.filter((l) => l.last_scrape_status === "error").map(describeFailure);
   // Only these two statuses have anything worth a hover; everything else
   // renders a plain badge.
-  const tooltipLinesFor = (s: WatchStatus) =>
-    s === "out_of_stock" ? oosRestockLines : s === "failed" ? failedReasonLines : null;
+  const tooltipLinesFor = (s: WatchStatus) => (s === "out_of_stock" ? oosRestockLines : s === "failed" ? failedReasonLines : null);
   const rowTooltipLines = tooltipLinesFor(product.status);
   const sheetTooltipLines = tooltipLinesFor(sheetStatusKey);
   const best = bestPrice(product);
@@ -507,7 +554,7 @@ function ProductRow({
           </SheetHeader>
           <div className="flex flex-col gap-4 px-4">
             <div style={{ height: 200 }}>
-              {chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} currency={product.currency} />}
+              {chartReady && <ProductPriceChart listings={chartListings} targetPrice={product.target_price} currency={displayCurrency} />}
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Target Price</span>
@@ -515,7 +562,7 @@ function ProductRow({
                 {isEditingTargetPrice ? (
                   <InputGroup className="h-7 w-28">
                     <InputGroupAddon>
-                      <InputGroupText>{product.currency === "KRW" ? "₩" : "$"}</InputGroupText>
+                      <InputGroupText>{displayCurrency === "KRW" ? "₩" : "$"}</InputGroupText>
                     </InputGroupAddon>
                     <InputGroupInput
                       autoFocus
@@ -533,9 +580,9 @@ function ProductRow({
                 ) : (
                   <div className="flex items-center gap-1">
                     <div>
-                      <span>{fmtPrice(parseValidPrice(draft.target_price) ?? product.target_price, product.currency)}</span>
+                      <span>{fmtPrice(parseValidPrice(draft.target_price) ?? product.target_price, displayCurrency)}</span>
                       {(() => {
-                        const cadEquivalent = fmtCadEquivalent(product.target_price, product.currency, fxRates);
+                        const cadEquivalent = fmtCadEquivalent(product.target_price, displayCurrency, fxRates);
                         return (
                           cadEquivalent && (
                             <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -558,6 +605,17 @@ function ProductRow({
                   </div>
                 )}
               </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Currency</span>
+                <CurrencyToggle
+                  options={SHEET_CURRENCY_OPTIONS}
+                  value={displayCurrency}
+                  onChange={(currency) => setDraft((d) => ({ ...d, currency }))}
+                />
+              </div>
+              {draft.currency !== null && draft.currency !== product.currency}
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
@@ -680,10 +738,10 @@ function ProductRow({
                           buttons all fighting for one line wraps badly on
                           a longer KRW figure. */}
                       <div className="flex flex-col items-end">
-                        <span>{listing.last_price !== null ? fmtPrice(listing.last_price, product.currency) : "—"}</span>
+                        <span>{listing.last_price !== null ? fmtPrice(listing.last_price, displayCurrency) : "—"}</span>
                         {listing.last_price !== null &&
                           (() => {
-                            const cadEquivalent = fmtCadEquivalent(listing.last_price, product.currency, fxRates);
+                            const cadEquivalent = fmtCadEquivalent(listing.last_price, displayCurrency, fxRates);
                             return (
                               cadEquivalent && (
                                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -846,6 +904,8 @@ export default function WatchlistPage() {
     resetNewItemForm();
   };
 
+  const newItemPrefix = CURRENCY_PREFIX[newItem.currency];
+
   const newItemUrlLines = newItem.urls
     .split("\n")
     .map((line) => line.trim())
@@ -872,6 +932,8 @@ export default function WatchlistPage() {
         // send the key at all.
         name: trimmedName || undefined,
         target_price: Number(newItem.targetPrice),
+        // "auto" is omitted so the first scrape infers it, as before.
+        currency: newItem.currency === "auto" ? undefined : newItem.currency,
         urls: newItemUrlLines,
       });
       await mutate("/api/proxy/items");
@@ -968,18 +1030,13 @@ export default function WatchlistPage() {
   const filtered = sortProducts(
     products.filter(
       (product) =>
-        (product.name ?? "").toLowerCase().includes(query) ||
-        product.listings.some((listing) => listing.retailer.toLowerCase().includes(query)),
+        (product.name ?? "").toLowerCase().includes(query) || product.listings.some((listing) => listing.retailer.toLowerCase().includes(query)),
     ),
     sort,
     fxRates,
   );
   const sortHead = (key: SortKey, label: string) => (
-    <SortableHead
-      label={label}
-      direction={sort?.key === key ? sort.dir : null}
-      onSort={() => setSort((current) => nextSort(current, key))}
-    />
+    <SortableHead label={label} direction={sort?.key === key ? sort.dir : null} onSort={() => setSort((current) => nextSort(current, key))} />
   );
 
   // FX-converted to CAD before summing (issue #45) — products can be
@@ -1137,8 +1194,10 @@ export default function WatchlistPage() {
             )}
           </div>
         </div>
+
+        {/* add item popup */}
         <Dialog open={isAddDialogOpen} onOpenChange={(open) => (open ? setIsAddDialogOpen(true) : closeAddDialog())}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Add Item</DialogTitle>
             </DialogHeader>
@@ -1147,17 +1206,36 @@ export default function WatchlistPage() {
                 <Label htmlFor="new-item-name">Item Name</Label>
                 <Input id="new-item-name" value={newItem.name} onChange={(e) => setNewItem((prev) => ({ ...prev, name: e.target.value }))} />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="new-item-target-price">Target Price</Label>
-                <Input
-                  id="new-item-target-price"
-                  type="number"
-                  step="0.01"
-                  value={newItem.targetPrice}
-                  onChange={(e) => setNewItem((prev) => ({ ...prev, targetPrice: e.target.value }))}
-                  className="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
+
+              <div className="flex gap-1.5">
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <Label htmlFor="new-item-target-price">Target Price</Label>
+                  <InputGroup>
+                    {newItemPrefix && (
+                      <InputGroupAddon>
+                        <InputGroupText>{newItemPrefix}</InputGroupText>
+                      </InputGroupAddon>
+                    )}
+                    <InputGroupInput
+                      id="new-item-target-price"
+                      type="number"
+                      step="0.01"
+                      value={newItem.targetPrice}
+                      onChange={(e) => setNewItem((prev) => ({ ...prev, targetPrice: e.target.value }))}
+                      className="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                  </InputGroup>
+                </div>
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  <Label>Currency</Label>
+                  <CurrencyToggle
+                    options={NEW_ITEM_CURRENCY_OPTIONS}
+                    value={newItem.currency}
+                    onChange={(currency) => setNewItem((prev) => ({ ...prev, currency }))}
+                  />
+                </div>
               </div>
+
               <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="new-item-urls">Retailer URLs</Label>
                 <Textarea
@@ -1178,6 +1256,7 @@ export default function WatchlistPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
         <Card className="w-full p-0">
           <Table>
             <TableHeader className="[&_th]:h-auto [&_th]:px-4 [&_th]:pt-4 [&_th]:pb-4">

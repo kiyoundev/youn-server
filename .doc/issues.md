@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ⬜ #60, ⬜ #61, ⬜ #62, ⬜ #63
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ⬜ #60, ⬜ #61, ⬜ #62, ✅ #63
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -116,7 +116,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #60 | Amazon Scraper: Track New vs Used Pricing | feat / AFK | ~4h | None |
 | ⬜ Open | #61 | Push Notification on Restock (Out-of-Stock → In-Stock) | feat / AFK | ~3h | #54 |
 | ⬜ Open | #62 | Price Tolerance Flat-Line on Both Charts (Table Sparkline + Sheet) | fix / AFK | ~1h | None |
-| ⬜ Open | #63 | Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override | fix / AFK | ~2.5h | None |
+| ✅ Done | #63 | Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override | fix / AFK | ~2.5h | None |
 
 **Total estimated:** ~111.75h *(was ~61h — saved ~12h by switching to Pushover: #5 reduced 8h→2h, #12 removed 6h, #13 no longer needs APNs key setup; +6h for #21/#22 overview dashboard, +3h for #23 stock history chart, +1h for #21's services/schedules tiles, +1h for #21.5 Synology storage status API; +6h for #24 wishlist Product/Listing model split; +9.5h for #25–#28 AI chat feature; +3h for #29 frontend test suite; +1h for #34 DNS ad blocking; #10.1 (~2h) + #10.3 (~1.5h) merged into #36 (~6h) — net +2.5h for SSE backend surface: broadcast hook, streaming route, streaming proxy, frontend EventSource wiring; +4h for #37 extending SSE to stock ticks; +3h for #38 earnings calendar; +2h for #10.6 ticker watchlist, split out of #10.4 mid-implementation once the star icon was found to be the real watchlist-membership mechanism; +0.75h for #13.1 Tailscale subnet routing, split out of #13 once discovered the NAS isn't itself a Tailscale node and needs a subnet route through the Pi; +2.5h for #42 TradingAgents-on-Pi LLM provider/report migration/storage, split out of #13 once its step 8 was found to need an LLM API key that was never provisioned; +1h for #43 Tailscale HTTPS for the frontend, split out of #13 once its watchlist page was found to crash on plain HTTP — Web Locks API needs a secure context; +5h for #39/#40/#41, never added to this tracker table when written up (~1.5h + the ~2h→3h `#41` re-estimate after spec'ing its "Processing" UI state and concurrency bound in detail before implementation); +0.5h for `#40`'s own re-estimate (~30min→1h) after adding periodic browser-context recycling for long-uptime resilience, discussed before implementation)*
 
@@ -3261,7 +3261,7 @@ Reported: a ±$1 change draws as a steep spike in the table while the sheet show
 
 ---
 
-## [ ] Issue #63 — Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override
+## [x] Issue #63 — Wrong Currency Inferred (Dickies CA Parsed as USD) + Manual Currency Override
 
 **Type:** fix / AFK
 **Estimate:** ~2.5h
@@ -3269,23 +3269,36 @@ Reported: a ±$1 change draws as a steep spike in the table while the sheet show
 
 ### What to build
 
-Adding `https://www.dickies.com/en-ca/products/relaxed-fit-sanded-duck-carpenter-pants-dk0du336rsl?variant=45194598383804` infers **USD** although it's the Canadian storefront (`/en-ca/`, priced in CAD).
+Adding `https://www.dickies.com/en-ca/products/relaxed-fit-sanded-duck-carpenter-pants-dk0du336rsl?variant=45194598383804` inferred **USD** although it is the Canadian storefront priced in CAD ($61.00).
 
-**Root cause (verified against the live page).** `_extract_currency` (`services/scraper/base.py`) trusts the page's own metadata first. Dickies' Product JSON-LD says `"price": "61.0"` with `"priceCurrency": "USD"`, on the CAD storefront. The page's other data blocks say CAD, and the site's own Yotpo widget also says `USD`. The inference isn't buggy; the retailer's markup is wrong, so no on-page heuristic can be trusted here. (The plain-text `\bUSD\b` scan would also fire on the Yotpo block if the JSON-LD were absent.)
+**Root cause (verified against the live page).** `_extract_currency` (`services/scraper/base.py`) returns the first signal it finds, and checked the JSON-LD before anything else. Dickies' Product JSON-LD says `"price": "61.0", "priceCurrency": "USD"` (the shop's base currency), and a hidden `price_currency_code` span says USD too. The same page's Shopify scripts say CAD (`Shopify.currency = {"active":"CAD",...}`, `ShopifyAnalytics.meta.currency = 'CAD'`), and so do the variant JSON-LD offers (`CAD 61.00`) and the visible `$61.00`. The stored price was correct; only the label was wrong. A retailer's own markup can be wrong, so no heuristic is enough on its own.
 
-Two complementary fixes:
+**Two fixes shipped:**
 
-1. **Manual override (the reliable one).** The backend already accepts `currency` on create and update (`Literal["USD","CAD","KRW"]`, `items.py`), but the frontend has no picker: the add-item form doesn't ask for one, and the sheet shows only a `$`/`₩` symbol next to the target price. Add a currency select to the add form (default **auto**, meaning the scraper's inference) and to the sheet's edit mode. Changing it on an existing product only relabels the stored prices; it does not rescale them (the stored numbers are already in the retailer's own currency). Worth confirming during implementation that this is the wanted behaviour, and warning in the UI if not.
-2. **Locale signal in the inference.** The URL path carries an explicit locale on many storefronts (`/en-ca/`, `/fr-ca/`, `/en-us/`, `/ko-kr/`). Use it as a tie-break **before** the metadata, or only when the metadata conflicts with it. This must not break the existing case #45 protects (muddygeorge.com, a Canadian retailer on a plain `.com`, has no locale path, so the metadata and default still decide). Keep it narrow: a small locale-to-currency map for `-ca`, `-us` and `-kr`, not a general locale parser.
+1. **Shopify storefront currency as the first signal** (`base.py`). New `_shopify_currency()` reads `Shopify.currency = {"active": ...}` (falling back to `ShopifyAnalytics.meta.currency = '...'`) from the page's scripts and returns it if it is a supported currency; `_extract_currency` consults it before the meta tags and JSON-LD. An unsupported code (e.g. EUR) or a non-Shopify page falls through to the existing signals unchanged. A URL-locale map (`/en-ca/` etc.) was considered and dropped: the Shopify signal covers the same case more reliably, with less to maintain.
+2. **Manual override in the UI**, backed by the already-existing `currency` on the create and update APIs (no migration; `products.currency` is from `0014`). Frontend:
+   - New shared `components/ui/currency-toggle.tsx`: a segmented control with a sliding pill (12px labels, no hover background), used in two places. Built on shadcn Toggle Group (Base UI variant); the CLI's generated `cn` imports were switched to `@/lib/utils` and its extra `cn` package dependency reverted.
+   - **Add Item dialog:** Auto (default) / CAD / USD / KRW. Auto is frontend-only and is omitted from the request, so the first scrape infers as before; any other choice sets `product.currency` up front. The target price input shows a `$` or `₩` prefix once a currency is chosen. `ProductCreatePayload` gained `currency?`.
+   - **Sheet panel:** a Currency row (CAD / USD / KRW, no Auto, since the backend ignores a null on update) that edits the sheet draft like the Status switch. The sheet previews the draft currency (chart, target price and its CAD equivalent, listing prices) before Save; the table row keeps the saved value until Save. Dirty and save go through the existing `isProductDirty` / `saveProduct`, so currency rides in the same PATCH.
+   - **Relabel, not rescale:** changing a product's currency only changes the label. The stored amounts are already in the retailer's own currency, so nothing is converted. A "Relabels existing prices" note was built and then removed by choice.
+3. **Formatting:** `fmtPrice` and `fmtCadEquivalent` now use thousands separators for USD and CAD (`$296,820.00 USD`, `$422,664 CAD`), matching KRW.
 
 ### Why (context)
 
-A wrong currency mislabels every price, target and chart on the product, and gives the wrong FX-converted CAD equivalent (#45), so a price-drop alert can fire against the wrong number. Since a retailer's own markup can be wrong (proven here), the user needs a way to state the currency explicitly.
+A wrong currency mislabels every price, target and chart on the product, and gives the wrong FX-converted CAD equivalent (#45), so a price-drop alert's text can mislead. Since a retailer's own markup can be wrong (proven here), the user needs both a better inference and a way to state the currency explicitly.
 
 ### Acceptance criteria
 
-- [ ] The Dickies URL above infers CAD
-- [ ] The add-item form has a currency selector (auto / CAD / USD / KRW); an explicit choice overrides the inference, auto keeps today's behaviour
-- [ ] The sheet's edit mode can change a product's currency; the change relabels without rescaling stored prices
-- [ ] A locale path segment (`/en-ca/`, `/en-us/`, `/ko-kr/`) is honoured when the metadata conflicts with it
-- [ ] Regression fixture for the Dickies page; existing #45 fixtures (muddygeorge.com, goyowear.kr) still pass
+- [x] The Dickies URL above infers CAD (live-verified after rebuilding the backend and re-adding the item)
+- [x] The add-item form has a currency selector (Auto / CAD / USD / KRW); an explicit choice overrides inference, Auto keeps today's behaviour
+- [x] The sheet's edit mode can change a product's currency; the change relabels without rescaling stored prices, previews before Save, and saves with the sheet's Save
+- [x] Shopify's declared storefront currency is honoured when it conflicts with the JSON-LD (unit tests: Dickies-shaped page, analytics-only fallback, unsupported code falls through, non-Shopify script ignored)
+- [x] Existing #45 currency tests (muddygeorge.com, goyowear.kr and the rest) still pass (155 scraper tests)
+
+### Known limitations
+
+- A product that already inferred the wrong currency is not re-inferred (inference runs only while `currency` is null); fix it with the sheet picker, or delete and re-add it.
+- The Shopify signal only helps Shopify storefronts. Other retailers with wrong markup still need the manual picker.
+- No Auto in the sheet, and a currency can't be cleared back to undetected (the backend ignores null on update).
+- The sheet picker has no confirmation or warning that a currency change relabels rather than converts prices.
+- No frontend unit tests (#29): the toggle, draft and dirty logic and the format changes were checked by type-check, lint and manual use. The detection change has backend tests.

@@ -59,6 +59,9 @@ export interface ProductCreatePayload {
   // inferred from the first successful scrape.
   name?: string;
   target_price: number;
+  // Issue #63 — explicit override; omitted lets the first scrape infer it
+  // (same "manual always wins" rule as ProductUpdatePayload.currency).
+  currency?: Currency;
   // Zero or more listing URLs, created in the same request (bulk, not
   // chained) — backend probes retailer/scraper_type for each concurrently
   // (bounded). A duplicate or unscrapable URL doesn't fail the whole

@@ -852,6 +852,63 @@ def test_extract_currency_metadata_wins_over_kr_tld() -> None:
     assert _extract_currency(_soup(html), "https://example.kr/product") == "USD"
 
 
+# Issue #63 — Shopify's declared storefront currency.
+
+def test_extract_currency_dickies_shopify_cad_beats_jsonld_usd() -> None:
+    # Trimmed from the real dickies.com/en-ca page: the Product JSON-LD
+    # carries the shop's base currency (USD) and a hidden microdata span says
+    # USD too, but Shopify's own scripts say the storefront presents CAD.
+    html = textwrap.dedent(
+        """
+        <html><head>
+        <script type="application/ld+json">
+        {"@context": "https://schema.org", "@type": "Product", "name": "Carpenter Pants",
+         "offers": {"@type": "Offer", "price": "61.0", "priceCurrency": "USD"}}
+        </script>
+        <script>
+          var Shopify = Shopify || {};
+          Shopify.currency = {"active":"CAD","rate":"1.4406707"};
+        </script>
+        </head><body>
+        <span class="price">61.00</span><span class="price_currency_code">USD</span>
+        </body></html>
+        """
+    )
+    assert _extract_currency(_soup(html), "https://www.dickies.com/en-ca/products/pants") == "CAD"
+
+
+def test_extract_currency_shopify_analytics_meta_currency() -> None:
+    html = textwrap.dedent(
+        """
+        <html><head><script>
+          window.ShopifyAnalytics = window.ShopifyAnalytics || {};
+          window.ShopifyAnalytics.meta = window.ShopifyAnalytics.meta || {};
+          window.ShopifyAnalytics.meta.currency = 'USD';
+        </script></head><body>Price: $52.00</body></html>
+        """
+    )
+    assert _extract_currency(_soup(html), "https://example.com/products/x") == "USD"
+
+
+def test_extract_currency_shopify_unsupported_currency_falls_through() -> None:
+    html = textwrap.dedent(
+        """
+        <html><head>
+        <script type="application/ld+json">
+        {"@type": "Product", "offers": {"price": "52.00", "priceCurrency": "KRW"}}
+        </script>
+        <script>Shopify.currency = {"active":"EUR","rate":"0.65"};</script>
+        </head></html>
+        """
+    )
+    assert _extract_currency(_soup(html), "https://example.com/products/x") == "KRW"
+
+
+def test_extract_currency_non_shopify_script_mentioning_currency_is_ignored() -> None:
+    html = '<html><head><script>var cfg = {"currency": "USD"};</script></head><body>Price: $52.00</body></html>'
+    assert _extract_currency(_soup(html), "https://muddygeorge.com/products/cayl-cap") == "CAD"
+
+
 # ---------------------------------------------------------------------------
 # _run_hierarchy attaches site_name/product_title independently of which
 # price method wins (issue #44)

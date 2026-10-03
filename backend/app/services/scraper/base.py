@@ -414,7 +414,8 @@ def _extract_product_title(soup: BeautifulSoup, jsonld_scripts: list[Any] | None
     return None
 
 
-# Issue #45 — currency detection. Priority: explicit metadata/symbol for
+# Issue #45 — currency detection. Priority: a Shopify storefront's own
+# declared currency (#63, below) -> explicit metadata/symbol for
 # USD/KRW -> .kr TLD for KRW -> CAD default. Deliberately *not* symmetric
 # between USD and CAD: an earlier draft TLD-split bare "$" into CAD (.ca)
 # vs USD (else), but the real motivating counterexample (muddygeorge.com,
@@ -427,10 +428,39 @@ def _extract_product_title(soup: BeautifulSoup, jsonld_scripts: list[Any] | None
 # CAD, off by ~1000x in magnitude terms.
 _SUPPORTED_CURRENCIES = {"USD", "CAD", "KRW"}
 
+# Issue #63 — a Shopify storefront states the currency it is actually
+# presenting to the shopper in its own page scripts, e.g.
+# `Shopify.currency = {"active":"CAD","rate":"1.44"}`. That is more reliable
+# than a theme's JSON-LD, which can carry the shop's base currency instead:
+# dickies.com/en-ca prices in CAD, but its Product JSON-LD says USD.
+_SHOPIFY_CURRENCY_PATTERNS = (
+    re.compile(r"""Shopify\.currency\s*=\s*\{[^}]*["']active["']\s*:\s*["']([A-Za-z]{3})["']"""),
+    re.compile(r"""ShopifyAnalytics\.meta\.currency\s*=\s*["']([A-Za-z]{3})["']"""),
+)
+
+
+def _shopify_currency(soup: BeautifulSoup) -> Literal["USD", "CAD", "KRW"] | None:
+    """The storefront currency a Shopify page declares, if it is one we
+    support; None for non-Shopify pages or an unsupported currency (the
+    caller then falls through to the other signals)."""
+    for script in soup.find_all("script"):
+        text = script.get_text()
+        if "Shopify" not in text:
+            continue
+        for pattern in _SHOPIFY_CURRENCY_PATTERNS:
+            match = pattern.search(text)
+            if match and match.group(1).upper() in _SUPPORTED_CURRENCIES:
+                return match.group(1).upper()  # type: ignore[return-value]
+    return None
+
 
 def _extract_currency(
     soup: BeautifulSoup, url: str, jsonld_scripts: list[Any] | None = None
 ) -> Literal["USD", "CAD", "KRW"]:
+    shopify = _shopify_currency(soup)
+    if shopify:
+        return shopify
+
     tag = soup.find("meta", property="og:price:currency") or soup.find(
         "meta", property="product:price:currency"
     )

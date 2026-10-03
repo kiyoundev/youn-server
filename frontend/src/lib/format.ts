@@ -18,9 +18,11 @@ export function formatStorage(tb: number | undefined): string {
 // sites.
 export function fmtPrice(amount: number, currency: string | null): string {
   if (currency === "KRW") return `₩${Math.round(amount).toLocaleString("en-US")}`;
-  if (currency === "USD") return `$${amount.toFixed(2)} USD`;
-  // CAD or null (unresolved) — matches today's exact pre-#45 output.
-  return `$${amount.toFixed(2)}`;
+  // Two decimals with thousands separators ($1,234.50), same grouping KRW gets.
+  const twoDecimals = amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (currency === "USD") return `$${twoDecimals} USD`;
+  // CAD or null (unresolved) — same output as pre-#45, now with separators.
+  return `$${twoDecimals}`;
 }
 
 // Issue #45 — converts a native-currency amount to CAD using cached FX
@@ -45,5 +47,5 @@ export function toCad(amount: number, currency: string | null, rates: Record<str
 export function fmtCadEquivalent(amount: number, currency: string | null, rates: Record<string, number>): string | null {
   if (currency === null || currency === "CAD") return null;
   const cad = toCad(amount, currency, rates);
-  return cad === null ? null : `$${cad.toFixed(0)} CAD`;
+  return cad === null ? null : `$${Math.round(cad).toLocaleString("en-US")} CAD`;
 }
