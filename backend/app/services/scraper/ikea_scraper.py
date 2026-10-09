@@ -53,6 +53,11 @@ class IKEAScraper(BaseScraper):
                     price=None, status="error", error_reason="availability data missing from IKEA response"
                 )
             data = json.loads(tag.string)
+            # IKEA now wraps the payload as {"0": {"loaderData": {...}}}
+            # (hydration-island format); older responses had it at the top
+            # level. Accept both so a format flip doesn't break every item.
+            if "product" not in data:
+                data = data.get("0", {}).get("loaderData", data)
 
             product = data["product"]
             raw_currency = product.get("currencyCode")

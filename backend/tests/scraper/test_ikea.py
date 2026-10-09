@@ -185,3 +185,17 @@ async def test_numeric_query_param_does_not_get_mistaken_for_item_number() -> No
     result = await IKEAScraper().get_price(url_with_numeric_param)
 
     assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapped_loader_data_payload_is_unwrapped() -> None:
+    """IKEA's hydration payload moved to {"0": {"loaderData": {...}}} — the
+    old top-level lookup raised KeyError: 'product' for every item."""
+    payload = {"0": {"loaderData": _payload(store={"isOutOfStock": False})}}
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert result.status == "ok"
+    assert result.price == 49.99

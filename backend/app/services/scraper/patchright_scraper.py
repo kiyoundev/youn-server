@@ -284,6 +284,18 @@ class AmazonCAScraper(PatchrightScraper):
         except Exception:
             return None
 
+    async def _is_out_of_stock(self, page) -> bool:
+        try:
+            return await page.evaluate(r"""
+                () => {
+                    if (document.querySelector('#outOfStock')) return true;
+                    const a = document.querySelector('#availability');
+                    return !!a && /currently unavailable/i.test(a.textContent);
+                }
+            """)
+        except Exception:
+            return False
+
     async def get_price(self, url: str) -> ScraperResult:
         try:
             # Same lazy-launch call as the base class — explicit PatchrightScraper
@@ -312,6 +324,10 @@ class AmazonCAScraper(PatchrightScraper):
                         # since that attempt's whole result gets discarded
                         # (review finding).
                         title = await self._find_product_title(page) if price is not None else None
+                        # No price + Amazon's own "Currently unavailable"
+                        # block = genuinely out of stock, not a failed load
+                        # — report it instead of burning every retry.
+                        is_oos = price is None and await self._is_out_of_stock(page)
                     finally:
                         await page.close()
                     if price is not None:
@@ -322,6 +338,8 @@ class AmazonCAScraper(PatchrightScraper):
                         # own hardcoded currency same as its own title read
                         # above.
                         return ScraperResult(price=price, status="ok", product_title=title, currency="CAD")
+                    if is_oos:
+                        return ScraperResult(price=None, status="oos", currency="CAD")
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
             _log.warning("AmazonCAScraper exhausted retries for %s", url)
