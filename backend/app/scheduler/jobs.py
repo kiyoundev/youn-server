@@ -239,6 +239,18 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 await session.commit()
                 return
 
+            # Issue #61 — row lock on the listing, then re-read: the object
+            # loaded at the top of this function predates the scrape, so its
+            # last_scrape_status may already be stale if a manual and a
+            # scheduled scrape overlapped. Waits here for the other
+            # transaction to commit, then sees its "ok" and skips the event.
+            # Must precede every mutation below (refresh discards pending
+            # changes) and the Product lock further down (lock order is
+            # listing -> product, so two scrapes of one product's different
+            # listings can't wait on each other in a cycle).
+            await session.refresh(listing, with_for_update=True)
+            was_oos = listing.last_scrape_status == "oos"
+
             session.add(PriceHistory(watch_item_id=listing.id, price=scrape.price))
             listing.last_price = scrape.price
             listing.last_scrape_status = "ok"
@@ -314,6 +326,26 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             winning = min(available_listings, key=lambda l: l.last_price)
             cheapest = winning.last_price
 
+            # Issue #61 — restock on an oos -> ok transition only (a first
+            # scrape, error -> ok, ok -> ok and repeated oos never reach
+            # here with was_oos). Independent of the target price and of the
+            # PRICE_DROP check below; both can fire from one scrape. Added to
+            # the session now so whichever commit branch runs persists it.
+            restock_event: Event | None = None
+            if was_oos:
+                restock_event = Event(
+                    type="RESTOCK",
+                    payload={
+                        "product_id": product.id,
+                        "listing_id": listing.id,
+                        "retailer": listing.retailer,
+                        "price": scrape.price,
+                        "url": listing.url,
+                    },
+                    status="pending",
+                )
+                session.add(restock_event)
+
             if cheapest <= product.target_price and product.alerted_at is None:
                 event = Event(
                     type="PRICE_DROP",
@@ -344,6 +376,12 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 _log.info("product %d (%s) re-armed (price recovered)", product.id, product.name)
             else:
                 await session.commit()
+
+            # Queued after the commit above, so on a double event the
+            # PRICE_DROP (queued inside its branch) goes out first.
+            if restock_event is not None:
+                await queue.put(restock_event.id)
+                _log.info("RESTOCK: listing %d (%s) @ %.2f", listing.id, listing.retailer, scrape.price)
 
             # Unconditional — fires on every successful scrape regardless of price
             # change, as a sibling to the alert-only Event/queue write above, not

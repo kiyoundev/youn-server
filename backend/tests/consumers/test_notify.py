@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -129,3 +130,85 @@ async def test_format_price_drop_raises_when_product_not_found():
 
     with pytest.raises(ValueError, match="Product 11 not found"):
         await notify._format_price_drop(event, session)
+
+
+def _restock_session(**product_fields) -> SimpleNamespace:
+    session = SimpleNamespace()
+
+    async def _get(model, row_id):
+        return SimpleNamespace(id=row_id, **product_fields)
+
+    session.get = _get
+    return session
+
+
+def _restock_event(**payload_overrides) -> SimpleNamespace:
+    payload = {
+        "product_id": 11,
+        "listing_id": 22,
+        "retailer": "IKEA",
+        "price": 89.99,
+        "url": "https://example.com/item",
+    }
+    payload.update(payload_overrides)
+    return SimpleNamespace(id=7, type="RESTOCK", payload=payload)
+
+
+@pytest.mark.asyncio
+async def test_format_restock_message_url_and_normal_priority():
+    session = _restock_session(name="Shoes", target_price=50.0, currency=None)
+
+    title, body, url, priority = await notify._format_restock(_restock_event(), session)
+
+    assert title == "Back in Stock: Shoes"
+    assert body == "Now $89.99 at IKEA"
+    assert url == "https://example.com/item"
+    assert priority == notify._PRIORITY_NORMAL
+
+
+@pytest.mark.asyncio
+async def test_format_restock_has_no_target_in_body():
+    """Restock is independent of the target price (issue #61)."""
+    session = _restock_session(name="Shoes", target_price=100.0, currency=None)
+
+    _, body, _, _ = await notify._format_restock(_restock_event(), session)
+
+    assert "target" not in body.lower()
+
+
+@pytest.mark.asyncio
+async def test_format_restock_uses_product_currency():
+    session = _restock_session(name="Endure Jacket", target_price=300000.0, currency="KRW")
+
+    _, body, _, _ = await notify._format_restock(_restock_event(price=388000.0, retailer="GOYOWEAR"), session)
+
+    assert body == "Now ₩388,000 at GOYOWEAR"
+    assert "$" not in body
+
+
+@pytest.mark.asyncio
+async def test_format_restock_raises_when_product_not_found():
+    session = SimpleNamespace()
+
+    async def _get(model, row_id):
+        return None
+
+    session.get = _get
+
+    with pytest.raises(ValueError, match="Product 11 not found"):
+        await notify._format_restock(_restock_event(), session)
+
+
+@pytest.mark.asyncio
+async def test_handle_routes_restock_to_send_alert():
+    session = _restock_session(name="Shoes", target_price=50.0, currency=None)
+
+    with patch.object(notify, "send_alert", new=AsyncMock()) as send_alert:
+        await notify.handle(_restock_event(), session)
+
+    send_alert.assert_awaited_once_with(
+        "Back in Stock: Shoes",
+        "Now $89.99 at IKEA",
+        "https://example.com/item",
+        notify._PRIORITY_NORMAL,
+    )

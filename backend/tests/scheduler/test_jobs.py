@@ -1,7 +1,7 @@
 import asyncio
 import datetime as dt
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from app.scheduler import jobs
@@ -30,6 +30,14 @@ class _AsyncCM:
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
+
+
+def _mock_session() -> MagicMock:
+    """process_item awaits session.refresh(listing, with_for_update=True)
+    (issue #61's row lock on the listing); a bare MagicMock isn't awaitable."""
+    session = MagicMock()
+    session.refresh = AsyncMock()
+    return session
 
 
 def _listing(
@@ -105,7 +113,7 @@ def _product_result(product) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_poll_prices_processes_all_active_items() -> None:
-    session = MagicMock()
+    session = _mock_session()
     session.execute = AsyncMock(return_value=_rows_result([(1, 1), (2, 1), (3, 1)]))
 
     with (
@@ -134,7 +142,7 @@ async def test_poll_prices_closes_browser_once_after_full_cycle() -> None:
     (3, 1)] rows below), so they scrape concurrently under one gather() —
     call_order can't be asserted as a strict sequence any more (#48), only
     that "close" is last and every "process:N" happened before it."""
-    session = MagicMock()
+    session = _mock_session()
     session.execute = AsyncMock(return_value=_rows_result([(1, 1), (2, 1), (3, 1)]))
 
     call_order: list[str] = []
@@ -186,7 +194,7 @@ async def test_poll_prices_continues_when_item_processing_errors() -> None:
     escape), so this is really exercising that backstop + gather()'s
     all-listings-run-regardless-of-one-failing behavior now, not
     poll_prices' own loop."""
-    session = MagicMock()
+    session = _mock_session()
     session.execute = AsyncMock(return_value=_rows_result([(1, 1), (2, 1), (3, 1)]))
 
     process = AsyncMock(side_effect=[None, RuntimeError("boom"), None])
@@ -210,7 +218,7 @@ async def test_process_item_writes_history_and_price_drop_event() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
@@ -263,7 +271,7 @@ async def test_process_item_fills_retailer_when_still_hostname_fallback() -> Non
     listing = _listing(item_id=7, product_id=1, retailer="Example")
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -287,7 +295,7 @@ async def test_process_item_does_not_overwrite_manually_edited_retailer() -> Non
     listing = _listing(item_id=7, product_id=1, retailer="My Custom Name")
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -308,7 +316,7 @@ async def test_process_item_fills_product_name_when_null() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, name=None, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -329,7 +337,7 @@ async def test_process_item_does_not_overwrite_existing_product_name() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, name="User's Own Name", target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -350,7 +358,7 @@ async def test_process_item_fills_product_currency_when_null() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, currency=None, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -371,7 +379,7 @@ async def test_process_item_does_not_overwrite_existing_product_currency() -> No
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, currency="USD", target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -400,7 +408,7 @@ async def test_process_item_marks_listing_in_flight_during_scrape() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -431,7 +439,7 @@ async def test_process_item_clears_in_flight_even_when_scraper_raises() -> None:
     permanently stuck showing "processing"."""
     listing = _listing(item_id=7, product_id=1)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.execute = AsyncMock(side_effect=[_scalar_result(True)])
 
@@ -450,7 +458,7 @@ async def test_process_item_clears_in_flight_even_when_scraper_raises() -> None:
 async def test_process_item_clears_in_flight_on_oos() -> None:
     listing = _listing(item_id=7, product_id=1)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.execute = AsyncMock(side_effect=[_scalar_result(True)])
@@ -471,7 +479,7 @@ async def test_process_item_blocks_duplicate_drop_when_alerted() -> None:
     listing = _listing(item_id=8, product_id=1)
     product = _product(product_id=1, target_price=100.0, alerted_at=alerted)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -496,7 +504,7 @@ async def test_process_item_recovery_clears_alerted_at() -> None:
     listing = _listing(item_id=9, product_id=1)
     product = _product(product_id=1, target_price=100.0, alerted_at=alerted)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -531,7 +539,7 @@ async def test_process_item_excludes_oos_listing_stale_price_from_cheapest() -> 
     )
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=scraped)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -566,7 +574,7 @@ async def test_process_item_recovery_not_blocked_by_stale_oos_sibling() -> None:
     )
     product = _product(product_id=1, target_price=100.0, alerted_at=alerted)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=scraped)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -597,7 +605,7 @@ async def test_process_item_unrelated_active_listing_does_not_incorrectly_rearm(
     bestbuy = _listing(item_id=31, product_id=1, retailer="bestbuy_ca", last_price=340.0, last_scrape_status="ok")
     product = _product(product_id=1, target_price=350.0, alerted_at=alerted)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=amazon)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -619,7 +627,7 @@ async def test_process_item_unrelated_active_listing_does_not_incorrectly_rearm(
 async def test_process_item_persists_scrape_status_on_oos_or_error(status: str) -> None:
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -644,7 +652,7 @@ async def test_process_item_persists_price_on_oos_when_scraper_provides_one() ->
     attributes — a real price alongside "oos" is stored, not discarded."""
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -669,7 +677,7 @@ async def test_process_item_oos_with_no_price_preserves_prior_last_price() -> No
     listing's prior stale-but-last-known price."""
     listing = _listing(item_id=10, last_price=129.0)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -693,7 +701,7 @@ async def test_process_item_persists_restock_at_on_oos() -> None:
     listing alongside last_scrape_status, not dropped."""
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -720,7 +728,7 @@ async def test_process_item_clears_restock_at_on_successful_scrape() -> None:
     listing.restock_at = "Sep 22, 2026–Sep 29, 2026"  # stale, from a prior OOS scrape
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
@@ -745,7 +753,7 @@ async def test_process_item_marks_ok_status_with_none_price_as_error() -> None:
     own reason, same as the other silent no-price path."""
     listing = _listing(item_id=10, last_scrape_status="ok", last_price=129.0)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -774,7 +782,7 @@ async def test_process_item_persists_error_reason_and_counts_as_a_check() -> Non
     already says it didn't work."""
     listing = _listing(item_id=10, last_scrape_status="ok")
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -800,7 +808,7 @@ async def test_process_item_error_without_reason_still_gets_non_empty_reason() -
     leave the listing with an error status and a null reason."""
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -822,7 +830,7 @@ async def test_process_item_oos_clears_prior_failure_and_sets_last_checked_at() 
     failure and counts as a fresh check (issue #53)."""
     listing = _listing(item_id=10, last_scrape_status="error", last_scrape_error="boom")
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -845,7 +853,7 @@ async def test_process_item_ok_clears_prior_failure_and_sets_last_checked_at() -
     listing = _listing(item_id=7, product_id=1, last_scrape_status="error", last_scrape_error="boom")
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
@@ -868,7 +876,7 @@ async def test_process_item_broadcasts_after_successful_scrape() -> None:
     listing = _listing(item_id=7, product_id=1)
     product = _product(product_id=1, target_price=100.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -884,7 +892,8 @@ async def test_process_item_broadcasts_after_successful_scrape() -> None:
     ):
         await jobs.process_item(7, router, queue)
 
-    broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})
+    # "started" (issue #51) + completion, both for the scraped listing
+    assert broadcast_mock.call_args_list == [call({"product_id": 1, "listing_id": 7})] * 2
 
 
 @pytest.mark.asyncio
@@ -896,7 +905,7 @@ async def test_process_item_broadcast_uses_scraped_listing_not_cheapest_winner()
     cheaper_sibling = _listing(item_id=8, product_id=1, retailer="bestbuy_ca", last_price=50.0, last_scrape_status="ok")
     product = _product(product_id=1, target_price=200.0, alerted_at=None)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=scraped)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -912,15 +921,16 @@ async def test_process_item_broadcast_uses_scraped_listing_not_cheapest_winner()
     ):
         await jobs.process_item(7, router, queue)
 
-    broadcast_mock.assert_called_once_with({"product_id": 1, "listing_id": 7})  # not 8
+    # started + completion, both for listing 7 (the scraped one), not 8
+    assert broadcast_mock.call_args_list == [call({"product_id": 1, "listing_id": 7})] * 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["oos", "error"])
-async def test_process_item_does_not_broadcast_on_oos_or_error(status: str) -> None:
+async def test_process_item_does_not_broadcast_completion_on_oos_or_error(status: str) -> None:
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -936,14 +946,15 @@ async def test_process_item_does_not_broadcast_on_oos_or_error(status: str) -> N
     ):
         await jobs.process_item(10, router, queue)
 
-    broadcast_mock.assert_not_called()
+    # only the "started" broadcast (issue #51) — no completion broadcast
+    assert broadcast_mock.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_process_item_does_not_broadcast_when_ok_status_has_none_price() -> None:
+async def test_process_item_does_not_broadcast_completion_when_ok_status_has_none_price() -> None:
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
     session.add = MagicMock()
@@ -959,7 +970,8 @@ async def test_process_item_does_not_broadcast_when_ok_status_has_none_price() -
     ):
         await jobs.process_item(10, router, queue)
 
-    broadcast_mock.assert_not_called()
+    # only the "started" broadcast (issue #51) — no completion broadcast
+    assert broadcast_mock.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -968,7 +980,7 @@ async def test_process_item_does_not_broadcast_for_an_inactive_product() -> None
     bail is now a column-only Product.active check, not listing.active."""
     listing = _listing(item_id=10)
 
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.execute = AsyncMock(return_value=_scalar_result(False))
 
@@ -1042,7 +1054,7 @@ async def test_dispatch_first_scrapes_does_not_close_when_other_scrape_still_in_
 @pytest.mark.asyncio
 async def test_bounded_process_item_marks_error_on_unhandled_exception() -> None:
     listing = _listing(item_id=7, last_scrape_status=None)
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
 
@@ -1066,7 +1078,7 @@ async def test_bounded_process_item_does_not_overwrite_already_persisted_status(
     trailing broadcast() call) must not stomp a real result back to
     'error'."""
     listing = _listing(item_id=7, last_scrape_status="ok")
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=listing)
     session.commit = AsyncMock()
 
@@ -1084,7 +1096,7 @@ async def test_bounded_process_item_does_not_overwrite_already_persisted_status(
 
 @pytest.mark.asyncio
 async def test_bounded_process_item_missing_listing_does_not_raise() -> None:
-    session = MagicMock()
+    session = _mock_session()
     session.get = AsyncMock(return_value=None)
     session.commit = AsyncMock()
 
@@ -1146,3 +1158,172 @@ async def test_poll_stocks_skips_when_lock_already_held() -> None:
 
     finnhub.cached_tickers.assert_not_called()
     finnhub.check_threshold.assert_not_awaited()
+
+
+# --- Issue #61: RESTOCK on an oos -> ok transition ---------------------------
+
+
+async def _run_scrape(
+    listing: SimpleNamespace,
+    product: SimpleNamespace,
+    *,
+    result: ScraperResult,
+    siblings: list[SimpleNamespace] | None = None,
+) -> tuple[MagicMock, list, list[int]]:
+    """Runs one process_item and returns (session, Event rows added to the
+    session, event ids put on the queue). Event ids are assigned in add()
+    order from 100, standing in for the DB's autoincrement."""
+    session = _mock_session()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    next_id = iter(range(100, 200))
+
+    def _add(obj):
+        if obj.__class__.__name__ == "Event":
+            obj.id = next(next_id)
+
+    session.add = MagicMock(side_effect=_add)
+    session.execute = AsyncMock(
+        side_effect=[
+            _scalar_result(True),
+            _product_result(product),
+            _active_listings_result(siblings or [listing]),
+        ]
+    )
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=result)
+
+    queue = asyncio.Queue()
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(listing.id, router, queue)
+
+    events = [c.args[0] for c in session.add.call_args_list if c.args[0].__class__.__name__ == "Event"]
+    queued = []
+    while not queue.empty():
+        queued.append(queue.get_nowait())
+    return session, events, queued
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_to_ok_inserts_one_restock_event_and_queues_it() -> None:
+    listing = _listing(item_id=7, retailer="IKEA", last_scrape_status="oos")
+    product = _product(target_price=50.0)  # price below is above target -> no PRICE_DROP
+
+    _, events, queued = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
+
+    assert [e.type for e in events] == ["RESTOCK"]
+    assert events[0].status == "pending"
+    assert events[0].payload == {
+        "product_id": 1,
+        "listing_id": 7,
+        "retailer": "IKEA",
+        "price": 120.0,
+        "url": "https://example.com/item-7",
+    }
+    assert queued == [events[0].id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous", [None, "ok", "error"])
+async def test_process_item_ok_after_non_oos_status_inserts_no_restock(previous: str | None) -> None:
+    """First-ever scrape (None), ok -> ok and error -> ok never restock."""
+    listing = _listing(item_id=7, last_scrape_status=previous)
+    product = _product(target_price=50.0)
+
+    _, events, queued = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
+
+    assert events == []
+    assert queued == []
+
+
+@pytest.mark.asyncio
+async def test_process_item_repeated_oos_inserts_no_restock() -> None:
+    listing = _listing(item_id=7, last_scrape_status="oos")
+    product = _product(target_price=50.0)
+
+    _, events, queued = await _run_scrape(listing, product, result=ScraperResult(price=None, status="oos"))
+
+    assert events == []
+    assert queued == []
+    assert listing.last_scrape_status == "oos"
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_then_error_then_ok_inserts_no_restock() -> None:
+    """Known limitation, by decision (issue #61): the error overwrites
+    last_scrape_status, so the oos -> ok transition is no longer visible."""
+    listing = _listing(item_id=7, last_scrape_status="oos")
+    product = _product(target_price=50.0)
+
+    _, events, _ = await _run_scrape(
+        listing, product, result=ScraperResult(price=None, status="error", error_reason="boom")
+    )
+    assert events == []
+    assert listing.last_scrape_status == "error"
+
+    _, events, queued = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
+
+    assert events == []
+    assert queued == []
+
+
+@pytest.mark.asyncio
+async def test_process_item_restock_above_target_fires_restock_only() -> None:
+    listing = _listing(item_id=7, last_scrape_status="oos")
+    product = _product(target_price=100.0)
+
+    _, events, _ = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
+
+    assert [e.type for e in events] == ["RESTOCK"]
+    assert product.alerted_at is None
+
+
+@pytest.mark.asyncio
+async def test_process_item_restock_at_or_below_target_fires_both_events() -> None:
+    """Restock is independent of the target price (issue #61): both events
+    fire from one scrape, and the PRICE_DROP push is queued first."""
+    listing = _listing(item_id=7, last_scrape_status="oos")
+    product = _product(target_price=100.0)
+
+    _, events, queued = await _run_scrape(listing, product, result=ScraperResult(price=90.0, status="ok"))
+
+    assert sorted(e.type for e in events) == ["PRICE_DROP", "RESTOCK"]
+    by_type = {e.type: e for e in events}
+    assert queued == [by_type["PRICE_DROP"].id, by_type["RESTOCK"].id]
+    assert product.alerted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_process_item_restock_fires_even_when_sibling_listing_is_ok() -> None:
+    """Per listing, not per product: another retailer being in stock doesn't
+    suppress this one's restock, and the payload is this listing's own."""
+    restocked = _listing(item_id=7, retailer="IKEA", last_scrape_status="oos")
+    sibling = _listing(item_id=8, retailer="amazon_ca", last_price=50.0, last_scrape_status="ok")
+    product = _product(target_price=10.0)
+
+    _, events, _ = await _run_scrape(
+        restocked,
+        product,
+        result=ScraperResult(price=120.0, status="ok"),
+        siblings=[restocked, sibling],
+    )
+
+    assert [e.type for e in events] == ["RESTOCK"]
+    assert events[0].payload["listing_id"] == 7
+    assert events[0].payload["price"] == 120.0  # not the sibling's cheaper 50.0
+
+
+@pytest.mark.asyncio
+async def test_process_item_locks_listing_row_before_reading_previous_status() -> None:
+    """The duplicate-send guard (issue #61), unit-asserted like #48's: a real
+    race needs Postgres serializing two transactions, which a mock can't
+    show (see the live-verification step). What's verifiable here:
+    process_item refreshes the listing under FOR UPDATE, once, before the
+    Product lock."""
+    listing = _listing(item_id=7, last_scrape_status="oos")
+    product = _product(target_price=50.0)
+
+    session, _, _ = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
+
+    session.refresh.assert_awaited_once_with(listing, with_for_update=True)

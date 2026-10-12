@@ -3218,7 +3218,7 @@ Reported: Amazon shows both new and used offers, and the scraper doesn't disting
 
 ---
 
-## [ ] Issue #61 — Push Notification on Restock (Out-of-Stock → In-Stock)
+## [x] Issue #61 — Push Notification on Restock (Out-of-Stock → In-Stock)
 
 **Type:** feat / AFK
 **Estimate:** ~3h
@@ -3239,11 +3239,11 @@ When a listing that was `"oos"` becomes available again (its next scrape returns
 
 ### Acceptance criteria
 
-- [ ] `oos → ok` inserts one `RESTOCK` event and one push is sent, with product, retailer and current price
-- [ ] No event on a first scrape, repeated `"oos"`, `error → ok`, or `ok → ok`
-- [ ] Works for manual and scheduled scrapes without duplicate sends
-- [ ] Test coverage in `test_jobs.py` for each transition
-- [ ] Live-verified with an IKEA listing (or a simulated `oos → ok` flip)
+- [x] `oos → ok` inserts one `RESTOCK` event and one push is sent, with product, retailer and current price
+- [x] No event on a first scrape, repeated `"oos"`, `error → ok`, or `ok → ok`
+- [x] Works for manual and scheduled scrapes without duplicate sends
+- [x] Test coverage in `test_jobs.py` for each transition
+- [x] Live-verified with an IKEA listing (or a simulated `oos → ok` flip)
 
 ---
 

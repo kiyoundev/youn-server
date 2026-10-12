@@ -16,6 +16,8 @@ _PRIORITY_HIGH = 1
 async def handle(event: Event, session: AsyncSession) -> None:
     if event.type == "PRICE_DROP":
         title, body, url, priority = await _format_price_drop(event, session)
+    elif event.type == "RESTOCK":
+        title, body, url, priority = await _format_restock(event, session)
     elif event.type == "STOCK_THRESHOLD":
         title, body, url, priority = _format_stock_threshold(event)
     else:
@@ -42,6 +44,25 @@ async def _format_price_drop(
     price = format_price(payload["price"], product.currency)
     target = format_price(product.target_price, product.currency)
     body = f"Now {price} at {payload['retailer']} (target {target})"
+    url: str | None = payload.get("url")
+    return title, body, url, _PRIORITY_NORMAL
+
+
+async def _format_restock(
+    event: Event, session: AsyncSession
+) -> tuple[str, str, str | None, int]:
+    payload = event.payload
+    product = await session.get(Product, payload["product_id"])
+    if product is None:
+        raise ValueError(
+            f"Product {payload['product_id']} not found for event {event.id}"
+        )
+    title = f"Back in Stock: {product.name}"
+    # Independent of the target price (issue #61), so unlike
+    # _format_price_drop there's no target in the body. Native currency,
+    # same as price drops.
+    price = format_price(payload["price"], product.currency)
+    body = f"Now {price} at {payload['retailer']}"
     url: str | None = payload.get("url")
     return title, body, url, _PRIORITY_NORMAL
 
