@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.scraper.result import ScraperResult
-from app.services.scraper.router import RetailerRouter, detect_scraper_type
+from app.services.scraper.router import RetailerRouter, _derive_retailer, detect_scraper_type
 
 OK = ScraperResult(price=99.99, status="ok")
 OOS = ScraperResult(price=None, status="oos")
@@ -131,3 +131,16 @@ async def test_detect_scraper_type_raises_when_both_fail() -> None:
         MockPW.return_value.get_price = AsyncMock(return_value=ERR)
         with pytest.raises(ValueError):
             await detect_scraper_type(UNKNOWN_URL)
+
+
+@pytest.mark.parametrize(
+    "hostname, expected",
+    [
+        ("ikea.com", "IKEA"),
+        ("29cm.co.kr", "29CM"),
+        ("amazon.ca", "Amazon"),
+        ("walmart.ca", "Walmart"),
+    ],
+)
+def test_derive_retailer_display_name(hostname: str, expected: str) -> None:
+    assert _derive_retailer(hostname) == expected

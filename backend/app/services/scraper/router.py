@@ -18,10 +18,12 @@ RETAILER_MAP: dict[str, type[BaseScraper]] = {
 # 셀렉트샵 29CM") or Hangul brand name (무신사) rather than a short display
 # name. amazon.ca needs no entry — "amazon.ca" -> "Amazon" falls out of the
 # generic TLD strip below. Hostnames not registered here (or in RETAILER_MAP)
-# keep the generic (TLD-stripped) form.
+# keep the generic (TLD-stripped) form. Brands written in capitals also need
+# an entry: the fallback's .capitalize() would label ikea.com "Ikea".
 RETAILER_DISPLAY_NAMES: dict[str, str] = {
     "29cm.co.kr": "29CM",
     "musinsa.com": "Musinsa",
+    "ikea.com": "IKEA",
 }
 
 # Single-segment TLDs common enough across tracked retailers' storefronts
