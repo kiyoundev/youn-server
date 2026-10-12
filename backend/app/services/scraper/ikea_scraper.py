@@ -7,8 +7,9 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from app.core.config import settings
 from app.services.scraper.base import USER_AGENTS, BaseScraper, _build_headers, _describe_exception
-from app.services.scraper.config import HTTP_TIMEOUT_SECONDS, IKEA_STORE_ID
+from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
 from app.services.scraper.result import ScraperResult
 
 _log = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class IKEAScraper(BaseScraper):
 
         fragment_url = (
             "https://www.ikea.com/ca/en/lower-funnel-fragments/"
-            f"product-availability/?itemNo={item_no}&inline"
+            f"product-availability/?itemNo={item_no}&inline&storeId={settings.ikea_store_id}"
         )
         try:
             ua = random.choice(USER_AGENTS)
@@ -62,19 +63,29 @@ class IKEAScraper(BaseScraper):
             product = data["product"]
             raw_currency = product.get("currencyCode")
             currency = raw_currency if raw_currency in _VALID_CURRENCIES else None
-            stores = data["availabilityResponse"]["availability"]["stores"]
-            store = stores.get(IKEA_STORE_ID)
+            availability = data["availabilityResponse"]["availability"]
+            store = availability["stores"].get(settings.ikea_store_id)
 
             price = float(product["price"])
 
-            if store and store.get("isOutOfStock"):
+            if store is not None:
+                out_of_stock = bool(store.get("isOutOfStock"))
+            else:
+                # Store missing even though storeId was sent — fall back to
+                # IKEA's own top-level flags rather than assuming in stock.
+                out_of_stock = bool(
+                    availability.get("isSoldOut")
+                    or (availability.get("homeDelivery") or {}).get("isOutOfStock")
+                )
+
+            if out_of_stock:
                 # IKEA shows price and availability as separate attributes —
                 # a sold-out item still has a real, known price. Keep it on
                 # the "oos" result rather than nulling it out the way the
                 # generic Shopify/JSON-LD OOS paths do (those genuinely have
                 # no price signal at all once OOS; IKEA's fragment endpoint
                 # always includes one regardless of stock).
-                restocks = (store.get("restocks") or {}).get("shortDate")
+                restocks = ((store or {}).get("restocks") or {}).get("shortDate")
                 restock_at = "–".join(restocks) if restocks else None
                 return ScraperResult(price=price, status="oos", currency=currency, restock_at=restock_at)
 

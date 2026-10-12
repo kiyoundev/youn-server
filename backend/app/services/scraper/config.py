@@ -47,14 +47,3 @@ more plausibly flaky moment-to-moment than "did the request/render succeed
 at all" — the thing HTTPScraper/base PatchrightScraper's single attempt
 already covers. Revisit only if a specific non-Amazon retailer shows the
 same moment-to-moment flakiness Amazon's retry loop was built for."""
-
-IKEA_STORE_ID = "256"
-"""IKEAScraper's per-store availability lookup (issue #54). IKEA's product
-page ships a generic JSON-LD "InStock" regardless of real inventory — actual
-per-store stock only exists behind a separate fragment endpoint, which takes
-no location parameter and returns every store's data unfiltered. IKEA's own
-UI decides "which store is yours" client-side via a cookie/geolocation prompt
-this scraper doesn't have. For a single-household app the relevant store
-never changes, so this is a one-time constant, not a workaround — confirmed
-against this store's real restock dates matching what the site itself showed
-for "IKEA Burlington"."""

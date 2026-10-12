@@ -21,6 +21,11 @@ class Settings(BaseSettings):
 
     finnhub_api_key: str = ""
 
+    # IKEAScraper's per-store availability lookup (issue #54) — sent to IKEA's
+    # fragment endpoint as `storeId`; without it IKEA returns an empty
+    # `stores` map. Default is IKEA Burlington; change in .env when moving.
+    ikea_store_id: str = "256"
+
     synology_host: str = ""
     synology_port: int = 5001
     synology_use_https: bool = True

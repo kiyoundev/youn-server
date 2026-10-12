@@ -638,6 +638,76 @@ async def test_resolve_final_url_unchanged_when_no_redirect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_final_url_keeps_pasted_amazon_url_when_redirected_to_other_variant() -> None:
+    pasted = "https://www.amazon.ca/dp/B0GSS4SGZR?psc=1"
+    resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0GSS6F226?th=1")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url(pasted)
+
+    assert result == pasted
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_uses_final_amazon_url_when_asin_matches() -> None:
+    resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0GSS4SGZR")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://www.amazon.ca/dp/B0GSS4SGZR?psc=1")
+
+    assert result == "https://www.amazon.ca/dp/B0GSS4SGZR"
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_shortlink_without_asin_uses_destination() -> None:
+    resp = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0GSS4SGZR")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://a.co/d/abc123")
+
+    assert result == "https://www.amazon.ca/dp/B0GSS4SGZR"
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_non_amazon_redirect_unchanged() -> None:
+    resp = SimpleNamespace(status_code=200, url="https://shop.example.com/new-path")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client):
+        result = await _real_resolve_final_url("https://shop.example.com/old-path")
+
+    assert result == "https://shop.example.com/new-path"
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_logs_redirect_to_different_path(caplog: pytest.LogCaptureFixture) -> None:
+    resp = SimpleNamespace(status_code=200, url="https://shop.example.com/login")
+    client = _FakeHTTPClient(head=AsyncMock(return_value=resp))
+
+    with patch("app.api.items.httpx.AsyncClient", return_value=client), caplog.at_level("INFO", logger="app.api.items"):
+        await _real_resolve_final_url("https://shop.example.com/products/shirt")
+
+    assert "URL redirected on add: https://shop.example.com/products/shirt -> https://shop.example.com/login" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_url_does_not_log_shortlink_or_query_only_changes(caplog: pytest.LogCaptureFixture) -> None:
+    short = SimpleNamespace(status_code=200, url="https://www.amazon.ca/dp/B0GSS4SGZR")
+    query_only = SimpleNamespace(status_code=200, url="https://shop.example.com/p/")
+
+    with caplog.at_level("INFO", logger="app.api.items"):
+        with patch("app.api.items.httpx.AsyncClient", return_value=_FakeHTTPClient(head=AsyncMock(return_value=short))):
+            await _real_resolve_final_url("https://a.co/d/abc123")
+        with patch("app.api.items.httpx.AsyncClient", return_value=_FakeHTTPClient(head=AsyncMock(return_value=query_only))):
+            await _real_resolve_final_url("https://shop.example.com/p?utm_source=x")
+
+    assert "URL redirected on add" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_resolve_final_url_falls_back_to_get_on_head_exception() -> None:
     # Some sites don't cleanly 4xx a HEAD they dislike — they drop the
     # connection or send a malformed response, which httpx surfaces as an

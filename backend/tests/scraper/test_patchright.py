@@ -400,6 +400,8 @@ async def test_amazon_ca_scraper_success_always_includes_currency_cad() -> None:
     mock_page = AsyncMock()
     mock_page.locator = _amazon_locator_stub(price_found=False, title="Airpod Max 2")
     mock_page.evaluate = AsyncMock(return_value="$799.99")
+    mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
+    mock_page.content = AsyncMock(return_value="<html></html>")
 
     mock_context = MagicMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
@@ -421,6 +423,8 @@ async def test_amazon_ca_scraper_error_path_leaves_currency_none() -> None:
     mock_page = AsyncMock()
     mock_page.locator = _amazon_locator_stub(price_found=False, title=None)
     mock_page.evaluate = AsyncMock(return_value=None)
+    mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
+    mock_page.content = AsyncMock(return_value="<html></html>")
 
     mock_context = MagicMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)

@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import logging
 import random
 import re
 from abc import ABC, abstractmethod
@@ -9,10 +10,12 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, CData, NavigableString
 
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS, NEXTDATA_PATHS
 from app.services.scraper.result import ScraperResult
+
+_log = logging.getLogger(__name__)
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
@@ -115,6 +118,11 @@ def _find_jsonld_product(data: Any) -> dict | None:
     return _find_jsonld_type(data, {"Product"})
 
 
+# schema.org ItemAvailability values meaning "can't buy it": SoldOut and
+# Discontinued don't contain the text "OutOfStock", so match each by name.
+_JSONLD_OOS_AVAILABILITY = ("OutOfStock", "SoldOut", "Discontinued")
+
+
 def _price_from_offer(offers: Any) -> ScraperResult | None:
     if isinstance(offers, list):
         offers = offers[0] if offers else None
@@ -130,10 +138,24 @@ def _price_from_offer(offers: Any) -> ScraperResult | None:
         return None
 
     availability = str(offers.get("availability", ""))
-    if "OutOfStock" in availability:
+    if any(value in availability for value in _JSONLD_OOS_AVAILABILITY):
         return ScraperResult(price=None, status="oos")
 
     return ScraperResult(price=price, status="ok")
+
+
+# Wording varies by site ("out of stock", "outofstock", "oos", ...), so
+# compare on a lowercased value with spaces/underscores/hyphens stripped.
+_OG_OOS_VALUES = ("outofstock", "oos", "soldout", "discontinued")
+
+
+def _og_out_of_stock(soup: BeautifulSoup) -> bool:
+    for prop in ("og:availability", "product:availability"):
+        tag = soup.find("meta", property=prop)
+        if tag and tag.get("content"):
+            value = re.sub(r"[\s_\-]+", "", str(tag["content"]).lower())
+            return any(marker in value for marker in _OG_OOS_VALUES)
+    return False
 
 
 def _search_price_recursive(data: Any, key: str = "price") -> float | None:
@@ -454,12 +476,34 @@ def _shopify_currency(soup: BeautifulSoup) -> Literal["USD", "CAD", "KRW"] | Non
     return None
 
 
-def _extract_currency(
+# Page chrome that routinely mentions other currencies without saying what
+# the product costs: currency/region pickers (<select>/<option>), footers
+# ("US orders ship from..."), and nav menus. Skipped by the text scan below.
+_CURRENCY_SCAN_SKIP_TAGS = ("select", "option", "footer", "nav")
+
+
+def _currency_scan_text(soup: BeautifulSoup) -> str:
+    """Visible page text for the symbol/text scan, minus the chrome above.
+    Same string types soup.get_text() uses (script/style/comment text is
+    excluded), filtered per string instead of via a mutated copy of the
+    tree."""
+    parts = [
+        string
+        for string in soup.find_all(string=True)
+        if type(string) in (NavigableString, CData)
+        and not string.find_parent(_CURRENCY_SCAN_SKIP_TAGS)
+    ]
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
+def _detect_currency(
     soup: BeautifulSoup, url: str, jsonld_scripts: list[Any] | None = None
-) -> Literal["USD", "CAD", "KRW"]:
+) -> tuple[Literal["USD", "CAD", "KRW"], str]:
+    """(currency, signal that decided it). The signal name is logged by
+    _run_hierarchy so a wrong currency can be traced to its cause."""
     shopify = _shopify_currency(soup)
     if shopify:
-        return shopify
+        return shopify, "shopify"
 
     tag = soup.find("meta", property="og:price:currency") or soup.find(
         "meta", property="product:price:currency"
@@ -467,7 +511,7 @@ def _extract_currency(
     if tag and tag.get("content"):
         code = tag["content"].strip().upper()
         if code in _SUPPORTED_CURRENCIES:
-            return code  # type: ignore[return-value]
+            return code, "meta"  # type: ignore[return-value]
 
     scripts = jsonld_scripts if jsonld_scripts is not None else _parse_jsonld_scripts(soup)
     for data in scripts:
@@ -478,25 +522,31 @@ def _extract_currency(
         if isinstance(offers, dict):
             code = offers.get("priceCurrency")
             if isinstance(code, str) and code.strip().upper() in _SUPPORTED_CURRENCIES:
-                return code.strip().upper()  # type: ignore[return-value]
+                return code.strip().upper(), "jsonld"  # type: ignore[return-value]
 
-    # Symbol/text scan across the full rendered page text — the price
+    # Symbol/text scan across the rendered page text — the price
     # extractors above only ever hand back a parsed float, not the raw
     # text it came from, so there's no single "price-adjacent" node to
-    # anchor to; a page-wide scan is the practical alternative and these
-    # markers are distinctive enough that a false positive elsewhere on
-    # the page is very unlikely.
-    text = soup.get_text(" ", strip=True)
+    # anchor to; a page-wide scan is the practical alternative. Currency
+    # pickers, footers and navs are left out (_currency_scan_text) since
+    # they list or mention other currencies on any storefront.
+    text = _currency_scan_text(soup)
     if "₩" in text or "원" in text:
-        return "KRW"
+        return "KRW", "text_scan"
     if "US$" in text or re.search(r"\bUSD\b", text):
-        return "USD"
+        return "USD", "text_scan"
 
     hostname = urlparse(url).hostname or ""
     if hostname.endswith(".kr"):
-        return "KRW"
+        return "KRW", "tld"
 
-    return "CAD"
+    return "CAD", "default"
+
+
+def _extract_currency(
+    soup: BeautifulSoup, url: str, jsonld_scripts: list[Any] | None = None
+) -> Literal["USD", "CAD", "KRW"]:
+    return _detect_currency(soup, url, jsonld_scripts)[0]
 
 
 class BaseScraper(ABC):
@@ -509,35 +559,72 @@ class BaseScraper(ABC):
         if "/products/" not in parsed.path:
             return None
 
-        handle = parsed.path.rstrip("/").split("/")[-1].removesuffix(".html")
-        api_url = f"{parsed.scheme}://{parsed.netloc}/products/{handle}.json"
+        # Keep whatever precedes "/products/" (a Shopify Markets locale
+        # prefix like "/en-ca") — the bare "/products/{handle}" path
+        # resolves to the store's default market, so dickies.com/en-ca/...
+        # came back priced in USD while the CA page labels it CAD.
+        prefix, _, tail = parsed.path.partition("/products/")
+        handle = tail.rstrip("/").split("/")[0].removesuffix(".html")
+        base_url = f"{parsed.scheme}://{parsed.netloc}{prefix}/products/{handle}"
 
         qs = parse_qs(parsed.query)
         variant_id = (qs.get("variant", [None]) or [None])[0]
 
+        # .js is Shopify's documented Ajax Product API and carries per-variant
+        # `available`; .json is undocumented and generally omits it, so a
+        # sold-out variant read as in stock. .json stays as the fallback for
+        # stores where .js fails.
+        async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS) as client:
+            result = await self._shopify_fetch(client, f"{base_url}.js", variant_id, cents=True)
+            if result is not None:
+                return result
+            _log.info("Shopify .js gave no result for %s, trying .json", url)
+            return await self._shopify_fetch(client, f"{base_url}.json", variant_id, cents=False)
+
+    async def _shopify_fetch(
+        self, client: httpx.AsyncClient, api_url: str, variant_id: str | None, *, cents: bool
+    ) -> ScraperResult | None:
+        """One Shopify product endpoint -> ScraperResult, or None on any
+        failure so the caller can try the next endpoint. `cents`: the .js
+        endpoint returns prices as integer cents, .json as decimal strings."""
         try:
-            ua = random.choice(USER_AGENTS)
-            async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT_SECONDS) as client:
-                resp = await client.get(api_url, headers=_build_headers(ua))
+            resp = await client.get(api_url, headers=_build_headers(random.choice(USER_AGENTS)))
             if resp.status_code != 200:
                 return None
             data = resp.json()
-            if "product" not in data:
+            product = data if cents else data.get("product")
+            if not isinstance(product, dict):
                 return None
 
-            variants = data["product"].get("variants", [])
+            variants = product.get("variants", [])
             if not variants:
                 return None
 
+            # A variant missing the flag falls back to the product-level one
+            # (False only when every variant is sold out), then to available.
+            def is_available(v: dict) -> bool:
+                return bool(v.get("available", product.get("available", True)))
+
             if variant_id:
+                # A specific variant was asked for: its own stock state is
+                # the answer, in stock or not.
                 variant = next((v for v in variants if str(v.get("id")) == variant_id), variants[0])
             else:
-                variant = variants[0]
+                # No ?variant= means the URL names the product, not a size
+                # (dickies.com uses one handle per color, ?variant= only picks
+                # the size). Sold out only if every variant is; otherwise
+                # price the first one that can be bought, not variants[0],
+                # which may just be a sold-out size.
+                variant = next((v for v in variants if is_available(v)), variants[0])
 
-            if not variant.get("available", True):
+            if not is_available(variant):
                 return ScraperResult(price=None, status="oos")
 
-            price = _parse_price(str(variant.get("price", "")))
+            raw_price = variant.get("price")
+            if cents and isinstance(raw_price, int) and not isinstance(raw_price, bool):
+                price = raw_price / 100 if raw_price > 0 else None
+            else:
+                price = _parse_price(str(raw_price if raw_price is not None else ""))
             if price is None:
                 return None
             return ScraperResult(price=price, status="ok")
@@ -560,18 +647,30 @@ class BaseScraper(ABC):
             if tag and tag.get("content"):
                 price = _parse_price(tag["content"])
                 if price is not None:
+                    if _og_out_of_stock(soup):
+                        # Same shape as the JSON-LD OutOfStock path: no
+                        # price signal once the page says it's sold out.
+                        return ScraperResult(price=None, status="oos")
                     return ScraperResult(price=price, status="ok")
         return None
 
     def _extract_nextdata(self, soup: BeautifulSoup, url: str) -> ScraperResult | None:
+        return self._lookup_nextdata(soup, url)[0]
+
+    def _lookup_nextdata(self, soup: BeautifulSoup, url: str) -> tuple[ScraperResult | None, bool]:
+        """(result, scoped). `scoped` is True when the price came from inside
+        the tracked product's own node (or an explicit NEXTDATA_PATHS entry)
+        and False when it came from the unscoped whole-page search, which
+        also sees carousels, add-ons and banners. _run_hierarchy only lets a
+        scoped price replace one found by an earlier tier."""
         tag = soup.find("script", id="__NEXT_DATA__")
         if not tag or not tag.string:
-            return None
+            return None, False
 
         try:
             data = json.loads(tag.string)
         except json.JSONDecodeError:
-            return None
+            return None, False
 
         hostname = urlparse(url).hostname or ""
         explicit_path = NEXTDATA_PATHS.get(hostname)
@@ -581,7 +680,7 @@ class BaseScraper(ABC):
                 val = reduce(getitem, explicit_path, data)
                 price = _parse_price(str(val)) if isinstance(val, str) else (float(val) if isinstance(val, (int, float)) and val > 0 else None)
                 if price:
-                    return ScraperResult(price=price, status="ok")
+                    return ScraperResult(price=price, status="ok"), True
             except (KeyError, TypeError, IndexError):
                 pass
 
@@ -592,24 +691,30 @@ class BaseScraper(ABC):
         # the old "first 'price' key anywhere" behavior, never a regression.
         product_id = _extract_id_from_url(url)
         scope = data
+        scoped = False
         if product_id is not None:
             node = _find_node_by_id(data, product_id)
             if node is not None:
                 scope = node
+                scoped = True
 
         price = _search_price_by_priority(scope)
         if price:
-            return ScraperResult(price=price, status="ok")
-        return None
+            return ScraperResult(price=price, status="ok"), scoped
+        return None, False
 
     def _extract_rsc_flight(self, html: str, url: str) -> ScraperResult | None:
+        return self._lookup_rsc_flight(html, url)[0]
+
+    def _lookup_rsc_flight(self, html: str, url: str) -> tuple[ScraperResult | None, bool]:
         """NEXT_DATA's App Router counterpart (issue #50) — see
         _parse_rsc_flight_rows/_resolve_rsc_refs docstrings for the wire
         format. No-op ({} rows) on any page without RSC/Flight chunks, so
-        this is cheap to always attempt regardless of site."""
+        this is cheap to always attempt regardless of site. Returns
+        (result, scoped) with the same meaning as _lookup_nextdata."""
         rows = _parse_rsc_flight_rows(html)
         if not rows:
-            return None
+            return None, False
 
         product_id = _extract_id_from_url(url)
         if product_id is not None:
@@ -622,18 +727,21 @@ class BaseScraper(ABC):
                 resolved = _resolve_rsc_refs(node, rows)
                 price = _search_price_by_priority(resolved)
                 if price:
-                    return ScraperResult(price=price, status="ok")
+                    return ScraperResult(price=price, status="ok"), True
 
         # No product-id match (or the scoped node had no resolvable price)
         # — same graceful-degradation shape as _extract_nextdata's own
         # id-scoping fallback: search every row directly, unscoped.
         price = _search_price_by_priority(rows)
         if price:
-            return ScraperResult(price=price, status="ok")
-        return None
+            return ScraperResult(price=price, status="ok"), False
+        return None, False
 
     async def _run_hierarchy(self, html: str, url: str) -> ScraperResult:
         result = await self._extract_shopify(html, url)
+        # Which extractor produced `result`, logged at the end so a wrong
+        # price is traceable to its source.
+        source = "shopify" if result is not None else "none"
         # soup is parsed unconditionally now (issue #44) — even on the
         # Shopify success path, which doesn't need it for price but does
         # need it for the name-extraction pass below, run independently of
@@ -645,8 +753,12 @@ class BaseScraper(ABC):
         jsonld_scripts = _parse_jsonld_scripts(soup)
         if result is None:
             result = self._extract_jsonld(soup, jsonld_scripts)
+            if result is not None:
+                source = "jsonld"
         if result is None:
             result = self._extract_og_price(soup)
+            if result is not None:
+                source = "og_price"
 
         # NEXT_DATA is checked unconditionally now, not only as a last-resort
         # fallback (musinsa regression, this session) — a page can have both
@@ -659,12 +771,27 @@ class BaseScraper(ABC):
         # strictly cheaper NEXT_DATA match — never a more expensive one —
         # so a page with no such richer data, or where NEXT_DATA's own
         # price happens to be higher, is unaffected either way.
-        nextdata_result = self._extract_nextdata(soup, url)
-        if nextdata_result is not None and (
-            result is None
-            or (result.price is not None and nextdata_result.price < result.price)
-        ):
-            result = nextdata_result
+        #
+        # Only a *scoped* match (found inside the tracked product's own node)
+        # may replace an earlier tier's price. An unscoped whole-page match
+        # can land on an add-on, a carousel item or an installment amount, and
+        # "strictly cheaper wins" would then swap in that wrong lower price
+        # and fire a false alert. Unscoped still fills in when nothing earlier
+        # found a price.
+        nextdata_result, nextdata_scoped = self._lookup_nextdata(soup, url)
+        if nextdata_result is not None:
+            if result is None or (
+                nextdata_scoped
+                and result.price is not None
+                and nextdata_result.price < result.price
+            ):
+                result = nextdata_result
+                source = "next_data"
+            elif result.price is not None and nextdata_result.price < result.price:
+                _log.info(
+                    "ignored unscoped next_data price %s (keeping %s from %s) url=%s",
+                    nextdata_result.price, result.price, source, url,
+                )
 
         # Same always-compute/override-if-strictly-cheaper pattern as
         # NEXT_DATA just above, for App Router pages that stream RSC/Flight
@@ -673,12 +800,20 @@ class BaseScraper(ABC):
         # method returns None) on any page without Flight chunks, so this
         # is a no-op on every non-App-Router site, same as NEXT_DATA is a
         # no-op on every site without __NEXT_DATA__.
-        rsc_result = self._extract_rsc_flight(html, url)
-        if rsc_result is not None and (
-            result is None
-            or (result.price is not None and rsc_result.price < result.price)
-        ):
-            result = rsc_result
+        rsc_result, rsc_scoped = self._lookup_rsc_flight(html, url)
+        if rsc_result is not None:
+            if result is None or (
+                rsc_scoped
+                and result.price is not None
+                and rsc_result.price < result.price
+            ):
+                result = rsc_result
+                source = "rsc_flight"
+            elif result.price is not None and rsc_result.price < result.price:
+                _log.info(
+                    "ignored unscoped rsc_flight price %s (keeping %s from %s) url=%s",
+                    rsc_result.price, result.price, source, url,
+                )
 
         if result is None:
             # Page loaded but no extraction method found a price — silent
@@ -697,7 +832,11 @@ class BaseScraper(ABC):
         # Unlike site_name/product_title, currency always resolves to a
         # concrete value (CAD default) — no "both None, skip the replace"
         # short-circuit possible here, dataclasses.replace always runs.
-        currency = _extract_currency(soup, url, jsonld_scripts)
+        currency, currency_source = _detect_currency(soup, url, jsonld_scripts)
+        _log.info(
+            "extractor=%s status=%s price=%s currency=%s currency_source=%s url=%s",
+            source, result.status, result.price, currency, currency_source, url,
+        )
         return dataclasses.replace(
             result, site_name=site_name, product_title=product_title, currency=currency
         )

@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import re
 import tempfile
 
+from bs4 import BeautifulSoup
 from patchright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 from app.services.scraper.base import BaseScraper, _describe_exception, _parse_price
@@ -243,6 +245,34 @@ class PatchrightScraper(BaseScraper):
             return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))
 
 
+# "/dp/<ASIN>" (also "/gp/product/<ASIN>", and the slugged "/Title/dp/<ASIN>")
+# — matched on the path only, so tracking params never confuse it.
+_AMAZON_ASIN_PATTERN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+
+
+def _amazon_asin(url: str) -> str | None:
+    match = _AMAZON_ASIN_PATTERN.search(url.split("?", 1)[0])
+    return match.group(1) if match else None
+
+
+def _amazon_has_no_new_offer(html: str) -> bool:
+    """True when the page offers no new unit to buy — read from real
+    amazon.ca markup, not guessed:
+      - "used-only" box (#usedOnlyBuybox): the featured offer is a used /
+        Warehouse one
+      - "no featured offer" (#fod-cx-box + #unqualifiedBuyBox, "See All
+        Buying Options"): offers exist, none qualifies for the buy box
+      - classic #outOfStock block
+    The new buy box's own add-to-cart button is the exact id
+    "add-to-cart-button"; the used box's is "add-to-cart-button-ubb". Its
+    presence overrides every marker above, so a stray hidden template can
+    never turn a purchasable new item into "out of stock"."""
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.find(id="add-to-cart-button"):
+        return False
+    return any(soup.find(id=marker) for marker in ("usedOnlyBuybox", "unqualifiedBuyBox", "fod-cx-box", "outOfStock"))
+
+
 class AmazonCAScraper(PatchrightScraper):
     MAX_RETRIES = AMAZON_MAX_RETRIES
 
@@ -284,18 +314,6 @@ class AmazonCAScraper(PatchrightScraper):
         except Exception:
             return None
 
-    async def _is_out_of_stock(self, page) -> bool:
-        try:
-            return await page.evaluate(r"""
-                () => {
-                    if (document.querySelector('#outOfStock')) return true;
-                    const a = document.querySelector('#availability');
-                    return !!a && /currently unavailable/i.test(a.textContent);
-                }
-            """)
-        except Exception:
-            return False
-
     async def get_price(self, url: str) -> ScraperResult:
         try:
             # Same lazy-launch call as the base class — explicit PatchrightScraper
@@ -315,19 +333,28 @@ class AmazonCAScraper(PatchrightScraper):
                     try:
                         await page.goto("https://www.amazon.ca", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
                         await page.goto(url, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
-                        raw = await self._find_price_text(page)
-                        price = _parse_price(raw or "")
-                        # Only fetched on the attempt that's actually going
-                        # to succeed — an extra Playwright DOM round-trip on
-                        # every failed retry (page didn't load right, price
-                        # element missing, etc.) would be wasted anyway,
-                        # since that attempt's whole result gets discarded
-                        # (review finding).
-                        title = await self._find_product_title(page) if price is not None else None
-                        # No price + Amazon's own "Currently unavailable"
-                        # block = genuinely out of stock, not a failed load
-                        # — report it instead of burning every retry.
-                        is_oos = price is None and await self._is_out_of_stock(page)
+                        # A sold-out variant redirects to a *different* ASIN
+                        # (another color) whose price is not this item's —
+                        # never read it. Skipped when either URL has no
+                        # recognizable ASIN (short links, captcha pages).
+                        tracked_asin, served_asin = _amazon_asin(url), _amazon_asin(page.url)
+                        variant_gone = bool(tracked_asin and served_asin and tracked_asin != served_asin)
+                        if variant_gone:
+                            _log.info("AmazonCAScraper: %s redirected to a different ASIN (%s -> %s)", url, tracked_asin, served_asin)
+                        no_new_offer = not variant_gone and _amazon_has_no_new_offer(await page.content())
+                        price = None
+                        title = None
+                        if not variant_gone and not no_new_offer:
+                            raw = await self._find_price_text(page)
+                            price = _parse_price(raw or "")
+                            # Only fetched on the attempt that's actually going
+                            # to succeed — an extra Playwright DOM round-trip on
+                            # every failed retry (page didn't load right, price
+                            # element missing, etc.) would be wasted anyway,
+                            # since that attempt's whole result gets discarded
+                            # (review finding).
+                            title = await self._find_product_title(page) if price is not None else None
+                        is_oos = variant_gone or no_new_offer
                     finally:
                         await page.close()
                     if price is not None:

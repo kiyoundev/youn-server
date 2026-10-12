@@ -3,6 +3,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -30,6 +31,7 @@ from app.services.product_status import compute_last_checked, compute_status
 from app.services.scrape_tracking import in_flight_snapshot
 from app.services.scraper.base import USER_AGENTS, _build_headers
 from app.services.scraper.config import HTTP_TIMEOUT_SECONDS
+from app.services.scraper.patchright_scraper import _amazon_asin
 from app.services.scraper.router import (
     RETAILER_MAP,
     _derive_retailer,
@@ -90,6 +92,22 @@ class _ProbeResult(NamedTuple):
     error: str | None = None
 
 
+_SHORTLINK_HOSTS = {"a.co", "amzn.to", "amzn.com"}
+
+
+def _log_unexpected_redirect(url: str, final_url: str) -> None:
+    """The resolved URL is stored as the listing's permanent URL (#39), so a
+    redirect to a different host or path — a locale switch, login wall,
+    homepage — silently changes what gets tracked. Shortlinks are expected
+    to redirect and are skipped; query-string and trailing-slash changes
+    don't count. Log both URLs so a surprising one is visible at add time."""
+    before, after = urlparse(url), urlparse(final_url)
+    if (before.hostname or "") in _SHORTLINK_HOSTS:
+        return
+    if (before.hostname, before.path.rstrip("/")) != (after.hostname, after.path.rstrip("/")):
+        _log.info("URL redirected on add: %s -> %s", url, final_url)
+
+
 async def _resolve_final_url(url: str) -> str:
     """Follow redirects to `url`'s actual destination before RETAILER_MAP
     routing decides on it (#39) — a shortlink (a.co, amzn.to, or any other
@@ -116,7 +134,22 @@ async def _resolve_final_url(url: str) -> str:
                 # the status-code fallback above; only a GET failure means
                 # the URL is actually unreachable.
                 resp = await client.get(url, headers=_build_headers(ua))
-        return str(resp.url)
+        final_url = str(resp.url)
+        # Amazon sends a sold-out variant to a different ASIN. Storing that
+        # redirect target would track the wrong variant forever, and the
+        # poll-time tracked-vs-served ASIN check (AmazonCAScraper) could
+        # never fire since both would match. Keep the pasted URL so the
+        # first poll reports "oos". Shortlinks carry no ASIN, so they still
+        # resolve to their destination as before.
+        pasted_asin, final_asin = _amazon_asin(url), _amazon_asin(final_url)
+        if pasted_asin and final_asin and pasted_asin != final_asin:
+            _log.info(
+                "Amazon redirected %s to a different variant (%s); keeping the pasted URL",
+                pasted_asin, final_asin,
+            )
+            return url
+        _log_unexpected_redirect(url, final_url)
+        return final_url
     except httpx.HTTPError as e:
         # Narrowed to httpx's own exceptions — network/protocol failures
         # only. A bug in this function itself (not a network problem)

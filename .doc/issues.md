@@ -3173,6 +3173,7 @@ Reported live: the manual scrape appears to do nothing, because the user has to 
 
 - **Track the new price only, by default.** The scraper identifies the buy-box condition and reports a used-only buy box as unavailable for new, not as a price (`"oos"`, or a distinct result that #61's restock logic can key off).
 - **Used as a separate, opt-in listing**, not a second price on the same listing: the data model already has one price per listing, and a Product/Listing split (#24) fits "same product, different condition" naturally. This needs a condition marker on `Listing` (e.g. `condition: "new" | "used"`, migration required) and a way to add the used variant in the UI.
+- **Detect variant redirects (done separately, 2026-10-11 — re-verify when this issue is opened).** When a variant (e.g. a color) is fully sold out, new and used, Amazon redirects to a different color/ASIN page, so the scraper would read another variant's price. Compare the tracked URL's ASIN (`/dp/<ASIN>`) against the ASIN actually served (`input#ASIN` / final `page.url`); on mismatch, report `"oos"` with no price and no retries. A page with no buy-box price and only "See all buying options" also reports `"oos"` instead of burning every retry as `"exhausted retries"` (reported on the AirPods Max 2 Midnight listing, 2026-10-09). Implemented outside this issue in `AmazonCAScraper` (`_amazon_asin`, `_amazon_has_no_new_offer`, `tests/scraper/test_amazon.py`): the ASIN is compared via the final `page.url`, and the used-only buy box (`#usedOnlyBuybox`), "No featured offers" (`#fod-cx-box` / `#unqualifiedBuyBox`) and `#outOfStock` all report `"oos"` for the new listing unless the new buy box's `#add-to-cart-button` is present. **When picking up #60, check this still holds against live amazon.ca** (markup changes, and it was only tested on pasted HTML) and reuse those page-state checks rather than rebuilding them — the used-only box also already exposes the used price (`#usedBuySection .offer-price`), condition and seller.
 - Decide on the used-price source during implementation (the "Other sellers" / used-offers section of the page, or the offer-listing page); check how bot-protected each one is before choosing.
 
 ### Why (context)
@@ -3182,6 +3183,8 @@ Reported: Amazon shows both new and used offers, and the scraper doesn't disting
 ### Acceptance criteria
 
 - [ ] A listing whose buy box is a used offer no longer records that price as the new price
+- [x] A tracked ASIN that Amazon redirects to a different variant reports `"oos"`, never the other variant's price (done separately — re-verify)
+- [x] A page with only "See all buying options" (no new buy-box price) reports `"oos"`, not `"exhausted retries"` (done separately — re-verify)
 - [ ] `Listing.condition` (`new` default) persists via a migration applied locally and on the Pi/NAS
 - [ ] A used-condition listing of the same product can be added and tracked separately
 - [ ] The UI labels the condition where an Amazon listing is shown

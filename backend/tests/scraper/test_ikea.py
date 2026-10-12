@@ -14,7 +14,7 @@ from app.services.scraper.result import ScraperResult
 PRODUCT_URL = "https://www.ikea.com/ca/en/p/alpstuga-air-quality-sensor-smart-70609396/"
 FRAGMENT_URL = (
     "https://www.ikea.com/ca/en/lower-funnel-fragments/"
-    "product-availability/?itemNo=70609396&inline"
+    "product-availability/?itemNo=70609396&inline&storeId=256"
 )
 
 
@@ -22,12 +22,15 @@ def _fragment_html(payload: dict) -> str:
     return f'<script type="text/hydrate">{json.dumps(payload)}</script>'
 
 
-def _payload(*, price: float = 49.99, currency: str = "CAD", store: dict | None = None) -> dict:
+def _payload(
+    *, price: float = 49.99, currency: str = "CAD", store: dict | None = None, availability_extra: dict | None = None
+) -> dict:
     return {
         "product": {"itemNo": "70609396", "price": price, "currencyCode": currency},
         "availabilityResponse": {
             "availability": {
                 "stores": {"256": store} if store is not None else {},
+                **(availability_extra or {}),
             }
         },
     }
@@ -199,3 +202,47 @@ async def test_wrapped_loader_data_payload_is_unwrapped() -> None:
 
     assert result.status == "ok"
     assert result.price == 49.99
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_request_carries_configured_store_id(monkeypatch) -> None:
+    """Without storeId IKEA returns an empty `stores` map, so OOS detection
+    silently never ran. The id comes from settings, not a constant."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ikea_store_id", "123")
+    payload = _payload(store=None)
+    payload["availabilityResponse"]["availability"]["stores"] = {"123": {"isOutOfStock": True}}
+    route = respx.get(
+        "https://www.ikea.com/ca/en/lower-funnel-fragments/"
+        "product-availability/?itemNo=70609396&inline&storeId=123"
+    ).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert route.called
+    assert result.status == "oos"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_missing_store_falls_back_to_top_level_sold_out_flag() -> None:
+    payload = _payload(store=None, availability_extra={"isSoldOut": True})
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert result.status == "oos"
+    assert result.price == 49.99
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_missing_store_falls_back_to_home_delivery_out_of_stock() -> None:
+    payload = _payload(store=None, availability_extra={"homeDelivery": {"isOutOfStock": True}})
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert result.status == "oos"

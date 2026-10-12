@@ -12,6 +12,7 @@ from app.services.scraper.base import (
     BaseScraper,
     _describe_exception,
     _detect_bot_block,
+    _detect_currency,
     _extract_currency,
     _extract_id_from_url,
     _extract_product_title,
@@ -91,6 +92,30 @@ def test_extract_jsonld_oos(s: DummyScraper) -> None:
     assert s._extract_jsonld(_soup(html)) == ScraperResult(price=None, status="oos")
 
 
+@pytest.mark.parametrize(
+    "availability",
+    ["https://schema.org/SoldOut", "https://schema.org/Discontinued", "SoldOut"],
+)
+def test_extract_jsonld_sold_out_and_discontinued_are_oos(s: DummyScraper, availability: str) -> None:
+    html = _jsonld_page({
+        "@type": "Product",
+        "offers": {"@type": "Offer", "price": "89.99", "availability": availability},
+    })
+    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.parametrize(
+    "availability",
+    ["https://schema.org/InStock", "https://schema.org/PreOrder", "https://schema.org/BackOrder"],
+)
+def test_extract_jsonld_other_availability_values_keep_price(s: DummyScraper, availability: str) -> None:
+    html = _jsonld_page({
+        "@type": "Product",
+        "offers": {"@type": "Offer", "price": "89.99", "availability": availability},
+    })
+    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=89.99, status="ok")
+
+
 def test_extract_jsonld_aggregate_offer(s: DummyScraper) -> None:
     html = _jsonld_page({
         "@type": "Product",
@@ -159,6 +184,36 @@ def test_extract_og_price_missing_returns_none(s: DummyScraper) -> None:
 def test_extract_og_price_empty_content_returns_none(s: DummyScraper) -> None:
     html = '<html><head><meta property="og:price:amount" content=""></head></html>'
     assert s._extract_og_price(_soup(html)) is None
+
+
+@pytest.mark.parametrize(
+    "availability_prop, value",
+    [
+        ("og:availability", "out of stock"),
+        ("product:availability", "out of stock"),
+        ("product:availability", "OutOfStock"),
+        ("og:availability", "oos"),
+        ("og:availability", "Sold Out"),
+        ("og:availability", "https://schema.org/OutOfStock"),
+    ],
+)
+def test_extract_og_price_out_of_stock_availability(
+    s: DummyScraper, availability_prop: str, value: str
+) -> None:
+    html = (
+        '<html><head><meta property="og:price:amount" content="129.00">'
+        f'<meta property="{availability_prop}" content="{value}"></head></html>'
+    )
+    assert s._extract_og_price(_soup(html)) == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.parametrize("value", ["in stock", "instock", "available for order"])
+def test_extract_og_price_in_stock_availability_keeps_price(s: DummyScraper, value: str) -> None:
+    html = (
+        '<html><head><meta property="og:price:amount" content="129.00">'
+        f'<meta property="product:availability" content="{value}"></head></html>'
+    )
+    assert s._extract_og_price(_soup(html)) == ScraperResult(price=129.0, status="ok")
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +386,23 @@ async def test_extract_shopify_default_variant(s: DummyScraper) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_extract_shopify_keeps_locale_prefix(s: DummyScraper) -> None:
+    """dickies.com/en-ca/... must fetch /en-ca/products/{handle}.json — the
+    bare /products/ path is the default (USD) market, $39.99 USD instead of
+    $61.00 CAD for the same pants."""
+    respx.get("https://www.dickies.com/en-ca/products/carpenter-pants.json").mock(
+        return_value=httpx.Response(200, json={"product": {"variants": [{"id": 1, "price": "61.00"}]}})
+    )
+    bare = respx.get("https://www.dickies.com/products/carpenter-pants.json").mock(
+        return_value=httpx.Response(200, json={"product": {"variants": [{"id": 1, "price": "39.99"}]}})
+    )
+    result = await s._extract_shopify("", "https://www.dickies.com/en-ca/products/carpenter-pants")
+    assert result == ScraperResult(price=61.0, status="ok")
+    assert not bare.called
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_extract_shopify_specific_variant(s: DummyScraper) -> None:
     respx.get("https://deadstock.ca/products/nike-air-max-90.json").mock(
         return_value=httpx.Response(200, json=SHOPIFY_RESPONSE)
@@ -383,6 +455,152 @@ async def test_extract_shopify_empty_variants_returns_none(s: DummyScraper) -> N
     )
     result = await s._extract_shopify("", "https://example.com/products/widget")
     assert result is None
+
+
+# .js (documented Ajax Product API): top-level product, prices in integer cents.
+SHOPIFY_JS_RESPONSE = {
+    "id": 1,
+    "available": True,
+    "variants": [
+        {"id": 111, "price": 12900, "available": True},
+        {"id": 222, "price": 14900, "available": False},
+    ],
+}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_preferred_over_json(s: DummyScraper) -> None:
+    respx.get("https://deadstock.ca/products/nike-air-max-90.js").mock(
+        return_value=httpx.Response(200, json=SHOPIFY_JS_RESPONSE)
+    )
+    json_route = respx.get("https://deadstock.ca/products/nike-air-max-90.json").mock(
+        return_value=httpx.Response(200, json=SHOPIFY_RESPONSE)
+    )
+    result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90")
+    assert result == ScraperResult(price=129.0, status="ok")
+    assert not json_route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_sold_out_variant_is_oos(s: DummyScraper) -> None:
+    respx.get("https://deadstock.ca/products/nike-air-max-90.js").mock(
+        return_value=httpx.Response(200, json=SHOPIFY_JS_RESPONSE)
+    )
+    result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90?variant=222")
+    assert result == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_keeps_locale_prefix(s: DummyScraper) -> None:
+    respx.get("https://www.dickies.com/en-ca/products/carpenter-pants.js").mock(
+        return_value=httpx.Response(200, json={"variants": [{"id": 1, "price": 6100, "available": True}]})
+    )
+    bare = respx.get("https://www.dickies.com/products/carpenter-pants.js").mock(
+        return_value=httpx.Response(200, json={"variants": [{"id": 1, "price": 3999, "available": True}]})
+    )
+    result = await s._extract_shopify("", "https://www.dickies.com/en-ca/products/carpenter-pants")
+    assert result == ScraperResult(price=61.0, status="ok")
+    assert not bare.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_variant_without_flag_uses_product_level_available(s: DummyScraper) -> None:
+    respx.get("https://example.com/products/widget.js").mock(
+        return_value=httpx.Response(200, json={"available": False, "variants": [{"id": 1, "price": 5000}]})
+    )
+    result = await s._extract_shopify("", "https://example.com/products/widget")
+    assert result == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_no_variant_skips_sold_out_first_size(s: DummyScraper) -> None:
+    """Real Dickies shape: first size sold out, later ones in stock. A URL
+    without ?variant= names the color, so it is in stock at the first
+    buyable size's price, not out of stock."""
+    respx.get("https://www.dickies.com/en-ca/products/carpenter-pants.js").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "available": True,
+                "variants": [
+                    {"id": 1, "price": 6100, "available": False},
+                    {"id": 2, "price": 6100, "available": True},
+                    {"id": 3, "price": 6100, "available": True},
+                ],
+            },
+        )
+    )
+    result = await s._extract_shopify("", "https://www.dickies.com/en-ca/products/carpenter-pants")
+    assert result == ScraperResult(price=61.0, status="ok")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_no_variant_all_sold_out_is_oos(s: DummyScraper) -> None:
+    respx.get("https://example.com/products/widget.js").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "available": False,
+                "variants": [
+                    {"id": 1, "price": 5000, "available": False},
+                    {"id": 2, "price": 5000, "available": False},
+                ],
+            },
+        )
+    )
+    result = await s._extract_shopify("", "https://example.com/products/widget")
+    assert result == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_js_specific_sold_out_size_is_oos_even_if_others_in_stock(
+    s: DummyScraper,
+) -> None:
+    respx.get("https://www.dickies.com/en-ca/products/carpenter-pants.js").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "available": True,
+                "variants": [
+                    {"id": 1, "price": 6100, "available": False},
+                    {"id": 2, "price": 6100, "available": True},
+                ],
+            },
+        )
+    )
+    result = await s._extract_shopify("", "https://www.dickies.com/en-ca/products/carpenter-pants?variant=1")
+    assert result == ScraperResult(price=None, status="oos")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_falls_back_to_json_when_js_fails(s: DummyScraper) -> None:
+    respx.get("https://deadstock.ca/products/nike-air-max-90.js").mock(return_value=httpx.Response(404))
+    respx.get("https://deadstock.ca/products/nike-air-max-90.json").mock(
+        return_value=httpx.Response(200, json=SHOPIFY_RESPONSE)
+    )
+    result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90")
+    assert result == ScraperResult(price=129.0, status="ok")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_shopify_falls_back_to_json_when_js_is_not_json(s: DummyScraper) -> None:
+    respx.get("https://deadstock.ca/products/nike-air-max-90.js").mock(
+        return_value=httpx.Response(200, text="<html>blocked</html>")
+    )
+    respx.get("https://deadstock.ca/products/nike-air-max-90.json").mock(
+        return_value=httpx.Response(200, json=SHOPIFY_RESPONSE)
+    )
+    result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90")
+    assert result == ScraperResult(price=129.0, status="ok")
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +760,116 @@ async def test_run_hierarchy_og_price_wins_when_cheaper_than_nextdata(s: DummySc
     )
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
     assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_logs_og_price_extractor(
+    s: DummyScraper, caplog: pytest.LogCaptureFixture
+) -> None:
+    html = '<html><head><meta property="og:price:amount" content="49.99"></head></html>'
+    with caplog.at_level("INFO", logger="app.services.scraper.base"):
+        await s._run_hierarchy(html, "https://example.com/item/abc")
+    assert (
+        "extractor=og_price status=ok price=49.99 currency=CAD currency_source=default "
+        "url=https://example.com/item/abc"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_logs_nextdata_when_it_overrides(
+    s: DummyScraper, caplog: pytest.LogCaptureFixture
+) -> None:
+    html = (
+        '<html><head><meta property="og:price:amount" content="99.99"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps({"props": {"pageProps": {"product": {"id": 123, "price": 49.99}}}})
+        + "</script></body></html>"
+    )
+    with caplog.at_level("INFO", logger="app.services.scraper.base"):
+        await s._run_hierarchy(html, "https://example.com/item/123")
+    assert "extractor=next_data status=ok price=49.99" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_logs_none_when_nothing_matches(
+    s: DummyScraper, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("INFO", logger="app.services.scraper.base"):
+        await s._run_hierarchy("<html><body>nothing</body></html>", "https://example.com/item/abc")
+    assert "extractor=none status=error price=None" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_unscoped_nextdata_does_not_override_earlier_price(
+    s: DummyScraper, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Slug URL (no numeric id) -> whole-page search, which can land on an
+    add-on or carousel item. A cheaper unscoped match must not replace the
+    price an earlier tier found."""
+    html = (
+        '<html><head><meta property="og:price:amount" content="120.00"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps({"props": {"pageProps": {"giftAddOn": {"salePrice": 8}}}})
+        + "</script></body></html>"
+    )
+    with caplog.at_level("INFO", logger="app.services.scraper.base"):
+        result = await s._run_hierarchy(html, "https://shop.example.com/products/blue-jacket")
+    assert result.price == 120.0
+    assert "ignored unscoped next_data price 8.0 (keeping 120.0 from og_price)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_unscoped_nextdata_still_fills_in_when_nothing_earlier(s: DummyScraper) -> None:
+    html = _nextdata_page({"props": {"pageProps": {"product": {"price": 299.0}}}})
+    result = await s._run_hierarchy(html, "https://shop.example.com/products/blue-jacket")
+    assert result == ScraperResult(price=299.0, status="ok", currency="CAD")
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_scoped_nextdata_still_overrides_earlier_price(s: DummyScraper) -> None:
+    html = (
+        '<html><head><meta property="og:price:amount" content="120.00"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps({"props": {"pageProps": {"product": {"id": 555, "finalPrice": 90}}}})
+        + "</script></body></html>"
+    )
+    result = await s._run_hierarchy(html, "https://shop.example.com/products/555")
+    assert result.price == 90.0
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_unscoped_rsc_does_not_override_earlier_price(s: DummyScraper) -> None:
+    html = _rsc_page({"a7": {"totalDiscountedItemPrice": 800}}).replace(
+        "<html><body>",
+        '<html><head><meta property="og:price:amount" content="12000"></head><body>',
+        1,
+    )
+    result = await s._run_hierarchy(html, "https://www.29cm.co.kr/products/9999999")
+    assert result.price == 12000.0
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_unscoped_rsc_still_fills_in_when_nothing_earlier(s: DummyScraper) -> None:
+    html = _rsc_page({"a7": {"totalDiscountedItemPrice": 800}})
+    result = await s._run_hierarchy(html, "https://www.29cm.co.kr/products/9999999")
+    assert result.price == 800.0
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_og_out_of_stock_is_not_overridden(s: DummyScraper) -> None:
+    html = (
+        '<html><head><meta property="og:price:amount" content="99.99">'
+        '<meta property="product:availability" content="out of stock"></head>'
+        "<body><script id=\"__NEXT_DATA__\">"
+        + json.dumps({"props": {"pageProps": {"product": {"price": 49.99}}}})
+        + "</script></body></html>"
+    )
+    result = await s._run_hierarchy(html, "https://example.com/item/abc")
+    # The oos result has price=None, so the strictly-cheaper guard skips the
+    # NEXT_DATA override and the sold-out status survives.
+    assert result.status == "oos"
+    assert result.price is None
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +1235,41 @@ def test_extract_currency_shopify_unsupported_currency_falls_through() -> None:
 def test_extract_currency_non_shopify_script_mentioning_currency_is_ignored() -> None:
     html = '<html><head><script>var cfg = {"currency": "USD"};</script></head><body>Price: $52.00</body></html>'
     assert _extract_currency(_soup(html), "https://muddygeorge.com/products/cayl-cap") == "CAD"
+
+
+@pytest.mark.parametrize(
+    "chrome",
+    [
+        '<select><option value="CAD">CAD</option><option value="USD">USD</option></select>',
+        "<footer>Orders to the US ship from US$ warehouses</footer>",
+        "<nav><a>Shop in USD</a></nav>",
+    ],
+)
+def test_extract_currency_ignores_usd_in_page_chrome(chrome: str) -> None:
+    html = f"<html><body>{chrome}<div>Price: $52.00</div></body></html>"
+    assert _detect_currency(_soup(html), "https://example.ca/p/1") == ("CAD", "default")
+
+
+def test_extract_currency_usd_in_product_area_still_detected() -> None:
+    html = "<html><body><footer>Contact us</footer><div>Price: US$52.00</div></body></html>"
+    assert _detect_currency(_soup(html), "https://example.com/p/1") == ("USD", "text_scan")
+
+
+def test_extract_currency_ignores_usd_in_script_text() -> None:
+    html = '<html><body><script>var label = "USD";</script><div>Price: $52.00</div></body></html>'
+    assert _detect_currency(_soup(html), "https://example.com/p/1") == ("CAD", "default")
+
+
+@pytest.mark.parametrize(
+    "html, url, expected",
+    [
+        ('<html><head><meta property="og:price:currency" content="USD"></head></html>', "https://x.com/p", ("USD", "meta")),
+        ("<html><body>₩29,000</body></html>", "https://x.com/p", ("KRW", "text_scan")),
+        ("<html><body>29,000</body></html>", "https://x.kr/p", ("KRW", "tld")),
+    ],
+)
+def test_detect_currency_reports_deciding_signal(html: str, url: str, expected: tuple[str, str]) -> None:
+    assert _detect_currency(_soup(html), url) == expected
 
 
 # ---------------------------------------------------------------------------
