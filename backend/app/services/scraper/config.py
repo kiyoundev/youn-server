@@ -47,3 +47,11 @@ more plausibly flaky moment-to-moment than "did the request/render succeed
 at all" — the thing HTTPScraper/base PatchrightScraper's single attempt
 already covers. Revisit only if a specific non-Amazon retailer shows the
 same moment-to-moment flakiness Amazon's retry loop was built for."""
+
+UNIQLO_CLIENT_IDS: dict[str, str] = {"ca": "uq.ca.web-spa"}
+"""Value of the `x-fr-clientid` header Uniqlo's own storefront sends to its
+commerce API, per region (issue #58). Read from the public `main-*.js` bundle
+(config key `clientID` for the UQ brand) — not a secret, but region-specific
+and not documented, so a region missing here is unsupported rather than
+guessed. If the API starts answering "invalid or missing client id", re-read
+the header from the browser's network tab (filter `l2s`) and update this."""

@@ -2877,6 +2877,8 @@ User-reported "failed" status on the watchlist (home-server, not local dev) for 
 - [ ] Experiment E1 (same-IP Mac, after the overnight check so it can't muddy it): default Patchright fingerprint, then the same browser with a changed JS-visible identity (locale, timezone, viewport, DPR) ~3 min later — a pass on the second points at a fingerprint-keyed verdict; both denied means it isn't the JS fingerprint (TLS/IP-level, or a sticky flag)
 - [ ] Experiment E2 (delayed repeat): default fingerprint again after several hours — how long a denial lasts
 - [ ] Decide the mitigation from those results: per-domain minimum interval (pacing), fingerprint hardening (human-like mouse/scroll and a 5–10s dwell before reading, realistic desktop UA/platform, avoid software WebGL), or mark the retailer unsupported
+- [ ] Label the interim Akamai page correctly: when nothing matches and the page is tiny with no `<title>`, report a specific reason (e.g. "page empty or unrecognized interstitial (possible bot-block)", with the byte count) instead of "no price found on page" (see the 2026-10-11 update)
+- [ ] Decide whether to skip the startup scrape (`next_run_time=now`) for listings checked within the last few hours, so deploys stop spending bot-protected retailers' request allowance (see the 2026-10-11 update)
 
 ### First resolution (2026-09-20 afternoon) — superseded
 
@@ -2909,6 +2911,26 @@ The detector also named a real Akamai deny page correctly.
 **Extra requests we generate without thinking of them as polls:** the boot poll on every container start (`next_run_time=now`, so every deploy re-polls everything), manual rescrapes, and add-time probes.
 
 **Mitigation options, by cause:** a fingerprint verdict → make the browser look and behave more human (an arms race, possibly only partly fixable on a headless Pi); a rate limit → a per-domain minimum interval for bot-protected retailers, so deploy boot-polls and manual rescrapes don't spend the allowance; neither → mark unsupported. Any change belongs in a retailer-scoped scraper registered in `RETAILER_MAP` (like Amazon/IKEA), so BestBuy and SSENSE — which pass today — can't regress.
+
+### Update — recurrence after a deploy, misleading error message (2026-10-11)
+
+**Symptom.** After a `git pull` and rebuild on the Pi, listing 24 failed with "no price found on page" instead of the Akamai message. The logs showed `extractor=none status=error ... currency_source=default` for the URL and no exception.
+
+**Diagnosis (one capture, no repeat requests).** A standalone Patchright script loaded the product URL once and read the page twice, at `domcontentloaded` (what production reads) and 6s later on the same page:
+
+| Snapshot | Size | Title | Extraction result |
+|---|---|---|---|
+| `domcontentloaded` | 2,833 bytes | none | `no price found on page` |
+| +6s | 663 bytes | `Access Denied` | `Akamai bot-block (access denied)` |
+
+So this is the same Akamai deny as above, not a regression from that day's scraper changes. The page the scraper receives first is a small untitled interim page that Akamai's script then replaces with the deny, and `_detect_bot_block` (it needs the `Access Denied` title) never sees it. That is why the UI said "no price found" rather than naming the block. It also fits the pass-then-deny pattern: the boot poll after the rebuild was the first request in a while, and the capture was the second.
+
+**Recommendations (not started — revisit with the rest of this issue):**
+
+1. **Fix the error message.** The cheap, standalone part: treat a tiny, untitled page with no price as a likely interstitial and say so in `last_scrape_error`, with the byte count. It does not make the scrape succeed; it keeps the failure readable from the UI as #53 intended. Could also be done by waiting a few seconds and re-reading before classifying, at the cost of slower failing scrapes.
+2. **Skip the startup scrape for recently checked listings.** Every container start polls everything (`next_run_time=now`), so every deploy spends a bot-protected retailer's allowance, and the first request after it is the one that gets denied. Skipping listings checked within the last few hours helps every protected retailer, not only this one, but it changes polling behavior, so it needs a decision.
+3. **Keep the mitigation options above** (per-domain minimum interval, fingerprint hardening, or mark unsupported) as the real fix once E1/E2 say which cause it is.
+4. **Don't scrape this listing by hand while it is denied.** Manual rescrapes and diagnostic captures count as extra requests; this one capture was a deliberate single request.
 ---
 
 ## [x] Issue #53 — Surface Scrape Failure Reason + Timestamp on the Item Sheet Panel

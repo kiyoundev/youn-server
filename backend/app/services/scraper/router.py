@@ -5,10 +5,12 @@ from app.services.scraper.http_scraper import HTTPScraper
 from app.services.scraper.ikea_scraper import IKEAScraper
 from app.services.scraper.patchright_scraper import AmazonCAScraper, PatchrightScraper
 from app.services.scraper.result import ScraperResult
+from app.services.scraper.uniqlo_scraper import UniqloScraper
 
 RETAILER_MAP: dict[str, type[BaseScraper]] = {
     "amazon.ca": AmazonCAScraper,
     "ikea.com": IKEAScraper,
+    "uniqlo.com": UniqloScraper,
 }
 
 # Friendly display names, checked first by _derive_retailer() — for hostnames
