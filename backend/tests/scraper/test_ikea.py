@@ -26,7 +26,13 @@ def _payload(
     *, price: float = 49.99, currency: str = "CAD", store: dict | None = None, availability_extra: dict | None = None
 ) -> dict:
     return {
-        "product": {"itemNo": "70609396", "price": price, "currencyCode": currency},
+        "product": {
+            "itemNo": "70609396",
+            "name": "ALPSTUGA",
+            "typeName": "air quality sensor",
+            "price": price,
+            "currencyCode": currency,
+        },
         "availabilityResponse": {
             "availability": {
                 "stores": {"256": store} if store is not None else {},
@@ -44,7 +50,7 @@ async def test_in_stock_returns_ok_with_price_and_currency() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD", product_title="ALPSTUGA Air quality sensor")
 
 
 @pytest.mark.asyncio
@@ -65,7 +71,11 @@ async def test_out_of_stock_returns_oos_with_price_and_restock_date_range() -> N
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
     assert result == ScraperResult(
-        price=49.99, status="oos", currency="CAD", restock_at="Sep 22, 2026–Sep 29, 2026"
+        price=49.99,
+        status="oos",
+        currency="CAD",
+        product_title="ALPSTUGA Air quality sensor",
+        restock_at="Sep 22, 2026–Sep 29, 2026",
     )
 
 
@@ -77,7 +87,7 @@ async def test_out_of_stock_with_no_restock_data_leaves_restock_at_none() -> Non
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=49.99, status="oos", currency="CAD", restock_at=None)
+    assert result == ScraperResult(price=49.99, status="oos", currency="CAD", product_title="ALPSTUGA Air quality sensor", restock_at=None)
 
 
 @pytest.mark.asyncio
@@ -91,7 +101,7 @@ async def test_store_not_present_treated_as_in_stock() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD", product_title="ALPSTUGA Air quality sensor")
 
 
 @pytest.mark.asyncio
@@ -102,7 +112,7 @@ async def test_unrecognized_currency_code_left_as_none() -> None:
 
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
-    assert result == ScraperResult(price=49.99, status="ok", currency=None)
+    assert result == ScraperResult(price=49.99, status="ok", currency=None, product_title="ALPSTUGA Air quality sensor")
 
 
 @pytest.mark.asyncio
@@ -171,7 +181,7 @@ async def test_trailing_query_string_does_not_break_item_number_extraction() -> 
     url_with_tracking_param = PRODUCT_URL + "?srsltid=AfmBOopVlu7Sy3wzN3TBuvcSsZpWEgrQh1"
     result = await IKEAScraper().get_price(url_with_tracking_param)
 
-    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD", product_title="ALPSTUGA Air quality sensor")
 
 
 @pytest.mark.asyncio
@@ -187,7 +197,7 @@ async def test_numeric_query_param_does_not_get_mistaken_for_item_number() -> No
     url_with_numeric_param = PRODUCT_URL + "?variant=99999999"
     result = await IKEAScraper().get_price(url_with_numeric_param)
 
-    assert result == ScraperResult(price=49.99, status="ok", currency="CAD")
+    assert result == ScraperResult(price=49.99, status="ok", currency="CAD", product_title="ALPSTUGA Air quality sensor")
 
 
 @pytest.mark.asyncio
@@ -246,3 +256,46 @@ async def test_missing_store_falls_back_to_home_delivery_out_of_stock() -> None:
     result = await IKEAScraper().get_price(PRODUCT_URL)
 
     assert result.status == "oos"
+
+
+# ── metadata on every outcome (issue #64) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_error_after_the_product_parsed_still_carries_title_and_currency() -> None:
+    """The product object was read (a real product page), only the
+    availability block is malformed — what was read is not discarded."""
+    payload = _payload(store={"isOutOfStock": False})
+    del payload["availabilityResponse"]["availability"]
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert result.status == "error"
+    assert result.product_title == "ALPSTUGA Air quality sensor"
+    assert result.currency == "CAD"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_error_before_the_product_parsed_carries_no_metadata() -> None:
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text="<div>no data here</div>"))
+
+    result = await IKEAScraper().get_price(PRODUCT_URL)
+
+    assert result.product_title is None
+    assert result.currency is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_title_falls_back_to_name_alone_and_none_when_absent() -> None:
+    payload = _payload(store={"isOutOfStock": False})
+    del payload["product"]["typeName"]
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+    assert (await IKEAScraper().get_price(PRODUCT_URL)).product_title == "ALPSTUGA"
+
+    del payload["product"]["name"]
+    respx.get(FRAGMENT_URL).mock(return_value=httpx.Response(200, text=_fragment_html(payload)))
+    assert (await IKEAScraper().get_price(PRODUCT_URL)).product_title is None

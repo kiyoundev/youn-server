@@ -100,27 +100,33 @@ def _mock_page(final_url: str, html: str) -> AsyncMock:
     return page
 
 
-async def _run_get_price(page: AsyncMock, url: str = TRACKED_URL):
-    """The page HTML decides everything — prices are parsed from it, nothing
-    is patched out except the browser launch and the (Playwright) title read."""
+TITLE = "Apple 20W USB-C Power Adapter"
+
+
+def _titled(html: str, title: str = TITLE) -> str:
+    """The trimmed fixtures dropped #productTitle; put it back on top."""
+    return f'<span id="productTitle"> {title} </span>{html}'
+
+
+async def _run_get_price(page: AsyncMock, url: str = TRACKED_URL) -> ScraperResult:
+    """The page HTML decides everything — prices and title are parsed from
+    it, nothing is patched out except the browser launch."""
     context = MagicMock()
     context.new_page = AsyncMock(return_value=page)
     scraper = AmazonCAScraper()
-    find_title = AsyncMock(return_value="Apple 20W USB-C Power Adapter")
     with (
         patch.object(PatchrightScraper, "start_browser", AsyncMock()),
         patch.object(PatchrightScraper, "_context", context),
-        patch.object(AmazonCAScraper, "_find_product_title", find_title),
     ):
         result = await scraper.get_price(url)
-    return result, find_title
+    return result
 
 
 @pytest.mark.asyncio
 async def test_new_buy_box_returns_price() -> None:
-    page = _mock_page(TRACKED_URL, _fixture("plain_new.html"))
+    page = _mock_page(TRACKED_URL, _titled(_fixture("plain_new.html")))
 
-    result, _ = await _run_get_price(page)
+    result = await _run_get_price(page)
 
     assert result == ScraperResult(
         price=88.0, status="ok", product_title="Apple 20W USB-C Power Adapter", currency="CAD"
@@ -131,7 +137,7 @@ async def test_new_buy_box_returns_price() -> None:
 async def test_both_offers_page_returns_the_new_price_not_the_used_one() -> None:
     page = _mock_page(TRACKED_URL, _fixture("accordion_both.html"))
 
-    result, _ = await _run_get_price(page)
+    result = await _run_get_price(page)
 
     assert result.status == "ok"
     assert result.price == 54.98
@@ -142,34 +148,55 @@ async def test_both_offers_page_returns_the_new_price_not_the_used_one() -> None
 async def test_redirect_to_another_variant_is_oos_and_never_reads_its_price() -> None:
     """The real case: the tracked ASIN redirected to a variant whose page is
     a used-only box — that is another color's price, not ours (new or used)."""
-    page = _mock_page(SERVED_OTHER_VARIANT_URL, _fixture("used_only.html"))
+    page = _mock_page(SERVED_OTHER_VARIANT_URL, _titled(_fixture("used_only.html"), "Some Other Color"))
 
-    result, find_title = await _run_get_price(page)
+    result = await _run_get_price(page)
 
+    # Another variant's page: never its title, price or anything else (#64).
     assert result == ScraperResult(price=None, status="oos", currency="CAD", used_price=None)
-    find_title.assert_not_awaited()
     page.goto.assert_awaited()  # retries are not burned: one attempt, one visit pair
     assert page.close.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_used_only_buy_box_on_same_asin_is_oos_for_new_with_the_used_price() -> None:
-    page = _mock_page(TRACKED_URL, _fixture("used_only.html"))
+    page = _mock_page(TRACKED_URL, _titled(_fixture("used_only.html"), "Apple AirPods Max 2 - Purple"))
 
-    result, find_title = await _run_get_price(page)
+    result = await _run_get_price(page)
 
-    assert result == ScraperResult(price=None, status="oos", currency="CAD", used_price=637.19)
-    find_title.assert_not_awaited()
+    assert result == ScraperResult(
+        price=None, status="oos", product_title="Apple AirPods Max 2 - Purple", currency="CAD", used_price=637.19
+    )
 
 
 @pytest.mark.asyncio
 async def test_see_all_buying_options_is_oos_not_exhausted_retries() -> None:
     page = _mock_page(TRACKED_URL, _fixture("no_featured_offer.html"))
 
-    result, _ = await _run_get_price(page)
+    result = await _run_get_price(page)
 
     assert result == ScraperResult(price=None, status="oos", currency="CAD", used_price=None)
     assert page.content.await_count == 1  # no retries burned
+
+
+@pytest.mark.asyncio
+async def test_see_all_buying_options_oos_carries_the_title() -> None:
+    page = _mock_page(TRACKED_URL, _titled(_fixture("no_featured_offer.html")))
+
+    result = await _run_get_price(page)
+
+    assert result == ScraperResult(price=None, status="oos", product_title=TITLE, currency="CAD", used_price=None)
+
+
+@pytest.mark.asyncio
+async def test_captcha_page_carries_no_metadata() -> None:
+    """A robot-check page has no #productTitle and no known offer state — a
+    plain error, nothing to infer a name or currency from (issue #64)."""
+    page = _mock_page(TRACKED_URL, "<html><title>Robot Check</title><body>Enter the characters you see</body></html>")
+
+    result = await _run_get_price(page)
+
+    assert result == ScraperResult(price=None, status="error", error_reason="exhausted retries")
 
 
 @pytest.mark.asyncio
@@ -178,7 +205,7 @@ async def test_url_without_asin_skips_the_redirect_check() -> None:
     the normal price read rather than guessing a redirect."""
     page = _mock_page("https://www.amazon.ca/dp/B0DJFW7PNM", _fixture("plain_new.html"))
 
-    result, _ = await _run_get_price(page, url="https://a.co/d/abc123")
+    result = await _run_get_price(page, url="https://a.co/d/abc123")
 
     assert result.status == "ok"
     assert result.price == 88.0
@@ -190,7 +217,7 @@ async def test_unrecognized_page_without_price_still_exhausts_retries() -> None:
     (e.g. a captcha) is still a scrape failure, not a stock status."""
     page = _mock_page(TRACKED_URL, "<html><body>robot check</body></html>")
 
-    result, _ = await _run_get_price(page)
+    result = await _run_get_price(page)
 
     assert result == ScraperResult(price=None, status="error", error_reason="exhausted retries")
     assert page.content.await_count == AMAZON_MAX_RETRIES
@@ -202,13 +229,20 @@ async def test_new_buy_box_without_a_readable_price_is_a_named_error() -> None:
     box must surface as an error — never the page-wide fallback's guess, and
     never oos (that would fake a restock on the next good read)."""
     html = '<div><input id="add-to-cart-button" type="submit"></div><span class="a-offscreen">$99.99</span>'
-    page = _mock_page(TRACKED_URL, html)
+    page = _mock_page(TRACKED_URL, _titled(html))
 
-    result, find_title = await _run_get_price(page)
+    result = await _run_get_price(page)
 
-    assert result == ScraperResult(price=None, status="error", error_reason="price not found in the new buy box")
+    # The page is the product (only its price is unreadable), so the name and
+    # currency are still attached (issue #64).
+    assert result == ScraperResult(
+        price=None,
+        status="error",
+        error_reason="price not found in the new buy box",
+        product_title=TITLE,
+        currency="CAD",
+    )
     assert page.content.await_count == AMAZON_MAX_RETRIES
-    find_title.assert_not_awaited()
 
 
 # ── price parsers (issue #60) ────────────────────────────────────────────

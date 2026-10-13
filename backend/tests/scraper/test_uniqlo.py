@@ -416,3 +416,50 @@ async def test_lookup_for_a_different_product_is_ignored() -> None:
     result = await UniqloScraper().get_price(IN_STOCK_URL)
 
     assert result.product_title is None
+
+
+# ── metadata on error outcomes (issue #64) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_variant_not_found_error_still_carries_the_resolved_title() -> None:
+    _mock(_api(_variant("34", "003", "A1")))
+    _mock_lookup()
+
+    result = await UniqloScraper().get_price(IN_STOCK_URL)
+
+    assert result.status == "error"
+    assert result.product_title == "Zip Up Blouson (BLUE, M)"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stock_api_failure_still_carries_the_resolved_title() -> None:
+    _mock({"status": "nok"}, status=500)
+    _mock_lookup()
+
+    result = await UniqloScraper().get_price(IN_STOCK_URL)
+
+    assert result.status == "error"
+    assert result.product_title == "Zip Up Blouson (BLUE, M)"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_error_without_a_resolved_name_has_no_title() -> None:
+    _mock({"status": "nok"}, status=500)
+    _mock_lookup(status=404)
+
+    result = await UniqloScraper().get_price(IN_STOCK_URL)
+
+    assert result.status == "error"
+    assert result.product_title is None
+
+
+@pytest.mark.asyncio
+async def test_error_before_any_request_carries_no_metadata() -> None:
+    result = await UniqloScraper().get_price("https://www.uniqlo.com/ca/en/cart")
+
+    assert result.product_title is None
+    assert result.currency is None

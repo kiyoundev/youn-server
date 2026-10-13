@@ -656,6 +656,64 @@ async def test_run_hierarchy_success_carries_no_error_reason(s: DummyScraper) ->
     assert result.error_reason is None
 
 
+# Issue #64 — metadata is applied for every status, so the generic path must
+# only attach what the page can vouch for.
+
+_PAGE_META_HEAD = (
+    '<title>Widget Pro | Acme</title>'
+    '<meta property="og:site_name" content="Acme">'
+)
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_oos_keeps_name_site_and_currency(s: DummyScraper) -> None:
+    ld = json.dumps(
+        {
+            "@type": "Product",
+            "name": "Widget Pro",
+            "offers": {"@type": "Offer", "price": "89.99", "availability": "https://schema.org/OutOfStock"},
+        }
+    )
+    html = (
+        f'<html><head>{_PAGE_META_HEAD}<script type="application/ld+json">{ld}</script></head></html>'
+    )
+    result = await s._run_hierarchy(html, "https://acme.ca/p/widget")
+    assert result.status == "oos"
+    assert result.product_title == "Widget Pro"
+    assert result.site_name == "Acme"
+    assert result.currency == "CAD"
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_bot_block_carries_no_metadata(s: DummyScraper) -> None:
+    """A block page has a <title> and a currency heuristic of its own — none
+    of it may reach the product (name inference is first-write-wins)."""
+    for html in (
+        AKAMAI_DENY_HTML,
+        '<html><head><title>Just a moment...</title><meta property="og:site_name" content="Cloudflare"></head>'
+        "<body>Checking your browser</body></html>",
+    ):
+        result = await s._run_hierarchy(html, "https://example.com/p")
+        assert result.status == "error"
+        assert result.product_title is None
+        assert result.site_name is None
+        assert result.currency is None
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_unrecognised_error_page_withholds_name_and_site_keeps_currency(
+    s: DummyScraper,
+) -> None:
+    """A 404 / login wall is no bot-block signature, but it is not the
+    product either: its title must not become the product's permanent name."""
+    html = f"<html><head>{_PAGE_META_HEAD.replace('Widget Pro', 'Page Not Found')}</head><body>404</body></html>"
+    result = await s._run_hierarchy(html, "https://acme.ca/p/gone")
+    assert result.status == "error"
+    assert result.product_title is None
+    assert result.site_name is None
+    assert result.currency == "CAD"
+
+
 def test_detect_bot_block_ignores_access_denied_without_akamai_markers() -> None:
     """Some other vendor's (or a site's own) "Access Denied" page must not
     be mislabeled as Akamai — falls through to the caller's generic reason."""

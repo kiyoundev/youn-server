@@ -382,14 +382,6 @@ _AMAZON_NEW_BUY_BOX_HTML = (
 )
 
 
-def _amazon_locator_stub(title: str | None) -> MagicMock:
-    """Fakes page.locator("#productTitle") for _find_product_title — the only
-    browser-side read left in AmazonCAScraper; prices come from page.content()."""
-    title_locator = MagicMock()
-    title_locator.first.text_content = AsyncMock(return_value=title)
-    return MagicMock(return_value=title_locator)
-
-
 @pytest.mark.asyncio
 async def test_amazon_ca_scraper_success_always_includes_currency_cad() -> None:
     """AmazonCAScraper hardcodes currency="CAD" on every successful
@@ -397,9 +389,8 @@ async def test_amazon_ca_scraper_success_always_includes_currency_cad() -> None:
     extraction, never calling BaseScraper._run_hierarchy/_extract_currency,
     so nothing else would ever set this field for amazon.ca."""
     mock_page = AsyncMock()
-    mock_page.locator = _amazon_locator_stub(title="Airpod Max 2")
     mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
-    mock_page.content = AsyncMock(return_value=_AMAZON_NEW_BUY_BOX_HTML)
+    mock_page.content = AsyncMock(return_value='<span id="productTitle">Airpod Max 2</span>' + _AMAZON_NEW_BUY_BOX_HTML)
 
     mock_context = MagicMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
@@ -419,7 +410,6 @@ async def test_amazon_ca_scraper_error_path_leaves_currency_none() -> None:
     through the currency-hardcoding success branch — currency stays None,
     same as any other genuine extraction failure."""
     mock_page = AsyncMock()
-    mock_page.locator = _amazon_locator_stub(title=None)
     mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
     mock_page.content = AsyncMock(return_value="<html></html>")
 

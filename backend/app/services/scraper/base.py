@@ -815,20 +815,36 @@ class BaseScraper(ABC):
                     rsc_result.price, result.price, source, url,
                 )
 
+        bot_block: str | None = None
         if result is None:
             # Page loaded but no extraction method found a price — silent
             # before issue #53 (no log, no exception), the exact gap that hid
             # #52's Akamai block. Now carries a reason.
+            bot_block = _detect_bot_block(soup)
             result = ScraperResult(
                 price=None,
                 status="error",
-                error_reason=_detect_bot_block(soup) or "no price found on page",
+                error_reason=bot_block or "no price found on page",
             )
 
-        site_name = _extract_site_name(soup, jsonld_scripts)
-        product_title = _extract_product_title(soup, jsonld_scripts)
-        if product_title:
-            product_title = _strip_trailing_site_name(product_title, site_name)
+        # Issue #64 — metadata is applied by the scheduler whatever the
+        # status, and name inference is first-write-wins, so only attach what
+        # the page can legitimately vouch for:
+        #   - a detected bot-block / challenge page is not the product: it
+        #     has a <title> and a currency heuristic too, none of it ours;
+        #   - an "error" page may be anything (a 404, a login wall, a block
+        #     page no signature recognises), so its title / site name are
+        #     withheld — only the currency (host-derived, harmless) is kept.
+        if bot_block is not None:
+            _log.info("extractor=none status=error bot_block=%r url=%s", bot_block, url)
+            return result
+        if result.status == "error":
+            site_name = product_title = None
+        else:
+            site_name = _extract_site_name(soup, jsonld_scripts)
+            product_title = _extract_product_title(soup, jsonld_scripts)
+            if product_title:
+                product_title = _strip_trailing_site_name(product_title, site_name)
         # Unlike site_name/product_title, currency always resolves to a
         # concrete value (CAD default) — no "both None, skip the replace"
         # short-circuit possible here, dataclasses.replace always runs.

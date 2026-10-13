@@ -36,6 +36,11 @@ class IKEAScraper(BaseScraper):
             _log.warning("IKEAScraper: no item number found in %s", url)
             return ScraperResult(price=None, status="error", error_reason="no item number found in URL")
         item_no = match.group(1)
+        # Issue #64 — metadata is attached to every outcome from the moment
+        # the product object has been parsed (a later error still read a real
+        # product page); before that there is nothing to attach.
+        title: str | None = None
+        currency: str | None = None
 
         fragment_url = (
             "https://www.ikea.com/ca/en/lower-funnel-fragments/"
@@ -63,6 +68,7 @@ class IKEAScraper(BaseScraper):
             product = data["product"]
             raw_currency = product.get("currencyCode")
             currency = raw_currency if raw_currency in _VALID_CURRENCIES else None
+            title = _product_title(product)
             availability = data["availabilityResponse"]["availability"]
             store = availability["stores"].get(settings.ikea_store_id)
 
@@ -87,9 +93,29 @@ class IKEAScraper(BaseScraper):
                 # always includes one regardless of stock).
                 restocks = ((store or {}).get("restocks") or {}).get("shortDate")
                 restock_at = "–".join(restocks) if restocks else None
-                return ScraperResult(price=price, status="oos", currency=currency, restock_at=restock_at)
+                return ScraperResult(price=price, status="oos", currency=currency, product_title=title, restock_at=restock_at)
 
-            return ScraperResult(price=price, status="ok", currency=currency)
+            return ScraperResult(price=price, status="ok", currency=currency, product_title=title)
         except Exception as exc:
             _log.warning("IKEAScraper error for %s", url, exc_info=True)
-            return ScraperResult(price=None, status="error", error_reason=_describe_exception(exc))
+            return ScraperResult(
+                price=None,
+                status="error",
+                error_reason=_describe_exception(exc),
+                product_title=title,
+                currency=currency,
+            )
+
+
+def _product_title(product: dict) -> str | None:
+    """Feeds Product.name (issue #44/#64). IKEA's product object splits the
+    display name into `name` ("ALPSTUGA") and `typeName` ("air quality
+    sensor"); joined the way IKEA's own page heading shows them. Either alone
+    is still a usable name; neither is None."""
+    name = product.get("name")
+    name = name.strip() if isinstance(name, str) else ""
+    type_name = product.get("typeName")
+    type_name = type_name.strip() if isinstance(type_name, str) else ""
+    if name and type_name:
+        return f"{name} {type_name[0].upper()}{type_name[1:]}"
+    return name or type_name or None

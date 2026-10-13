@@ -3338,7 +3338,7 @@ A wrong currency mislabels every price, target and chart on the product, and giv
 
 ---
 
-## [ ] Issue #64 — Infer Item Name, Currency and Retailer on Every Scrape Outcome (Not Just `ok`)
+## [x] Issue #64 — Infer Item Name, Currency and Retailer on Every Scrape Outcome (Not Just `ok`)
 
 **Type:** fix / AFK
 **Estimate:** ~3h
@@ -3356,6 +3356,7 @@ Found live-testing #60: adding the used-only AirPods Max 2 listing (`B0GSS5TK8R`
 2. **The dedicated scrapers.** Each one attaches metadata on `ok` only, or nothing at all:
    - `AmazonCAScraper` reads the title through a Playwright call only on a successful price (deliberately, to avoid a wasted round trip per failed retry); its `oos` result carries currency but no title; its errors carry nothing. Read `#productTitle` from the soup `get_price` already parses (no round trip, so it can be read on every attempt) and attach title and currency on `ok`, `"oos"` and the named "price not found in the new buy box" error.
    - `IKEAScraper` and `UniqloScraper` attach what they parse (currency; Uniqlo also the title on `oos`) but not on their error results, and IKEA never attaches a name. Attach whatever the response exposes on every outcome that got far enough to parse it.
+     (IKEA's fragment payload does expose `name` + `typeName` — verified live — so IKEA now attaches "ALPSTUGA Air quality sensor"-style titles.)
    - The generic `_run_hierarchy` already attaches `site_name`/`product_title`/`currency` to every result, including `"oos"` and `"error"` — no change needed there except the guard below.
 
 **Guard — do not infer from pages that aren't the product.** "Regardless of status" means whenever the product page genuinely loaded, not whenever *something* came back. A bot-block or challenge page (the generic extractor's `_detect_bot_block` case — "Access Denied", "Just a moment…", a captcha) has a title and a currency heuristic too, and the name fill is first-write-wins, so a block page's title would become the product's permanent name. Such results must carry no metadata (or the fill must skip them). Likewise the Amazon redirected-variant case must not attach the other variant's title (a different product page), and a captcha/robot page gets nothing.
@@ -3366,15 +3367,15 @@ Found live-testing #60: adding the used-only AirPods Max 2 listing (`B0GSS5TK8R`
 
 ### Acceptance criteria
 
-- [ ] An `"oos"` scrape that returns a title, currency and site name fills `Product.name`, `Product.currency` and `Listing.retailer` under the same guards as `ok` (name/currency only while `NULL`, retailer only while still the hostname fallback)
-- [ ] An `"error"` scrape that returns metadata applies it the same way
-- [ ] `ok` behaviour is unchanged, including the locked Product read for alert deduplication (#48)
-- [ ] `AmazonCAScraper` returns the title and currency on `ok`, `"oos"` and the named error (read from the parsed page, not a Playwright call), and nothing for a redirected variant or a captcha page
-- [ ] IKEA and Uniqlo attach every metadata field they parse on all outcomes
-- [ ] A bot-block/challenge page never supplies a name, currency or retailer
-- [ ] An existing "Untitled" product with an `"oos"` listing gets its name on the next scrape
-- [ ] Tests: `process_item` per branch (oos fills, error fills, existing name/currency not overwritten, manual retailer edit survives); per-scraper tests per status; a block-page test
-- [ ] Live-verified: add the used-only Amazon listing `B0GSS5TK8R` and get the name "Apple AirPods Max 2 - Purple" with currency CAD while it stays `"oos"`
+- [x] An `"oos"` scrape that returns a title, currency and site name fills `Product.name`, `Product.currency` and `Listing.retailer` under the same guards as `ok` (name/currency only while `NULL`, retailer only while still the hostname fallback)
+- [x] An `"error"` scrape that returns metadata applies it the same way
+- [x] `ok` behaviour is unchanged, including the locked Product read for alert deduplication (#48)
+- [x] `AmazonCAScraper` returns the title and currency on `ok`, `"oos"` and the named error (read from the parsed page, not a Playwright call), and nothing for a redirected variant or a captcha page
+- [x] IKEA and Uniqlo attach every metadata field they parse on all outcomes
+- [x] A bot-block/challenge page never supplies a name, currency or retailer; on the generic path any `error` page withholds name and retailer (only currency is kept), since an unrecognised error page (404, login wall) is not the product either
+- [x] An existing "Untitled" product with an `"oos"` listing gets its name on the next scrape
+- [x] Tests: `process_item` per branch (oos fills, error fills, existing name/currency not overwritten, manual retailer edit survives); per-scraper tests per status; a block-page test
+- [x] Live-verified: add the used-only Amazon listing `B0GSS5TK8R` and get the name "Apple AirPods Max 2 - Purple" with currency CAD while it stays `"oos"`
 
 ### Known limitations
 

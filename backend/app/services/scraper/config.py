@@ -26,11 +26,6 @@ CLOUDFLARE_CHALLENGE_TIMEOUT_MS = 20_000
 """How long to wait for a Cloudflare "Just a moment..." interstitial's title
 to change before giving up and extracting from whatever HTML is present."""
 
-PRICE_LOCATOR_TIMEOUT_MS = 3_000
-"""AmazonCAScraper's [data-pricetopay-label] locator text_content() wait —
-short since this selector should already be in the DOM by the time it's
-checked (page.goto already used wait_until="load")."""
-
 AMAZON_MAX_RETRIES = 2
 """AmazonCAScraper.get_price()'s retry count — the only scraper in this stack
 with an in-process retry loop; HTTPScraper and the base PatchrightScraper both

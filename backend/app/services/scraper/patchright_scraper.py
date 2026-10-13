@@ -12,7 +12,6 @@ from app.services.scraper.config import (
     AMAZON_MAX_RETRIES,
     CLOUDFLARE_CHALLENGE_TIMEOUT_MS,
     PAGE_NAV_TIMEOUT_MS,
-    PRICE_LOCATOR_TIMEOUT_MS,
 )
 from app.services.scraper.result import ScraperResult
 
@@ -332,21 +331,21 @@ def _amazon_used_price(html: "str | BeautifulSoup") -> float | None:
     return None
 
 
+def _amazon_product_title(html: "str | BeautifulSoup") -> str | None:
+    """Feeds Product.name (issue #44) — AmazonCAScraper bypasses
+    BaseScraper._run_hierarchy entirely (own price parsers, never the shared
+    extraction pass), so it needs its own title read. #productTitle is
+    Amazon's own stable element id for it. Read from the soup get_price
+    already parsed (issue #64), so it costs no Playwright round trip and can
+    be taken on every attempt. A captcha / robot-check page has no
+    #productTitle, so it yields None — the page isn't the product."""
+    node = _as_soup(html).find(id="productTitle")
+    text = node.get_text(strip=True) if node is not None else ""
+    return text or None
+
+
 class AmazonCAScraper(PatchrightScraper):
     MAX_RETRIES = AMAZON_MAX_RETRIES
-
-    async def _find_product_title(self, page) -> str | None:
-        """Feeds Product.name (issue #44) — AmazonCAScraper bypasses
-        BaseScraper._run_hierarchy entirely (own price parsers, never the
-        shared extraction pass), so it needs its own title read.
-        #productTitle is Amazon's own stable element id for this. Non-fatal on failure — a
-        missing/unreadable title just means product_title stays None,
-        exactly like every other extraction path in this feature."""
-        try:
-            text = (await page.locator("#productTitle").first.text_content(timeout=PRICE_LOCATOR_TIMEOUT_MS) or "").strip()
-            return text or None
-        except Exception:
-            return None
 
     async def get_price(self, url: str) -> ScraperResult:
         try:
@@ -363,6 +362,10 @@ class AmazonCAScraper(PatchrightScraper):
         # What the last failed attempt saw — a new buy box whose price can't be
         # read is a layout problem worth naming, not just "exhausted retries".
         failure_reason = "exhausted retries"
+        # Issue #64 — the title of the attempt that set failure_reason, so the
+        # error result can carry it (the page was the product, only its price
+        # couldn't be read). Set and cleared together with failure_reason.
+        failure_title: str | None = None
         try:
             for _ in range(self.MAX_RETRIES):
                 try:
@@ -383,18 +386,15 @@ class AmazonCAScraper(PatchrightScraper):
                         # (or used-only) buy box — never from the whole page.
                         soup = _as_soup(await page.content())
                         no_new_offer = not variant_gone and _amazon_has_no_new_offer(soup)
-                        price = used_price = title = None
+                        price = used_price = None
+                        # A redirected variant is a different product's page —
+                        # never take its title.
+                        title = None if variant_gone else _amazon_product_title(soup)
                         if not variant_gone and not no_new_offer:
                             price = _amazon_new_price(soup)
                             if price is None and soup.find(id="add-to-cart-button"):
                                 failure_reason = "price not found in the new buy box"
-                            # Only fetched on the attempt that's actually going
-                            # to succeed — an extra Playwright DOM round-trip on
-                            # every failed retry (page didn't load right, price
-                            # element missing, etc.) would be wasted anyway,
-                            # since that attempt's whole result gets discarded
-                            # (review finding).
-                            title = await self._find_product_title(page) if price is not None else None
+                                failure_title = title
                         elif no_new_offer:
                             used_price = _amazon_used_price(soup)
                         is_oos = variant_gone or no_new_offer
@@ -408,10 +408,18 @@ class AmazonCAScraper(PatchrightScraper):
                         # hardcoded currency same as its own title read above.
                         return ScraperResult(price=price, status="ok", product_title=title, currency="CAD")
                     if is_oos:
-                        return ScraperResult(price=None, status="oos", currency="CAD", used_price=used_price)
+                        return ScraperResult(
+                            price=None, status="oos", product_title=title, currency="CAD", used_price=used_price
+                        )
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
             _log.warning("AmazonCAScraper gave up on %s: %s", url, failure_reason)
-            return ScraperResult(price=None, status="error", error_reason=failure_reason)
+            return ScraperResult(
+                price=None,
+                status="error",
+                error_reason=failure_reason,
+                product_title=failure_title,
+                currency="CAD" if failure_title else None,
+            )
         finally:
             PatchrightScraper._active_scrapes -= 1

@@ -151,6 +151,42 @@ def _clear_failure(listing: Listing) -> None:
     listing.last_scrape_error = None
 
 
+def _apply_scrape_metadata(listing: Listing, product: Product, scrape) -> None:
+    """Issue #64 — the three guarded metadata fills (#44 / #45), applied for
+    every scrape outcome, not just "ok": whatever the scraper managed to read
+    from the page is kept. The caller supplies `product`, because which read
+    is right depends on the branch: "ok" passes its locked read (#48), the
+    "oos"/"error" branches a plain session.get() — safe there only because
+    they return before any locked Product read could be handed this earlier
+    instance from the identity map.
+
+    Retailer name (issue #44) — only overwritten while listing.retailer still
+    equals what _derive_retailer(hostname) would produce right now, i.e.
+    untouched since creation. A user's manual edit (PATCH .../listings/{id})
+    no longer matches that deterministic fallback, so a scheduled poll can't
+    stomp it. Hostnames with a curated RETAILER_DISPLAY_NAMES entry are
+    excluded entirely — otherwise a host whose own og:site_name is a long
+    tagline (29cm.co.kr's full Korean marketing name, musinsa.com's Hangul
+    brand name) would have its curated short name self-clobbered back to that
+    tagline, since _derive_retailer(hostname) *is* the curated name and so
+    still matches the guard.
+
+    Product name (issue #44) and currency (issue #45) — only while still NULL.
+    First-write-wins: a wrong inferred name is not corrected by later scrapes."""
+    if scrape.site_name:
+        hostname = _hostname_of(listing.url)
+        if hostname not in RETAILER_DISPLAY_NAMES and listing.retailer == _derive_retailer(hostname):
+            # Some sites' og:site_name is literally their bare domain
+            # ("Walmart.ca") rather than a brand name — same TLD strip
+            # _derive_retailer's own fallback uses, so both paths agree on
+            # one display name per retailer.
+            listing.retailer = _strip_tld_suffix(scrape.site_name)
+    if scrape.product_title and product.name is None:
+        product.name = scrape.product_title
+    if scrape.currency and product.currency is None:
+        product.currency = scrape.currency
+
+
 async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queue) -> None:
     async with AsyncSessionLocal() as session:
         listing = await session.get(Listing, item_id)
@@ -216,6 +252,12 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 # rather than overwriting it with None.
                 if scrape.price is not None:
                     listing.last_price = scrape.price
+                # Issue #64 — plain read, not locked: this branch returns
+                # before the locked Product read below (see
+                # _apply_scrape_metadata).
+                product = await session.get(Product, listing.product_id)
+                if product is not None:
+                    _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
                 return
 
@@ -224,6 +266,11 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 # `or` fallback guarantees a non-empty reason even if a
                 # scraper ever returns "error" without setting one.
                 _record_failure(listing, scrape.error_reason or "unknown scraper error", now)
+                # Issue #64 — whatever the scraper did read is kept (the
+                # scrapers withhold what a non-product page must not supply).
+                product = await session.get(Product, listing.product_id)
+                if product is not None:
+                    _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
                 return
 
@@ -239,6 +286,9 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                     listing.retailer,
                 )
                 _record_failure(listing, "scraper returned ok status but no price was found", now)
+                product = await session.get(Product, listing.product_id)
+                if product is not None:
+                    _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
                 return
 
@@ -262,30 +312,6 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             listing.last_checked_at = now
             _clear_failure(listing)
 
-            # Retailer-name inference (issue #44) — guarded: only overwrite while
-            # listing.retailer still equals what _derive_retailer(hostname) would
-            # produce right now, i.e. untouched since creation. A user's manual
-            # edit (PATCH .../listings/{id}) no longer matches that deterministic
-            # fallback, so it's left alone — this is what stops a scheduled poll
-            # 6h later from silently stomping it. Doesn't need `product` at all,
-            # so it happens here rather than at the locked read below.
-            #
-            # Hostnames with a curated RETAILER_DISPLAY_NAMES entry are
-            # excluded from this upgrade entirely — otherwise a host whose
-            # own og:site_name is a long tagline (29cm.co.kr's full Korean
-            # marketing name, musinsa.com's Hangul brand name) would have
-            # its curated short name self-clobbered back to that tagline on
-            # the very next scrape, since _derive_retailer(hostname) now
-            # *is* the curated name and so still matches the guard above.
-            if scrape.site_name:
-                hostname = _hostname_of(listing.url)
-                if hostname not in RETAILER_DISPLAY_NAMES and listing.retailer == _derive_retailer(hostname):
-                    # Some sites' og:site_name is literally their bare domain
-                    # ("Walmart.ca") rather than a brand name — same TLD
-                    # strip _derive_retailer's own fallback uses, so both
-                    # paths agree on one display name per retailer.
-                    listing.retailer = _strip_tld_suffix(scrape.site_name)
-
             # Locked read (issue #48) — two listings of the same product scraped
             # concurrently (see _poll_concurrency_semaphore / #41's own
             # concurrent add-time dispatch) each open their own session here.
@@ -300,23 +326,11 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 await session.execute(select(Product).where(Product.id == listing.product_id).with_for_update())
             ).scalar_one()
 
-            # Product-name inference (issue #44) — guarded: only while still
-            # NULL (the user left it blank at creation and nothing has filled it
-            # yet). Piggybacks on the locked read just above rather than a
-            # separate query — this fill isn't itself race-sensitive, but the
-            # row's already open here for #48's alert-dedup fix, so no reason to
-            # pay for a second fetch.
-            if scrape.product_title and product.name is None:
-                product.name = scrape.product_title
-
-            # Currency inference (issue #45) — same guard as product-name
-            # inference just above, same locked row, no extra query. In
-            # practice this fires on a product's first successful scrape:
-            # _extract_currency always resolves to a concrete value (CAD
-            # default) rather than None, so scrape.currency is truthy on
-            # essentially every status="ok" scrape reaching this point.
-            if scrape.currency and product.currency is None:
-                product.currency = scrape.currency
+            # Issue #64 — the retailer/name/currency fills, on the locked
+            # Product read just above (same row #48 already holds open, no
+            # extra query). Runs before the events below are built, which
+            # read listing.retailer.
+            _apply_scrape_metadata(listing, product, scrape)
 
             product_listings_result = await session.execute(select(Listing).where(Listing.product_id == product.id))
             product_listings = list(product_listings_result.scalars().all())

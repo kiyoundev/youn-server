@@ -77,14 +77,17 @@ class UniqloScraper(BaseScraper):
                     _fetch_title(client, match.group("region"), match.group("lang"), product_id, headers, color, size),
                 )
 
+            # Issue #64 — from here on every error carries `title`: the name
+            # lookup is a separate catalog call keyed by product ID, so a
+            # resolved name means a real product whatever the stock call did.
             body = _json_or_none(resp)
             if resp.status_code != 200 or not isinstance(body, dict) or body.get("status") != "ok":
-                return _error(f"Uniqlo API HTTP {resp.status_code}: {_api_message(body)}")
+                return _error(f"Uniqlo API HTTP {resp.status_code}: {_api_message(body)}", title)
 
             result = body.get("result") or {}
             l2s, stocks, prices = result.get("l2s"), result.get("stocks"), result.get("prices")
             if not isinstance(l2s, list) or not isinstance(stocks, dict) or not isinstance(prices, dict):
-                return _error("unexpected Uniqlo API response shape")
+                return _error("unexpected Uniqlo API response shape", title)
 
             candidates = [
                 l2
@@ -94,7 +97,7 @@ class UniqloScraper(BaseScraper):
             ]
             if not candidates:
                 wanted = ", ".join(f"{name}={value}" for name, value in (("color", color), ("size", size)) if value)
-                return _error(f"variant {wanted or 'any'} not found for {product_id}")
+                return _error(f"variant {wanted or 'any'} not found for {product_id}", title)
 
             # Both given: exactly that variant, in stock or not. Otherwise the
             # URL names the product (or one color of it), not one size: sold
@@ -104,7 +107,7 @@ class UniqloScraper(BaseScraper):
             l2_id = variant["l2Id"]
             stock, price_entry = stocks.get(l2_id), prices.get(l2_id)
             if stock is None or price_entry is None:
-                return _error(f"no stock or price data for variant {l2_id} of {product_id}")
+                return _error(f"no stock or price data for variant {l2_id} of {product_id}", title)
 
             base = price_entry["base"]
             promo = price_entry.get("promo")
@@ -162,8 +165,8 @@ async def _fetch_title(
         return None
 
 
-def _error(reason: str) -> ScraperResult:
-    return ScraperResult(price=None, status="error", error_reason=reason)
+def _error(reason: str, title: str | None = None) -> ScraperResult:
+    return ScraperResult(price=None, status="error", error_reason=reason, product_title=title)
 
 
 def _in_stock(stock: dict | None) -> bool:

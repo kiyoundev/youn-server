@@ -745,9 +745,21 @@ async def test_process_item_clears_restock_at_on_successful_scrape() -> None:
     assert listing.restock_at is None
 
 
-async def _run_oos_or_error(listing: SimpleNamespace, result: ScraperResult):
+def _get_by_model(listing: SimpleNamespace, product: SimpleNamespace):
+    """session.get(Listing, ...) -> listing, session.get(Product, ...) ->
+    product — the oos/error branches now read the Product too (issue #64)."""
+
+    async def _get(model, _id):
+        return product if model is jobs.Product else listing
+
+    return AsyncMock(side_effect=_get)
+
+
+async def _run_oos_or_error(
+    listing: SimpleNamespace, result: ScraperResult, product: SimpleNamespace | None = None
+):
     session = _mock_session()
-    session.get = AsyncMock(return_value=listing)
+    session.get = _get_by_model(listing, product if product is not None else _product())
     session.commit = AsyncMock()
     session.add = MagicMock()
     session.execute = AsyncMock(return_value=_scalar_result(True))
@@ -1406,3 +1418,80 @@ async def test_process_item_locks_listing_row_before_reading_previous_status() -
     session, _, _ = await _run_scrape(listing, product, result=ScraperResult(price=120.0, status="ok"))
 
     session.refresh.assert_awaited_once_with(listing, with_for_update=True)
+
+
+# ── metadata on every scrape outcome (issue #64) ─────────────────────────
+
+_FULL_METADATA = dict(product_title="Apple AirPods Max 2 - Purple", currency="CAD", site_name="Amazon.ca")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, extra",
+    [("oos", {"used_price": 637.19}), ("error", {"error_reason": "price not found in the new buy box"})],
+)
+async def test_process_item_oos_and_error_fill_name_currency_and_retailer(status: str, extra: dict) -> None:
+    listing = _listing(item_id=10, retailer="Example")  # == _derive_retailer(hostname): untouched
+    product = _product(name=None, currency=None)
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status=status, **_FULL_METADATA, **extra), product)
+
+    assert product.name == "Apple AirPods Max 2 - Purple"
+    assert product.currency == "CAD"
+    assert listing.retailer == "Amazon"  # _strip_tld_suffix("Amazon.ca")
+    assert listing.last_scrape_status == status
+
+
+@pytest.mark.asyncio
+async def test_process_item_ok_with_no_price_still_fills_metadata() -> None:
+    listing = _listing(item_id=10, retailer="Example")
+    product = _product(name=None, currency=None)
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status="ok", **_FULL_METADATA), product)
+
+    assert listing.last_scrape_status == "error"
+    assert product.name == "Apple AirPods Max 2 - Purple"
+    assert product.currency == "CAD"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["oos", "error"])
+async def test_process_item_oos_and_error_keep_existing_name_currency_and_manual_retailer(status: str) -> None:
+    listing = _listing(item_id=10, retailer="My Custom Name")
+    product = _product(name="User's Own Name", currency="USD")
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status=status, **_FULL_METADATA), product)
+
+    assert product.name == "User's Own Name"
+    assert product.currency == "USD"
+    assert listing.retailer == "My Custom Name"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["oos", "error"])
+async def test_process_item_oos_and_error_without_metadata_change_nothing(status: str) -> None:
+    listing = _listing(item_id=10, retailer="Example")
+    product = _product(name=None, currency=None)
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status=status), product)
+
+    assert product.name is None
+    assert product.currency is None
+    assert listing.retailer == "Example"
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_fills_name_commits_and_never_takes_the_product_lock() -> None:
+    """The plain read is safe only because oos returns before the locked
+    Product read (#48); the one execute() here is the column-only active
+    check, so no FOR UPDATE select is ever issued on this branch."""
+    listing = _listing(item_id=10)
+    product = _product(name=None)
+
+    session = await _run_oos_or_error(
+        listing, ScraperResult(price=None, status="oos", product_title="Untitled No More"), product
+    )
+
+    assert product.name == "Untitled No More"
+    session.execute.assert_awaited_once()
+    session.commit.assert_awaited_once()
