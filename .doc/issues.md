@@ -32,7 +32,7 @@ Single dispatcher (asyncio.Queue listener, started in lifespan)
 Quick-jump index, grouped by what part of the app each issue touches — not the same axis as the Group 0–9 sections further down (those reflect *build dependency order*; this reflects *feature domain*, for scanning "what's left on the watchlist" etc. without reading the whole backlog in build order). Search this file for `Issue #N` to jump to a write-up.
 
 **Watchlist / Price Scraping**
-✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ⬜ #60, ⬜ #61, ⬜ #62, ✅ #63
+✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ✅ #60, ⬜ #61, ⬜ #62, ✅ #63, ⬜ #64, ⬜ #65
 
 **Stocks / Portfolio**
 ✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
@@ -3183,38 +3183,46 @@ Reported live: the manual scrape appears to do nothing, because the user has to 
 
 ---
 
-## [ ] Issue #60 — Amazon Scraper: Track New vs Used Pricing
+## [x] Issue #60 — Amazon Scraper: Track New vs Used Pricing
 
 **Type:** feat / AFK
-**Estimate:** ~4h
+**Estimate:** ~4.5h (revised from ~4h; scope narrowed, see below)
 **Blocked by:** None
 
 ### What to build
 
-`AmazonCAScraper` reads a single price off the product page and can't tell a **new** price from a **used** one — when the buy box is a used or third-party offer, the tracked price silently becomes a used price.
+`AmazonCAScraper` read a single price off the product page and couldn't tell a **new** price from a **used** one. When every new unit sold out and only used offers remained, the used price became the tracked price, which looked like a discount on the new item and fired a false price-drop alert.
 
-- **Track the new price only, by default.** The scraper identifies the buy-box condition and reports a used-only buy box as unavailable for new, not as a price (`"oos"`, or a distinct result that #61's restock logic can key off).
-- **Used as a separate, opt-in listing**, not a second price on the same listing: the data model already has one price per listing, and a Product/Listing split (#24) fits "same product, different condition" naturally. This needs a condition marker on `Listing` (e.g. `condition: "new" | "used"`, migration required) and a way to add the used variant in the UI.
-- **Detect variant redirects (done separately, 2026-10-11 — re-verify when this issue is opened).** When a variant (e.g. a color) is fully sold out, new and used, Amazon redirects to a different color/ASIN page, so the scraper would read another variant's price. Compare the tracked URL's ASIN (`/dp/<ASIN>`) against the ASIN actually served (`input#ASIN` / final `page.url`); on mismatch, report `"oos"` with no price and no retries. A page with no buy-box price and only "See all buying options" also reports `"oos"` instead of burning every retry as `"exhausted retries"` (reported on the AirPods Max 2 Midnight listing, 2026-10-09). Implemented outside this issue in `AmazonCAScraper` (`_amazon_asin`, `_amazon_has_no_new_offer`, `tests/scraper/test_amazon.py`): the ASIN is compared via the final `page.url`, and the used-only buy box (`#usedOnlyBuybox`), "No featured offers" (`#fod-cx-box` / `#unqualifiedBuyBox`) and `#outOfStock` all report `"oos"` for the new listing unless the new buy box's `#add-to-cart-button` is present. **When picking up #60, check this still holds against live amazon.ca** (markup changes, and it was only tested on pasted HTML) and reuse those page-state checks rather than rebuilding them — the used-only box also already exposes the used price (`#usedBuySection .offer-price`), condition and seller.
-- Decide on the used-price source during implementation (the "Other sellers" / used-offers section of the page, or the offer-listing page); check how bot-protected each one is before choosing.
+**Scope narrowed (2026-10-12, planned in `.plan/60-amazon-new-vs-used/`).** What shipped is the guarantee that a used price is never recorded as the new price, plus showing the used price as information. Tracking a used offer as its own listing moved to #65.
+
+- **The new price is read strictly from inside the new buy box.** Anchored on the exact-id `#add-to-cart-button` (the used box's button is `add-to-cart-button-ubb`, so used-only and no-offer pages never have a new price). From the button, walk up to the nearest container (below `<body>`) holding a `.apex-pricetopay-value` and read its first non-empty `.a-offscreen`; fall back to the `customerVisiblePrice` amount in the button's own form. If neither is found the scrape is an error, `"price not found in the new buy box"` (retried first), never a guess. The old page-wide `.a-offscreen` scan and the `[data-pricetopay-label]` first choice are gone: that label reflects whichever offer is *featured* (the used price on a used-only page), and on a discounted offer its text reads `"$52.13 with 5 percent savings"`, which the shared `_parse_price` turned into `52.135` (and `"$1,299.00 with 12 percent savings"` into `1299.0012`), so the old read was also corrupting discounted prices.
+- **Page states** (reusing and re-verifying the earlier `_amazon_has_no_new_offer` checks against live amazon.ca through the scraper's own browser): a used-only buy box or "No featured offers" reports `"oos"` for the new item; a redirect to a different variant reports `"oos"` with no used price (another variant's page is not ours).
+- **The used price is information, not data.** New nullable `Listing.used_price` (migration `0020`), read from the used-only box's `#usedBuySection .offer-price` and returned on `ScraperResult.used_price`. `process_item` sets it on an `"oos"` scrape (clearing it if that scrape has none), clears it on `ok`, keeps it through an `error`. It never touches `last_price`, `PriceHistory`, charts, comparisons or alerts. The listing API returns it, and the retailer row shows a gray `CircleAlert` icon (not the error red) with the tooltip `Used available at $637.19` (CAD), only while the listing is `"oos"` and `used_price` is not null.
+- **Testable parsers.** `_amazon_new_price` and `_amazon_used_price` are pure functions over one parsed page per attempt (the soup is shared, since a 1–2 MB page is not free to parse on the Pi), tested against real trimmed amazon.ca markup in `tests/scraper/fixtures/amazon/`. Before this, every Amazon `get_price` test patched the price read out.
 
 ### Why (context)
 
-Reported: Amazon shows both new and used offers, and the scraper doesn't distinguish them, so a "price drop" can just be a used offer taking the buy box.
+Reported: Amazon shows both new and used offers, and the scraper doesn't distinguish them, so a "price drop" can just be a used offer taking the buy box. The user rarely buys used except as a bargain, so the default must be "new only", with the used price shown only as a hint.
 
 ### Acceptance criteria
 
-- [ ] A listing whose buy box is a used offer no longer records that price as the new price
-- [x] A tracked ASIN that Amazon redirects to a different variant reports `"oos"`, never the other variant's price (done separately — re-verify)
-- [x] A page with only "See all buying options" (no new buy-box price) reports `"oos"`, not `"exhausted retries"` (done separately — re-verify)
-- [ ] `Listing.condition` (`new` default) persists via a migration applied locally and on the Pi/NAS
-- [ ] A used-condition listing of the same product can be added and tracked separately
-- [ ] The UI labels the condition where an Amazon listing is shown
-- [ ] Test coverage with fixtures for new buy box, used-only buy box and both offers present
+- [x] A listing whose buy box is a used offer no longer records that price as the new price (a used-only page is `"oos"`; the used price lives in `used_price` only, and a used-only listing never became "Triggered" in local testing)
+- [x] A tracked ASIN that Amazon redirects to a different variant reports `"oos"`, never the other variant's price or used price (re-verified)
+- [x] A page with only "See all buying options" / "No featured offers" reports `"oos"`, not `"exhausted retries"` (re-verified live, locally)
+- [x] The new price is read only inside the new buy box; if it cannot be found the scrape errors with a named reason instead of falling back to a page-wide guess
+- [x] Discounted prices are read cleanly (`"with N percent savings"` text is never parsed as part of a price)
+- [x] `Listing.used_price` persists via migration `0020` (applied locally: upgrade, downgrade and re-upgrade clean)
+- [ ] Migration `0020` applied on the Pi and the used-only listing verified there
+- [x] The used price shows as a gray info icon with a tooltip on an out-of-stock Amazon listing that has one, and never otherwise
+- [x] Test coverage with real-markup fixtures: new only (plain), international seller with import fees and delivery amounts beside the price, both offers (accordion), used-only, no featured offer (full suite 669 passed)
+- Moved to #65: `Listing.condition`, adding a used-condition listing of the same product, and the condition label in the UI
 
 ### Known limitations
 
-- Depends on Amazon's markup, which changes; failure surfaces as a scrape error rather than a wrong price.
+- The used price comes only from the used-only buy box. "No featured offers" pages (offers behind "See all buying options") and the "Other sellers" box are not parsed, so those show no used price.
+- Depends on Amazon's markup, which changes; a layout the parser doesn't recognise surfaces as a named scrape error, not a wrong price. The parsers were verified against the plain and accordion layouts as of 2026-10-12.
+- `used_price` is always CAD (amazon.ca).
+- An item added without a name that is out of stock from its first scrape stays "Untitled" until it restocks: found live while testing this, tracked in #64.
 
 ---
 
@@ -3327,3 +3335,86 @@ A wrong currency mislabels every price, target and chart on the product, and giv
 - No Auto in the sheet, and a currency can't be cleared back to undetected (the backend ignores null on update).
 - The sheet picker has no confirmation or warning that a currency change relabels rather than converts prices.
 - No frontend unit tests (#29): the toggle, draft and dirty logic and the format changes were checked by type-check, lint and manual use. The detection change has backend tests.
+
+---
+
+## [ ] Issue #64 — Infer Item Name, Currency and Retailer on Every Scrape Outcome (Not Just `ok`)
+
+**Type:** fix / AFK
+**Estimate:** ~3h
+**Blocked by:** None (related: #44 — name/retailer inference, #45 — currency inference, #60 — surfaced it)
+
+### What to build
+
+Whatever metadata a scrape managed to read from the page — the item's name (`product_title`), its currency and the retailer's display name (`site_name`) — should be applied to the product and listing **whatever the scrape's status**: `ok`, `"oos"` or `"error"`. Today it is applied on `ok` only, so an item that is out of stock (or erroring) from its very first scrape stays **"Untitled"** with no inferred currency until it happens to come back in stock.
+
+Found live-testing #60: adding the used-only AirPods Max 2 listing (`B0GSS5TK8R`, correctly reported `"oos"` with a used price) left the product named "Untitled" even though the page's `#productTitle` is right there.
+
+**Two gaps, both needed:**
+
+1. **`process_item` (`app/scheduler/jobs.py`).** The three guarded fills (retailer display name, `Product.name`, `Product.currency` — #44 / #45) live only in the `ok` path, after the price write and next to the locked Product read (#48). The `"oos"` and `"error"` branches commit and return before reaching them, so metadata a scraper did return is discarded. Extract the three fills into one helper and call it from all three branches, keeping every guard unchanged: the retailer name is only overwritten while it still equals the deterministic hostname fallback (a manual edit survives), the name and currency only while still `NULL`. In the `oos`/`error` branches take care with the identity map: a plain `session.get(Product, ...)` there is safe only because those branches return before any locked Product read (the trap #48 documented); if the helper is shared with the `ok` path it must keep using the locked read there.
+2. **The dedicated scrapers.** Each one attaches metadata on `ok` only, or nothing at all:
+   - `AmazonCAScraper` reads the title through a Playwright call only on a successful price (deliberately, to avoid a wasted round trip per failed retry); its `oos` result carries currency but no title; its errors carry nothing. Read `#productTitle` from the soup `get_price` already parses (no round trip, so it can be read on every attempt) and attach title and currency on `ok`, `"oos"` and the named "price not found in the new buy box" error.
+   - `IKEAScraper` and `UniqloScraper` attach what they parse (currency; Uniqlo also the title on `oos`) but not on their error results, and IKEA never attaches a name. Attach whatever the response exposes on every outcome that got far enough to parse it.
+   - The generic `_run_hierarchy` already attaches `site_name`/`product_title`/`currency` to every result, including `"oos"` and `"error"` — no change needed there except the guard below.
+
+**Guard — do not infer from pages that aren't the product.** "Regardless of status" means whenever the product page genuinely loaded, not whenever *something* came back. A bot-block or challenge page (the generic extractor's `_detect_bot_block` case — "Access Denied", "Just a moment…", a captcha) has a title and a currency heuristic too, and the name fill is first-write-wins, so a block page's title would become the product's permanent name. Such results must carry no metadata (or the fill must skip them). Likewise the Amazon redirected-variant case must not attach the other variant's title (a different product page), and a captcha/robot page gets nothing.
+
+### Why (context)
+
+#44 and #45 added inference so that adding an item needs no name or currency. It silently assumes the first scrape succeeds in stock. Items that start out of stock — exactly the ones people most want to track until they restock — show "Untitled" and a default currency, and #60 makes out-of-stock the *normal* state for a used-only Amazon listing. Items already stuck as "Untitled" fix themselves on their next scheduled scrape once this ships, since the name is still `NULL` (no backfill needed).
+
+### Acceptance criteria
+
+- [ ] An `"oos"` scrape that returns a title, currency and site name fills `Product.name`, `Product.currency` and `Listing.retailer` under the same guards as `ok` (name/currency only while `NULL`, retailer only while still the hostname fallback)
+- [ ] An `"error"` scrape that returns metadata applies it the same way
+- [ ] `ok` behaviour is unchanged, including the locked Product read for alert deduplication (#48)
+- [ ] `AmazonCAScraper` returns the title and currency on `ok`, `"oos"` and the named error (read from the parsed page, not a Playwright call), and nothing for a redirected variant or a captcha page
+- [ ] IKEA and Uniqlo attach every metadata field they parse on all outcomes
+- [ ] A bot-block/challenge page never supplies a name, currency or retailer
+- [ ] An existing "Untitled" product with an `"oos"` listing gets its name on the next scrape
+- [ ] Tests: `process_item` per branch (oos fills, error fills, existing name/currency not overwritten, manual retailer edit survives); per-scraper tests per status; a block-page test
+- [ ] Live-verified: add the used-only Amazon listing `B0GSS5TK8R` and get the name "Apple AirPods Max 2 - Purple" with currency CAD while it stays `"oos"`
+
+### Known limitations
+
+- Name inference stays first-write-wins: a wrong name inferred once is not corrected by later scrapes (edit it in the sheet).
+- A scraper that fails before it can read the page (network error, browser launch failure) has nothing to infer; this issue only stops discarding what was actually read.
+
+---
+
+## [ ] Issue #65 — Amazon: Track a Used Offer as a Separate Listing
+
+**Type:** feat / AFK
+**Estimate:** ~4h
+**Blocked by:** #60 (done)
+
+### What to build
+
+#60 made the new price the only tracked price and shows a used offer as information (`Listing.used_price`). This issue lets the user **opt in to tracking a used offer as its own listing** when a used price is genuinely what they want to watch (the "bargain" case).
+
+- **Condition marker on `Listing`:** `condition: "new" | "used"`, default `"new"`, migration `0021` applied locally and on the Pi.
+- **Adding a used variant:** a way in the UI to add a used-condition listing of the same product (the data model already has one price per listing, and the Product/Listing split from #24 fits "same product, different condition").
+- **Scraper:** for a used listing, `AmazonCAScraper` reports the used offer's price as the listing's price (`"ok"`) and `"oos"` when no used offer exists. Sources seen in real markup: the used-only box (`#usedBuySection .offer-price`, condition `Used: Very Good` in `#usedbuyBox strong`, seller) and, on a both-offers page, the used accordion row (`#usedAccordionRow .apex-pricetopay-value .a-offscreen`, caption "Used – Like New"). Reuse #60's page-state checks and its fixtures.
+- **UI:** label the condition wherever an Amazon listing is shown.
+
+**Design questions to settle first (grill before planning):**
+- `Listing.url` is unique and `items.py` dedups on it (IntegrityError becomes a 409), so a used listing of the same ASIN needs a different key (e.g. unique on `(url, condition)`, which changes the constraint) or a marker the dedup understands.
+- A product's alert comparison takes the cheapest `ok` listing. A used listing must not silently win it and fire a "price drop" for what the user considers a different item. Probably exclude used listings from the product-level comparison, or give them their own target.
+- Whether `used_price` info from #60 stays for new listings once a used listing exists.
+
+### Why (context)
+
+The user rarely buys used, except as a bargain. #60 keeps used offers out of the tracked price; this lets the user ask to follow one deliberately.
+
+### Acceptance criteria
+
+- [ ] `Listing.condition` (`new` default) persists via a migration applied locally and on the Pi
+- [ ] A used-condition listing of the same product can be added and tracked separately, with its own price history
+- [ ] A used listing never causes a false price drop for the new item
+- [ ] The UI labels the condition where an Amazon listing is shown
+- [ ] Test coverage with #60's fixtures (used-only box and both-offers page)
+
+### Known limitations
+
+- Depends on Amazon's markup, as #60 does.

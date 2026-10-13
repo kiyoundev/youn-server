@@ -374,21 +374,20 @@ async def test_close_if_idle_does_not_touch_xvfb_process() -> None:
 # all, not just currency)
 # ---------------------------------------------------------------------------
 
-def _amazon_locator_stub(price_found: bool, title: str | None) -> MagicMock:
-    """Fakes page.locator(selector) for both _find_price_text's first
-    ([data-pricetopay-label]) path and _find_product_title's (#productTitle)
-    — count()=0 on the price selector forces _find_price_text past its
-    semantic-attribute path into its page.evaluate() regex-scan fallback,
-    which the test mocks separately."""
-    price_locator = MagicMock()
-    price_locator.count = AsyncMock(return_value=1 if price_found else 0)
+# A minimal new buy box: the price-to-pay node and the exact-id add-to-cart
+# button in one container — the shape _amazon_new_price reads (issue #60).
+_AMAZON_NEW_BUY_BOX_HTML = (
+    '<div><span class="a-price apex-pricetopay-value"><span class="a-offscreen">$799.99</span></span>'
+    '<input id="add-to-cart-button" type="submit"></div>'
+)
+
+
+def _amazon_locator_stub(title: str | None) -> MagicMock:
+    """Fakes page.locator("#productTitle") for _find_product_title — the only
+    browser-side read left in AmazonCAScraper; prices come from page.content()."""
     title_locator = MagicMock()
     title_locator.first.text_content = AsyncMock(return_value=title)
-
-    def by_selector(selector: str) -> MagicMock:
-        return title_locator if selector == "#productTitle" else price_locator
-
-    return MagicMock(side_effect=by_selector)
+    return MagicMock(return_value=title_locator)
 
 
 @pytest.mark.asyncio
@@ -398,10 +397,9 @@ async def test_amazon_ca_scraper_success_always_includes_currency_cad() -> None:
     extraction, never calling BaseScraper._run_hierarchy/_extract_currency,
     so nothing else would ever set this field for amazon.ca."""
     mock_page = AsyncMock()
-    mock_page.locator = _amazon_locator_stub(price_found=False, title="Airpod Max 2")
-    mock_page.evaluate = AsyncMock(return_value="$799.99")
+    mock_page.locator = _amazon_locator_stub(title="Airpod Max 2")
     mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
-    mock_page.content = AsyncMock(return_value="<html></html>")
+    mock_page.content = AsyncMock(return_value=_AMAZON_NEW_BUY_BOX_HTML)
 
     mock_context = MagicMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
@@ -421,8 +419,7 @@ async def test_amazon_ca_scraper_error_path_leaves_currency_none() -> None:
     through the currency-hardcoding success branch — currency stays None,
     same as any other genuine extraction failure."""
     mock_page = AsyncMock()
-    mock_page.locator = _amazon_locator_stub(price_found=False, title=None)
-    mock_page.evaluate = AsyncMock(return_value=None)
+    mock_page.locator = _amazon_locator_stub(title=None)
     mock_page.url = "https://www.amazon.ca/dp/B0DGJJKWW7"
     mock_page.content = AsyncMock(return_value="<html></html>")
 

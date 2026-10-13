@@ -25,6 +25,10 @@ export interface Listing {
   last_price: number | null;
   last_scrape_status: "ok" | "oos" | "error" | null;
   restock_at: string | null;
+  // Issue #60 — the used offer's price while the new offer is sold out
+  // (amazon.ca, CAD). Information only: never a tracked price. Null unless
+  // the listing is "oos" with a used-only buy box.
+  used_price: number | null;
   // Issue #53 — why the last scrape failed. Null while healthy, and for a
   // listing that was already "error" before this field existed until its
   // next scrape.

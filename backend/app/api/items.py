@@ -229,6 +229,7 @@ def _build_listing_response(listing: Listing, last_checked_map: dict[int, dateti
         last_price=listing.last_price,
         last_scrape_status=listing.last_scrape_status,
         restock_at=listing.restock_at,
+        used_price=listing.used_price,
         last_scrape_error=listing.last_scrape_error,
         last_checked=last_checked_map.get(listing.id),
         product_id=listing.product_id,

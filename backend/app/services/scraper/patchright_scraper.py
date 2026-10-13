@@ -255,7 +255,13 @@ def _amazon_asin(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _amazon_has_no_new_offer(html: str) -> bool:
+def _as_soup(html: "str | BeautifulSoup") -> BeautifulSoup:
+    """get_price parses the page once and hands the soup to every Amazon
+    parser — on the Pi a 1-2 MB page is not free to parse three times."""
+    return html if isinstance(html, BeautifulSoup) else BeautifulSoup(html, "html.parser")
+
+
+def _amazon_has_no_new_offer(html: "str | BeautifulSoup") -> bool:
     """True when the page offers no new unit to buy — read from real
     amazon.ca markup, not guessed:
       - "used-only" box (#usedOnlyBuybox): the featured offer is a used /
@@ -267,45 +273,73 @@ def _amazon_has_no_new_offer(html: str) -> bool:
     "add-to-cart-button"; the used box's is "add-to-cart-button-ubb". Its
     presence overrides every marker above, so a stray hidden template can
     never turn a purchasable new item into "out of stock"."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _as_soup(html)
     if soup.find(id="add-to-cart-button"):
         return False
     return any(soup.find(id=marker) for marker in ("usedOnlyBuybox", "unqualifiedBuyBox", "fod-cx-box", "outOfStock"))
 
 
+# Containers that mean "the whole page" — a price found only at this level is
+# not inside the buy box.
+_PAGE_ROOTS = {"body", "html", "[document]"}
+_CUSTOMER_VISIBLE_AMOUNT = re.compile(r"customerVisiblePrice\]\[amount\]$")
+
+
+def _amazon_new_price(html: "str | BeautifulSoup") -> float | None:
+    """The price of the NEW buy box, or None when it can't be read from inside
+    that box (the caller reports an error — never a guessed price).
+
+    Anchored on the exact-id #add-to-cart-button: the used box's button is
+    "add-to-cart-button-ubb", so a used or no-offer page never has a new price
+    to read. From the button, walk up to the nearest container that holds a
+    price-to-pay node (.apex-pricetopay-value) and read its first non-empty
+    .a-offscreen — in the accordion layout that container is the new row (the
+    used row is its sibling, so it can't be reached); in the plain layout it is
+    the buy-box section. Verified against real amazon.ca markup (2026-10-12).
+
+    Deliberately not used: [data-pricetopay-label] (reflects the featured offer,
+    which can be used, and its text can read "$X with N percent savings") and
+    any page-wide scan (picks up delivery fees, import-fee breakdowns, "Other
+    sellers" prices). If the node is empty, the customerVisiblePrice amount in
+    the button's own form is the fallback."""
+    soup = _as_soup(html)
+    button = soup.find(id="add-to-cart-button")
+    if button is None:
+        return None
+
+    scope = button.parent
+    while scope is not None and scope.name not in _PAGE_ROOTS and scope.select_one(".apex-pricetopay-value") is None:
+        scope = scope.parent
+    if scope is not None and scope.name not in _PAGE_ROOTS:
+        for node in scope.select(".apex-pricetopay-value .a-offscreen"):
+            price = _parse_price(node.get_text(strip=True))
+            if price is not None:
+                return price
+
+    form = button.find_parent("form")
+    amount = form.find("input", attrs={"name": _CUSTOMER_VISIBLE_AMOUNT}) if form is not None else None
+    return _parse_price(amount.get("value", "")) if amount is not None else None
+
+
+def _amazon_used_price(html: "str | BeautifulSoup") -> float | None:
+    """The used price shown by the used-only buy box (#usedBuySection), or None.
+    Only meaningful when the page has no new offer — the caller checks that."""
+    soup = _as_soup(html)
+    for node in soup.select("#usedBuySection .offer-price"):
+        price = _parse_price(node.get_text(strip=True))
+        if price is not None:
+            return price
+    return None
+
+
 class AmazonCAScraper(PatchrightScraper):
     MAX_RETRIES = AMAZON_MAX_RETRIES
 
-    async def _find_price_text(self, page) -> str | None:
-        # 1. Semantic: data-pricetopay-label is Amazon's own pricing attribute —
-        #    stable across redesigns because Amazon's JS depends on it internally.
-        try:
-            if await page.locator("[data-pricetopay-label]").count():
-                text = (await page.locator("[data-pricetopay-label]").first.text_content(timeout=PRICE_LOCATOR_TIMEOUT_MS) or "").strip()
-                if text:
-                    return text
-        except Exception:
-            pass
-
-        # 2. Regex scan: any offscreen element whose text looks like a price.
-        #    Works regardless of class or ID changes.
-        return await page.evaluate(r"""
-            () => {
-                for (const el of document.querySelectorAll('.a-offscreen, .aok-offscreen')) {
-                    const t = el.textContent.trim();
-                    if (/^\$[\d,.]+$/.test(t)) return t;
-                }
-                return null;
-            }
-        """)
-
     async def _find_product_title(self, page) -> str | None:
         """Feeds Product.name (issue #44) — AmazonCAScraper bypasses
-        BaseScraper._run_hierarchy entirely (own Playwright-locator price
-        extraction, never parses soup), so it needs its own title read.
-        #productTitle is Amazon's own stable element id for this, same
-        "semantic attribute over generic parsing" preference as
-        _find_price_text's own first choice. Non-fatal on failure — a
+        BaseScraper._run_hierarchy entirely (own price parsers, never the
+        shared extraction pass), so it needs its own title read.
+        #productTitle is Amazon's own stable element id for this. Non-fatal on failure — a
         missing/unreadable title just means product_title stays None,
         exactly like every other extraction path in this feature."""
         try:
@@ -326,6 +360,9 @@ class AmazonCAScraper(PatchrightScraper):
         # per attempt — matches PatchrightScraper.get_price()'s tracking, which
         # close_if_idle() checks before closing the shared context.
         PatchrightScraper._active_scrapes += 1
+        # What the last failed attempt saw — a new buy box whose price can't be
+        # read is a layout problem worth naming, not just "exhausted retries".
+        failure_reason = "exhausted retries"
         try:
             for _ in range(self.MAX_RETRIES):
                 try:
@@ -335,18 +372,22 @@ class AmazonCAScraper(PatchrightScraper):
                         await page.goto(url, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
                         # A sold-out variant redirects to a *different* ASIN
                         # (another color) whose price is not this item's —
-                        # never read it. Skipped when either URL has no
-                        # recognizable ASIN (short links, captcha pages).
+                        # never read it, new or used. Skipped when either URL
+                        # has no recognizable ASIN (short links, captcha pages).
                         tracked_asin, served_asin = _amazon_asin(url), _amazon_asin(page.url)
                         variant_gone = bool(tracked_asin and served_asin and tracked_asin != served_asin)
                         if variant_gone:
                             _log.info("AmazonCAScraper: %s redirected to a different ASIN (%s -> %s)", url, tracked_asin, served_asin)
-                        no_new_offer = not variant_gone and _amazon_has_no_new_offer(await page.content())
-                        price = None
-                        title = None
+                        # One snapshot, one parse per attempt (issue #60): every
+                        # price below is read from this soup, scoped to the new
+                        # (or used-only) buy box — never from the whole page.
+                        soup = _as_soup(await page.content())
+                        no_new_offer = not variant_gone and _amazon_has_no_new_offer(soup)
+                        price = used_price = title = None
                         if not variant_gone and not no_new_offer:
-                            raw = await self._find_price_text(page)
-                            price = _parse_price(raw or "")
+                            price = _amazon_new_price(soup)
+                            if price is None and soup.find(id="add-to-cart-button"):
+                                failure_reason = "price not found in the new buy box"
                             # Only fetched on the attempt that's actually going
                             # to succeed — an extra Playwright DOM round-trip on
                             # every failed retry (page didn't load right, price
@@ -354,22 +395,23 @@ class AmazonCAScraper(PatchrightScraper):
                             # since that attempt's whole result gets discarded
                             # (review finding).
                             title = await self._find_product_title(page) if price is not None else None
+                        elif no_new_offer:
+                            used_price = _amazon_used_price(soup)
                         is_oos = variant_gone or no_new_offer
                     finally:
                         await page.close()
                     if price is not None:
                         # Issue #45 — amazon.ca is a fixed single site, and
                         # this scraper never calls _run_hierarchy /
-                        # _extract_currency (own Playwright-locator price
-                        # extraction, never parses soup), so it needs its
-                        # own hardcoded currency same as its own title read
-                        # above.
+                        # _extract_currency (own price parsers, never the
+                        # shared extraction pass), so it needs its own
+                        # hardcoded currency same as its own title read above.
                         return ScraperResult(price=price, status="ok", product_title=title, currency="CAD")
                     if is_oos:
-                        return ScraperResult(price=None, status="oos", currency="CAD")
+                        return ScraperResult(price=None, status="oos", currency="CAD", used_price=used_price)
                 except Exception:
                     _log.debug("AmazonCAScraper attempt failed for %s", url, exc_info=True)
-            _log.warning("AmazonCAScraper exhausted retries for %s", url)
-            return ScraperResult(price=None, status="error", error_reason="exhausted retries")
+            _log.warning("AmazonCAScraper gave up on %s: %s", url, failure_reason)
+            return ScraperResult(price=None, status="error", error_reason=failure_reason)
         finally:
             PatchrightScraper._active_scrapes -= 1

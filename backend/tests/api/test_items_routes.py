@@ -93,6 +93,7 @@ def _listing(
     last_price: float | None = None,
     last_scrape_status: str | None = None,
     restock_at: str | None = None,
+    used_price: float | None = None,
     last_scrape_error: str | None = None,
     product_id: int = 1,
 ) -> SimpleNamespace:
@@ -103,6 +104,7 @@ def _listing(
         last_price=last_price,
         last_scrape_status=last_scrape_status,
         restock_at=restock_at,
+        used_price=used_price,
         last_scrape_error=last_scrape_error,
         product_id=product_id,
         created_at=datetime.now(timezone.utc),
@@ -207,6 +209,30 @@ async def test_list_items_exposes_failure_reason() -> None:
 
     assert result[0].status == "failed"
     assert result[0].listings[0].last_scrape_error == "Akamai bot-block (access denied)"
+
+
+@pytest.mark.asyncio
+async def test_list_items_exposes_used_price_without_affecting_status_or_price() -> None:
+    """Issue #60 — an oos Amazon listing's used-offer price reaches the API as
+    information only: the product still rolls up as out of stock and the
+    used price never becomes the best price."""
+    listing = _listing(
+        listing_id=1,
+        last_price=799.0,
+        last_scrape_status="oos",
+        used_price=637.19,
+        product_id=5,
+    )
+    product = _product(product_id=5, target_price=700.0, listings=[listing])
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[_list_result([product]), _rows_result([])])
+
+    result = await items.list_items(db)
+
+    assert result[0].listings[0].used_price == 637.19
+    assert result[0].listings[0].last_price == 799.0
+    assert result[0].status == "out_of_stock"
 
 
 @pytest.mark.asyncio

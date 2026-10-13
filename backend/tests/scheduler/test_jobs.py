@@ -745,6 +745,85 @@ async def test_process_item_clears_restock_at_on_successful_scrape() -> None:
     assert listing.restock_at is None
 
 
+async def _run_oos_or_error(listing: SimpleNamespace, result: ScraperResult):
+    session = _mock_session()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(return_value=_scalar_result(True))
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=result)
+
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(listing.id, router, asyncio.Queue())
+    return session
+
+
+@pytest.mark.asyncio
+async def test_process_item_persists_used_price_on_oos_without_touching_the_new_price() -> None:
+    """Issue #60 — a used-only Amazon page is "oos" for the new item and may
+    carry the used offer's price as information. It is stored on the listing
+    only: never last_price, never a PriceHistory row, never an alert input."""
+    listing = _listing(item_id=10, last_price=799.0)
+
+    session = await _run_oos_or_error(
+        listing, ScraperResult(price=None, status="oos", currency="CAD", used_price=637.19)
+    )
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.used_price == 637.19
+    assert listing.last_price == 799.0
+    session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_item_oos_without_a_used_price_clears_a_stale_one() -> None:
+    listing = _listing(item_id=10)
+    listing.used_price = 637.19  # from an earlier used-only scrape
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status="oos", currency="CAD"))
+
+    assert listing.last_scrape_status == "oos"
+    assert listing.used_price is None
+
+
+@pytest.mark.asyncio
+async def test_process_item_keeps_the_used_price_through_an_error() -> None:
+    """An error says nothing about the used offer; the UI only shows it while
+    the listing is "oos", so keeping it just avoids losing info on a blip."""
+    listing = _listing(item_id=10, last_scrape_status="oos")
+    listing.used_price = 637.19
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status="error", error_reason="boom"))
+
+    assert listing.last_scrape_status == "error"
+    assert listing.used_price == 637.19
+
+
+@pytest.mark.asyncio
+async def test_process_item_clears_used_price_on_successful_scrape() -> None:
+    """Back in stock (new): the used price is stale information and must go."""
+    listing = _listing(item_id=7, product_id=1)
+    listing.used_price = 637.19
+    product = _product(product_id=1, target_price=100.0, alerted_at=None)
+
+    session = _mock_session()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])])
+    session.add = MagicMock()
+
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=ScraperResult(price=90.0, status="ok"))
+
+    with patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)):
+        await jobs.process_item(7, router, asyncio.Queue())
+
+    assert listing.last_scrape_status == "ok"
+    assert listing.used_price is None
+
+
 @pytest.mark.asyncio
 async def test_process_item_marks_ok_status_with_none_price_as_error() -> None:
     """Anomalous combination (status=ok but no price) — issue #53: this was

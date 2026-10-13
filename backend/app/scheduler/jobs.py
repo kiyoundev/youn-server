@@ -202,6 +202,9 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 _log.info("listing %d (%s) out of stock", listing.id, listing.retailer)
                 listing.last_scrape_status = "oos"
                 listing.restock_at = scrape.restock_at
+                # Issue #60 — information only: lives on the listing, never in
+                # last_price/PriceHistory, so it can't touch charts or alerts.
+                listing.used_price = scrape.used_price
                 listing.last_checked_at = now
                 _clear_failure(listing)
                 # Some retailers (e.g. IKEAScraper) expose price and
@@ -255,6 +258,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             listing.last_price = scrape.price
             listing.last_scrape_status = "ok"
             listing.restock_at = None
+            listing.used_price = None  # issue #60 — stale once the new offer is back
             listing.last_checked_at = now
             _clear_failure(listing)
 

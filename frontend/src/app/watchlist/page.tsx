@@ -730,6 +730,22 @@ function ProductRow({
                           <TooltipContent>{describeFailure(listing)}</TooltipContent>
                         </Tooltip>
                       )}
+                      {/* Issue #60 — information only: the new offer is sold
+                          out but a used one is available. Muted (not the
+                          error red): nothing is wrong, and this price is
+                          never tracked — no chart, no alerts. amazon.ca
+                          prices are CAD whatever the product's currency. */}
+                      {listing.last_scrape_status === "oos" && listing.used_price !== null && (
+                        <Tooltip>
+                          <TooltipTrigger
+                            aria-label={`${listing.retailer} used offer available`}
+                            className="-mr-1 inline-flex items-center justify-center rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                          >
+                            <CircleAlert size={14} strokeWidth={1.5} />
+                          </TooltipTrigger>
+                          <TooltipContent>Used available at {fmtPrice(listing.used_price, "CAD")}</TooltipContent>
+                        </Tooltip>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       {/* Stacked, not inline (issue #45 follow-up) — the

@@ -31,3 +31,8 @@ class ScraperResult:
     # logs via each scraper's exc_info=True). jobs.py falls back to a generic
     # string if a scraper ever returns "error" without one.
     error_reason: str | None = None
+    # Issue #60 — set only on status="oos" from AmazonCAScraper, when the
+    # page's used-only buy box shows a used offer while no new unit is
+    # available. Information for the UI only: it is never a price for the
+    # listing (no price history, chart, or alerts).
+    used_price: float | None = None

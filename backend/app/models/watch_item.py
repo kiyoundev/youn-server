@@ -18,6 +18,13 @@ class Listing(Base):
     retailer: Mapped[str] = mapped_column(String)
     last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_scrape_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Issue #60 — the used offer's price while the new offer is sold out
+    # (AmazonCAScraper's used-only buy box). Information for the UI only,
+    # shown while last_scrape_status="oos": never a tracked price, so it has
+    # no PriceHistory rows and feeds no chart, comparison or alert. Set on
+    # an "oos" scrape (cleared if that scrape has none), cleared on the next
+    # "ok", kept through an "error".
+    used_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     scraper_type: Mapped[str | None] = mapped_column(String, nullable=True)
     # Set only alongside last_scrape_status="oos", only when the retailer's
     # own data exposes an expected-back date (e.g. IKEAScraper's per-store

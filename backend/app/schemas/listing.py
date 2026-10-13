@@ -34,6 +34,8 @@ class ListingResponse(BaseModel):
     last_price: float | None
     last_scrape_status: Literal["ok", "oos", "error"] | None
     restock_at: str | None
+    # Issue #60 — informational used-offer price (see Listing.used_price).
+    used_price: float | None
     last_scrape_error: str | None
     last_checked: datetime | None
     product_id: int
