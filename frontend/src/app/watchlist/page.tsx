@@ -96,7 +96,9 @@ function draftStatus(product: Product, active: boolean): WatchStatus {
   if (!active) return "paused";
   if (product.listings.some((l) => l.last_scrape_status === null)) return "processing";
   if (product.listings.some((l) => l.last_scrape_status === "error")) return "failed";
-  if (product.listings.some((l) => l.last_scrape_status === "oos")) return "out_of_stock";
+  // Issue #67 — every listing, not any: one sold-out retailer next to an
+  // available one is still a buyable product. Mirrors compute_status().
+  if (product.listings.length > 0 && product.listings.every((l) => l.last_scrape_status === "oos")) return "out_of_stock";
   if (product.alerted_at !== null) return "triggered";
   return "watching";
 }
@@ -118,6 +120,11 @@ const formatLastChecked = (iso: string | null) => {
 // before the field existed, until its next scrape — a placeholder instead of
 // rendering null/undefined.
 const describeFailure = (listing: Listing) => listing.last_scrape_error || "no details recorded yet";
+
+// Issue #67 — what an out-of-stock listing says about when it's back, shared
+// by the per-retailer icon and the out-of-stock badge tooltip.
+const describeRestock = (listing: Listing) =>
+  listing.restock_at ? `Available ${listing.restock_at}` : "Restock date unavailable";
 
 function fmtValue(value: number) {
   return `$${Math.round(value).toLocaleString("en-US")}`;
@@ -439,9 +446,11 @@ function ProductRow({
   // Feeds the "Out of Stock" badge's tooltip (both table row and sheet
   // header) — one line per OOS listing, since a multi-retailer product can
   // have some listings OOS and others not, each with its own restock date.
+  // Retailer-prefixed once there's more than one (issue #67) so lines for
+  // different retailers can be told apart.
   const oosRestockLines = product.listings
     .filter((l) => l.last_scrape_status === "oos")
-    .map((l) => (l.restock_at ? `Available ${l.restock_at}` : "no restock date available"));
+    .map((l) => (product.listings.length > 1 ? `${l.retailer}: ${describeRestock(l)}` : describeRestock(l)));
   // Issue #53 — same shape for the "Failed" badge: one line per failed
   // listing, reason + how long ago.
   const failedReasonLines = product.listings.filter((l) => l.last_scrape_status === "error").map(describeFailure);
@@ -738,20 +747,26 @@ function ProductRow({
                           <TooltipContent>{describeFailure(listing)}</TooltipContent>
                         </Tooltip>
                       )}
-                      {/* Issue #60 — information only: the new offer is sold
-                          out but a used one is available. Muted (not the
-                          error red): nothing is wrong, and this price is
-                          never tracked — no chart, no alerts. amazon.ca
-                          prices are CAD whatever the product's currency. */}
-                      {listing.last_scrape_status === "oos" && listing.used_price !== null && (
+                      {/* Issues #60 / #67 — information only: this retailer's
+                          new offer is sold out. Muted (not the error red):
+                          nothing is wrong. One icon carries the restock date
+                          and, when there is one, the used offer (#60) —
+                          that price is never tracked: no chart, no alerts.
+                          amazon.ca prices are CAD whatever the product's
+                          currency. */}
+                      {listing.last_scrape_status === "oos" && (
                         <Tooltip>
                           <TooltipTrigger
-                            aria-label={`${listing.retailer} used offer available`}
+                            aria-label={`${listing.retailer} out of stock`}
                             className="-mr-1 inline-flex items-center justify-center rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
                           >
                             <CircleAlert size={14} strokeWidth={1.5} />
                           </TooltipTrigger>
-                          <TooltipContent>Used available at {fmtPrice(listing.used_price, "CAD")}</TooltipContent>
+                          <TooltipContent>
+                            <div>Out of stock</div>
+                            <div>{describeRestock(listing)}</div>
+                            {listing.used_price !== null && <div>Used available at {fmtPrice(listing.used_price, "CAD")}</div>}
+                          </TooltipContent>
                         </Tooltip>
                       )}
                     </div>
@@ -762,7 +777,13 @@ function ProductRow({
                           buttons all fighting for one line wraps badly on
                           a longer KRW figure. */}
                       <div className="flex flex-col items-end">
-                        <span>{listing.last_price !== null ? fmtPrice(listing.last_price, displayCurrency) : "—"}</span>
+                        {/* Issue #68 — an out-of-stock listing keeps the
+                            retailer's last listed price, muted: shown for
+                            reference, not a price you can buy at (and not
+                            counted in Best Price). */}
+                        <span className={cn(listing.last_scrape_status === "oos" && "text-muted-foreground")}>
+                          {listing.last_price !== null ? fmtPrice(listing.last_price, displayCurrency) : "—"}
+                        </span>
                         {listing.last_price !== null &&
                           (() => {
                             const cadEquivalent = fmtCadEquivalent(listing.last_price, displayCurrency, fxRates);

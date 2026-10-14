@@ -11,10 +11,16 @@ export interface SortState {
   dir: SortDir;
 }
 
-// null when every listing's last_price is null (e.g. every retailer OOS/errored) —
-// callers render a "—" fallback rather than treating this as 0.
+// The cheapest price you can actually buy at — out-of-stock listings are left
+// out (issue #68): they keep the retailer's last listed price for display, but
+// a sold-out offer must not read as the product's best price. null when no
+// listing is both in stock and priced (e.g. every retailer OOS) — callers
+// render a "—" fallback rather than treating this as 0.
 export const bestPrice = (product: Product): number | null => {
-  const prices = product.listings.map((l) => l.last_price).filter((p): p is number => p !== null);
+  const prices = product.listings
+    .filter((l) => l.last_scrape_status !== "oos")
+    .map((l) => l.last_price)
+    .filter((p): p is number => p !== null);
   return prices.length > 0 ? Math.min(...prices) : null;
 };
 

@@ -19,11 +19,14 @@ def compute_status(
        already-scraped listing, see services/scrape_tracking.py) ->
        processing
     3. Any listing errored on its last scrape -> failed
-    4. Any listing out of stock on its last scrape -> out_of_stock (issue
-       #54 — previously fell through to "watching" unconditionally, since
-       no branch here ever checked for "oos" at all; a broken scraper
-       (failed) still outranks a confirmed-accurate "can't buy it right
-       now" reading, so this is checked after failed, not before)
+    4. EVERY listing out of stock on its last scrape -> out_of_stock (issue
+       #54 added the status — previously "oos" fell through to "watching"
+       unconditionally; issue #67 narrowed it from "any" to "all": a
+       product with one sold-out retailer and one available is still
+       buyable, which is what the price-drop alert already assumes by
+       comparing only "ok" listings. A broken scraper (failed) still
+       outranks a confirmed-accurate "can't buy it right now" reading, so
+       this is checked after failed, not before)
     5. Product has an active alert -> triggered
     6. Otherwise -> watching
 
@@ -44,7 +47,7 @@ def compute_status(
     if any(listing.last_scrape_status == "error" for listing in listings):
         return "failed"
 
-    if any(listing.last_scrape_status == "oos" for listing in listings):
+    if listings and all(listing.last_scrape_status == "oos" for listing in listings):
         return "out_of_stock"
 
     if alerted_at is not None:

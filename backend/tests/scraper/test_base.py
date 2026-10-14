@@ -85,11 +85,12 @@ def test_extract_jsonld_basic_offer(s: DummyScraper) -> None:
 
 
 def test_extract_jsonld_oos(s: DummyScraper) -> None:
+    """Issue #68 — the page's listed price is kept alongside "oos"."""
     html = _jsonld_page({
         "@type": "Product",
         "offers": {"@type": "Offer", "price": "89.99", "availability": "https://schema.org/OutOfStock"},
     })
-    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=None, status="oos")
+    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=89.99, status="oos")
 
 
 @pytest.mark.parametrize(
@@ -101,7 +102,7 @@ def test_extract_jsonld_sold_out_and_discontinued_are_oos(s: DummyScraper, avail
         "@type": "Product",
         "offers": {"@type": "Offer", "price": "89.99", "availability": availability},
     })
-    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=None, status="oos")
+    assert s._extract_jsonld(_soup(html)) == ScraperResult(price=89.99, status="oos")
 
 
 @pytest.mark.parametrize(
@@ -204,7 +205,7 @@ def test_extract_og_price_out_of_stock_availability(
         '<html><head><meta property="og:price:amount" content="129.00">'
         f'<meta property="{availability_prop}" content="{value}"></head></html>'
     )
-    assert s._extract_og_price(_soup(html)) == ScraperResult(price=None, status="oos")
+    assert s._extract_og_price(_soup(html)) == ScraperResult(price=129.0, status="oos")
 
 
 @pytest.mark.parametrize("value", ["in stock", "instock", "available for order"])
@@ -408,7 +409,7 @@ async def test_extract_shopify_specific_variant(s: DummyScraper) -> None:
         return_value=httpx.Response(200, json=SHOPIFY_RESPONSE)
     )
     result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90?variant=222")
-    assert result == ScraperResult(price=None, status="oos")
+    assert result == ScraperResult(price=149.0, status="oos")
 
 
 @pytest.mark.asyncio
@@ -489,7 +490,7 @@ async def test_extract_shopify_js_sold_out_variant_is_oos(s: DummyScraper) -> No
         return_value=httpx.Response(200, json=SHOPIFY_JS_RESPONSE)
     )
     result = await s._extract_shopify("", "https://deadstock.ca/products/nike-air-max-90?variant=222")
-    assert result == ScraperResult(price=None, status="oos")
+    assert result == ScraperResult(price=149.0, status="oos")
 
 
 @pytest.mark.asyncio
@@ -513,7 +514,7 @@ async def test_extract_shopify_js_variant_without_flag_uses_product_level_availa
         return_value=httpx.Response(200, json={"available": False, "variants": [{"id": 1, "price": 5000}]})
     )
     result = await s._extract_shopify("", "https://example.com/products/widget")
-    assert result == ScraperResult(price=None, status="oos")
+    assert result == ScraperResult(price=50.0, status="oos")
 
 
 @pytest.mark.asyncio
@@ -555,7 +556,7 @@ async def test_extract_shopify_js_no_variant_all_sold_out_is_oos(s: DummyScraper
         )
     )
     result = await s._extract_shopify("", "https://example.com/products/widget")
-    assert result == ScraperResult(price=None, status="oos")
+    assert result == ScraperResult(price=50.0, status="oos")
 
 
 @pytest.mark.asyncio
@@ -576,7 +577,7 @@ async def test_extract_shopify_js_specific_sold_out_size_is_oos_even_if_others_i
         )
     )
     result = await s._extract_shopify("", "https://www.dickies.com/en-ca/products/carpenter-pants?variant=1")
-    assert result == ScraperResult(price=None, status="oos")
+    assert result == ScraperResult(price=61.0, status="oos")
 
 
 @pytest.mark.asyncio
@@ -682,6 +683,7 @@ async def test_run_hierarchy_oos_keeps_name_site_and_currency(s: DummyScraper) -
     assert result.product_title == "Widget Pro"
     assert result.site_name == "Acme"
     assert result.currency == "CAD"
+    assert result.price == 89.99  # issue #68 — listed price kept on oos
 
 
 @pytest.mark.asyncio
@@ -924,10 +926,11 @@ async def test_run_hierarchy_og_out_of_stock_is_not_overridden(s: DummyScraper) 
         + "</script></body></html>"
     )
     result = await s._run_hierarchy(html, "https://example.com/item/abc")
-    # The oos result has price=None, so the strictly-cheaper guard skips the
-    # NEXT_DATA override and the sold-out status survives.
+    # Only an in-stock ("ok") result may be replaced by a cheaper scoped
+    # NEXT_DATA match — the oos result keeps its status and its listed price
+    # (issue #68; previously it had price=None, which skipped the override).
     assert result.status == "oos"
-    assert result.price is None
+    assert result.price == 99.99
 
 
 # ---------------------------------------------------------------------------

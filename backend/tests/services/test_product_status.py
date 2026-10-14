@@ -43,14 +43,40 @@ def test_compute_status_default_watching() -> None:
     assert compute_status(listings, product_active=True, alerted_at=None) == "watching"
 
 
-def test_compute_status_oos_listing_is_out_of_stock() -> None:
+def test_compute_status_single_oos_listing_is_out_of_stock() -> None:
     """Issue #54 — previously fell through every branch to "watching"
     unconditionally, since compute_status() never checked for "oos" at
-    all. A sibling listing still "ok" doesn't mask it — any OOS listing
-    is enough to flag the whole product."""
-    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
+    all."""
+    listings = [_listing(last_scrape_status="oos")]
 
     assert compute_status(listings, product_active=True, alerted_at=None) == "out_of_stock"
+
+
+def test_compute_status_all_listings_oos_is_out_of_stock() -> None:
+    listings = [_listing(last_scrape_status="oos"), _listing(last_scrape_status="oos")]
+
+    assert compute_status(listings, product_active=True, alerted_at=None) == "out_of_stock"
+
+
+def test_compute_status_one_oos_one_ok_is_watching() -> None:
+    """Issue #67 — a sibling listing still "ok" means the product can still
+    be bought, so one sold-out retailer doesn't flag the whole product."""
+    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
+
+    assert compute_status(listings, product_active=True, alerted_at=None) == "watching"
+
+
+def test_compute_status_one_oos_one_ok_with_active_alert_is_triggered() -> None:
+    listings = [_listing(last_scrape_status="ok"), _listing(last_scrape_status="oos")]
+
+    assert (
+        compute_status(listings, product_active=True, alerted_at=dt.datetime.now(dt.timezone.utc))
+        == "triggered"
+    )
+
+
+def test_compute_status_no_listings_is_not_out_of_stock() -> None:
+    assert compute_status([], product_active=True, alerted_at=None) == "watching"
 
 
 def test_compute_status_failed_outranks_out_of_stock() -> None:

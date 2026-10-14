@@ -139,7 +139,9 @@ def _price_from_offer(offers: Any) -> ScraperResult | None:
 
     availability = str(offers.get("availability", ""))
     if any(value in availability for value in _JSONLD_OOS_AVAILABILITY):
-        return ScraperResult(price=None, status="oos")
+        # Issue #68 — the page still lists a price; keep it (information
+        # only: the scheduler never alerts on or charts an "oos" price).
+        return ScraperResult(price=price, status="oos")
 
     return ScraperResult(price=price, status="ok")
 
@@ -617,14 +619,16 @@ class BaseScraper(ABC):
                 # which may just be a sold-out size.
                 variant = next((v for v in variants if is_available(v)), variants[0])
 
-            if not is_available(variant):
-                return ScraperResult(price=None, status="oos")
-
             raw_price = variant.get("price")
             if cents and isinstance(raw_price, int) and not isinstance(raw_price, bool):
                 price = raw_price / 100 if raw_price > 0 else None
             else:
                 price = _parse_price(str(raw_price if raw_price is not None else ""))
+
+            if not is_available(variant):
+                # Issue #68 — the variant's listed price is kept alongside
+                # "oos" (None if it has none, as before).
+                return ScraperResult(price=price, status="oos")
             if price is None:
                 return None
             return ScraperResult(price=price, status="ok")
@@ -648,9 +652,9 @@ class BaseScraper(ABC):
                 price = _parse_price(tag["content"])
                 if price is not None:
                     if _og_out_of_stock(soup):
-                        # Same shape as the JSON-LD OutOfStock path: no
-                        # price signal once the page says it's sold out.
-                        return ScraperResult(price=None, status="oos")
+                        # Same shape as the JSON-LD OutOfStock path: the
+                        # listed price is kept alongside "oos" (issue #68).
+                        return ScraperResult(price=price, status="oos")
                     return ScraperResult(price=price, status="ok")
         return None
 
@@ -782,12 +786,13 @@ class BaseScraper(ABC):
         if nextdata_result is not None:
             if result is None or (
                 nextdata_scoped
+                and result.status == "ok"
                 and result.price is not None
                 and nextdata_result.price < result.price
             ):
                 result = nextdata_result
                 source = "next_data"
-            elif result.price is not None and nextdata_result.price < result.price:
+            elif result.status == "ok" and result.price is not None and nextdata_result.price < result.price:
                 _log.info(
                     "ignored unscoped next_data price %s (keeping %s from %s) url=%s",
                     nextdata_result.price, result.price, source, url,
@@ -804,12 +809,13 @@ class BaseScraper(ABC):
         if rsc_result is not None:
             if result is None or (
                 rsc_scoped
+                and result.status == "ok"
                 and result.price is not None
                 and rsc_result.price < result.price
             ):
                 result = rsc_result
                 source = "rsc_flight"
-            elif result.price is not None and rsc_result.price < result.price:
+            elif result.status == "ok" and result.price is not None and rsc_result.price < result.price:
                 _log.info(
                     "ignored unscoped rsc_flight price %s (keeping %s from %s) url=%s",
                     rsc_result.price, result.price, source, url,

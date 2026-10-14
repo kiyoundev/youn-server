@@ -3459,3 +3459,77 @@ Seen live after #64: adding an out-of-stock Amazon item left the spinner running
 
 - The second toast is tab-local and in-memory: reloading the page, or a tab disconnected from SSE when the scrape finishes, never shows it. Products added from another tab/device are not announced.
 - SSE is in-memory with no replay: a tab that is disconnected at that moment still relies on its reconnect refetch.
+
+---
+
+## [x] Issue #67 — "Out of Stock" Only When Every Retailer Is; Per-Retailer Out-of-Stock Icon
+
+**Type:** fix / AFK
+**Estimate:** ~1.5h
+**Blocked by:** None (related: #54 — added `out_of_stock`, #60 — used-price icon, #61 — restock notification)
+
+### What to build
+
+`compute_status()` rolled a product up to `out_of_stock` when **any** of its listings was `oos` (#54). #54 was written around a single IKEA listing; a product with several retailers where only one is sold out showed "Out of Stock" while the others were still buyable. That also disagrees with the price-drop alert, which already compares only `ok` listings.
+
+**Backend:** `out_of_stock` only when **every** listing is `oos` (and there is at least one). Precedence otherwise unchanged: paused → processing → failed (any error) → out_of_stock (all oos) → triggered → watching. A mix of `ok` and `oos` is `watching` (or `triggered` with an active alert).
+
+**Frontend (`watchlist/page.tsx`):**
+- `draftStatus()` mirrors the new rule (it must stay in sync with `compute_status()`).
+- Every retailer row whose listing is `oos` gets a muted ⓘ. Hover: `Out of stock`, then `Available <dates>` or `Restock date unavailable`, plus `Used available at $X` when the scraper found a used offer. One icon — it replaces #60's used-price-only icon rather than sitting beside it. The red error icon (#53) is unchanged.
+- The "Out of Stock" badge tooltip prefixes each line with the retailer name once the product has more than one listing; wording aligned with the icon (`Restock date unavailable`).
+
+### Why (context)
+
+Found live: a multi-retailer item with one sold-out retailer showed the product-level "Out of Stock" badge, and the sold-out retailer's row had no marker unless it had a used offer.
+
+### Acceptance criteria
+
+- [x] One `ok` + one `oos` listing → `watching` (or `triggered`); all `oos` → `out_of_stock`; any `error` still → `failed`
+- [x] Backend `compute_status()` and frontend `draftStatus()` agree
+- [x] Every `oos` retailer row shows the ⓘ with "Out of stock" and the restock date, or "Restock date unavailable"
+- [x] An `oos` Amazon listing with a used offer shows one icon that includes the used price
+- [x] Tests: all-oos, mixed, mixed with alert, no listings
+
+### Known limitations
+
+- The stat row's "Out of Stock" count now means "entirely sold out" products only; a product with one sold-out retailer counts under Watching.
+
+---
+
+## [x] Issue #68 — Keep the Listed Price on Out-of-Stock Results; Best Price Counts Only In-Stock Listings
+
+**Type:** fix / AFK
+**Estimate:** ~1.5h
+**Blocked by:** None (related: #54 — IKEA/Uniqlo-style price on `oos`, #60 — Amazon new-only, #67 — all-oos status)
+
+### What to build
+
+`process_item` already stores `scrape.price` on an `"oos"` result when the scraper provides one (#54: IKEA and Uniqlo expose price and stock separately). The generic extractors never did: `_price_from_offer` (JSON-LD) and `_extract_og_price` parsed the price, then discarded it on an out-of-stock page, and the Shopify branch returned before reading it — all under a comment claiming there is "no price signal once OOS", which is false for those pages. A listing that was out of stock from its first scrape (e.g. a Walmart listing) therefore showed `—`.
+
+**Backend (`scraper/base.py`):**
+- JSON-LD, og-meta and Shopify out-of-stock results keep the listed price (`ScraperResult(price=..., status="oos")`; Shopify still `price=None` if the variant has none).
+- The NEXT_DATA / RSC "strictly cheaper scoped match wins" overrides only replace an `"ok"` result. They previously relied on an oos result having `price=None` to be skipped; with a price now present, a cheaper scoped match could otherwise have flipped a sold-out page to `ok`.
+- Amazon is unchanged on purpose: with no new offer the visible price belongs to a used offer, which stays information-only (#60).
+
+**Frontend:**
+- `bestPrice()` (`lib/watchlist-sort.ts`) ignores `oos` listings, so Best Price (table cell, sort, and the total-best-price figure) is the cheapest price you can actually buy at; all-oos shows `—`.
+- An out-of-stock retailer row shows its last listed price in the muted colour.
+
+### Why (context)
+
+Found live: an out-of-stock Walmart listing showed `—` although #54 had made price-on-oos a thing, because only the dedicated scrapers did it. Showing it would have let a stale sold-out price become the product's "Best Price", hence the `bestPrice` change in the same issue.
+
+### Acceptance criteria
+
+- [x] JSON-LD, og-meta and Shopify `oos` results carry the listed price
+- [x] A cheaper scoped NEXT_DATA/RSC match never turns an `oos` result into `ok`
+- [x] Amazon `oos` still has no tracked price; used price stays information-only
+- [x] `bestPrice()` excludes `oos` listings; an all-oos product shows `—`
+- [x] Out-of-stock retailer rows show their price muted
+- [x] Tests updated for the generic extractors
+
+### Known limitations
+
+- A sold-out page's listed price can be a placeholder or stale; it is display-only (never in `PriceHistory`, charts or alerts).
+- `error` listings still count toward Best Price with their last known price (a transient failure, unlike a confirmed sold-out).
