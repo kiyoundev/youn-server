@@ -3419,3 +3419,43 @@ The user rarely buys used, except as a bargain. #60 keeps used offers out of the
 ### Known limitations
 
 - Depends on Amazon's markup, as #60 does.
+
+---
+
+## [x] Issue #66 — Broadcast Scrape Completion on Every Outcome (Stuck "Processing" Spinner)
+
+**Type:** fix / AFK
+**Estimate:** ~1h
+**Blocked by:** None (related: #51 — "started" broadcast, #64 — made oos/error scrapes visibly change the row)
+
+### What to build
+
+`process_item` sends a "started" SSE broadcast before every scrape (#51), which makes the watchlist refetch and show the listing as **"Processing"**. The matching **completion** broadcast fires only at the very end of the `ok`-with-a-price path. The `"oos"`, `"error"` and "ok but no price" branches commit and return silently, and the unhandled-exception backstop in `_bounded_process_item` does the same. The page (`watchlist/page.tsx`) refetches only on SSE events, so for those outcomes its last fetch is the "Processing" one and the spinner under Best Price spins until a manual refresh (or any other refetch).
+
+Seen live after #64: adding an out-of-stock Amazon item left the spinner running and the item never updated (name, price, status) until refresh.
+
+**Fix:**
+1. Broadcast completion after the commit on **every** outcome — `ok`, `"oos"`, `"error"`, ok-without-price — and from the `_bounded_process_item` backstop once it has persisted the error.
+2. Clear the in-flight flag **before** that broadcast. Today `clear_in_flight` runs in the `finally`, after the broadcast, so a fast client refetch could still see the listing as "processing".
+3. Flip the tests that assert no completion broadcast on `oos`/`error`/ok-without-price.
+4. **Two-stage add toast** (`watchlist/page.tsx`). The add toast used to read `Added "item"` because the name isn't inferred until the first scrape. Now: `Item added, fetching details…` immediately (`"Name" added, …` if the user typed one), then `Processing completed for "{name}"` (`Processing failed for "{name}"` if the product ends up "failed") once the product stops being "processing". Driven by the same SSE-triggered refetch, so it depends on step 1.
+5. **Normalize inferred names.** A scraped title never passes through the request schemas' whitespace stripping, so a trailing space / NBSP / invisible mark landed in `Product.name` (found live: two U+200B zero-width spaces after every Amazon title). New `normalize_title()` (`schemas/validators.py`) runs in `_apply_scrape_metadata`: drops Unicode format characters (except ZWJ/ZWNJ and tag chars), collapses whitespace runs, trims; blank becomes `None`.
+
+### Why (context)
+
+#51 added "started" so a re-scrape of an already-scraped listing visibly shows "Processing". Its completion counterpart was written only for the success path, because only a successful scrape was assumed to change anything worth refetching. That stopped being true once an out-of-stock scrape could fill the name/currency/retailer (#64) and, before that, changed status and the used price (#60) — and a failed scrape's status/reason also needs to show.
+
+### Acceptance criteria
+
+- [x] A completion broadcast fires after the commit on `ok`, `"oos"`, `"error"` and ok-without-price scrapes
+- [x] The listing is no longer in flight when that broadcast fires
+- [x] The `_bounded_process_item` backstop broadcasts after persisting its error
+- [x] Adding an out-of-stock or failing item: the spinner clears and the row updates without a refresh
+- [x] Tests updated: completion broadcast per outcome; in-flight cleared before broadcast
+- [ ] An inferred name has no leading/trailing/duplicate whitespace or invisible marks (existing rows keep their stored name — first-write-wins; edit or re-add)
+- [x] Adding an item shows "Item added, fetching details…", then `Processing completed for "{name}"` with the inferred name — for in-stock, out-of-stock and failing items; a scrape that finishes before the add request returns is still announced
+
+### Known limitations
+
+- The second toast is tab-local and in-memory: reloading the page, or a tab disconnected from SSE when the scrape finishes, never shows it. Products added from another tab/device are not announced.
+- SSE is in-memory with no replay: a tab that is disconnected at that moment still relies on its reconnect refetch.

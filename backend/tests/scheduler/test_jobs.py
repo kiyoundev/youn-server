@@ -1018,7 +1018,7 @@ async def test_process_item_broadcast_uses_scraped_listing_not_cheapest_winner()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["oos", "error"])
-async def test_process_item_does_not_broadcast_completion_on_oos_or_error(status: str) -> None:
+async def test_process_item_broadcasts_completion_on_oos_or_error(status: str) -> None:
     listing = _listing(item_id=10)
 
     session = _mock_session()
@@ -1037,12 +1037,14 @@ async def test_process_item_does_not_broadcast_completion_on_oos_or_error(status
     ):
         await jobs.process_item(10, router, queue)
 
-    # only the "started" broadcast (issue #51) — no completion broadcast
-    assert broadcast_mock.call_count == 1
+    # Issue #66 — the "started" broadcast (#51) plus a completion one, so a
+    # page showing "processing" refetches and resolves it.
+    assert broadcast_mock.call_count == 2
+    broadcast_mock.assert_called_with({"product_id": listing.product_id, "listing_id": 10})
 
 
 @pytest.mark.asyncio
-async def test_process_item_does_not_broadcast_completion_when_ok_status_has_none_price() -> None:
+async def test_process_item_broadcasts_completion_when_ok_status_has_none_price() -> None:
     listing = _listing(item_id=10)
 
     session = _mock_session()
@@ -1061,8 +1063,7 @@ async def test_process_item_does_not_broadcast_completion_when_ok_status_has_non
     ):
         await jobs.process_item(10, router, queue)
 
-    # only the "started" broadcast (issue #51) — no completion broadcast
-    assert broadcast_mock.call_count == 1
+    assert broadcast_mock.call_count == 2  # started (#51) + completion (#66)
 
 
 @pytest.mark.asyncio
@@ -1495,3 +1496,92 @@ async def test_process_item_oos_fills_name_commits_and_never_takes_the_product_l
     assert product.name == "Untitled No More"
     session.execute.assert_awaited_once()
     session.commit.assert_awaited_once()
+
+
+# ── completion broadcast on every outcome (issue #66) ────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        ScraperResult(price=90.0, status="ok"),
+        ScraperResult(price=None, status="oos"),
+        ScraperResult(price=None, status="error", error_reason="boom"),
+        ScraperResult(price=None, status="ok"),
+    ],
+    ids=["ok", "oos", "error", "ok-without-price"],
+)
+async def test_process_item_listing_is_no_longer_in_flight_when_completion_broadcasts(
+    result: ScraperResult,
+) -> None:
+    """The refetch a completion broadcast triggers must not still see the
+    listing as "processing" — in-flight is cleared before it, on every outcome."""
+    listing = _listing(item_id=10)
+    product = _product(target_price=50.0)
+
+    session = _mock_session()
+    session.get = _get_by_model(listing, product)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[_scalar_result(True), _product_result(product), _active_listings_result([listing])]
+    )
+    router = MagicMock()
+    router.get_price = AsyncMock(return_value=result)
+
+    seen_in_flight: list[bool] = []
+
+    def _record(_payload: dict) -> None:
+        seen_in_flight.append(10 in in_flight_snapshot())
+
+    with (
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast", side_effect=_record),
+    ):
+        await jobs.process_item(10, router, asyncio.Queue())
+
+    assert seen_in_flight == [True, False]  # started (in flight), then completion (cleared)
+
+
+@pytest.mark.asyncio
+async def test_bounded_process_item_backstop_broadcasts_after_persisting_the_error() -> None:
+    listing = _listing(item_id=7, last_scrape_status=None)
+    session = _mock_session()
+    session.get = AsyncMock(return_value=listing)
+    session.commit = AsyncMock()
+
+    with (
+        patch("app.scheduler.jobs.process_item", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        patch("app.scheduler.jobs.AsyncSessionLocal", return_value=_AsyncCM(session)),
+        patch("app.scheduler.jobs.broadcast") as broadcast_mock,
+    ):
+        await jobs._bounded_process_item(7, asyncio.Semaphore(1), asyncio.Queue())
+
+    broadcast_mock.assert_called_once_with({"product_id": listing.product_id, "listing_id": 7})
+
+
+@pytest.mark.asyncio
+async def test_process_item_normalizes_the_inferred_name() -> None:
+    """Scraped titles skip the request schemas' stripping — a trailing space,
+    NBSP or invisible mark must not end up in Product.name."""
+    listing = _listing(item_id=10)
+    product = _product(name=None)
+
+    await _run_oos_or_error(
+        listing,
+        ScraperResult(price=None, status="oos", product_title="  Apple AirPods Max 2 - Purple\u00a0\u200e "),
+        product,
+    )
+
+    assert product.name == "Apple AirPods Max 2 - Purple"
+
+
+@pytest.mark.asyncio
+async def test_process_item_blank_scraped_title_leaves_name_null() -> None:
+    listing = _listing(item_id=10)
+    product = _product(name=None)
+
+    await _run_oos_or_error(listing, ScraperResult(price=None, status="oos", product_title=" \u200e "), product)
+
+    assert product.name is None

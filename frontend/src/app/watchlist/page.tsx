@@ -547,9 +547,17 @@ function ProductRow({
               ) : (
                 <SheetTitle className="[text-box-trim:none]">{draft.name || "Untitled"}</SheetTitle>
               )}
-              <Button variant="ghost" size="icon-sm" aria-label="Edit item" className="translate-y-0.5" onClick={() => setIsEditingName(true)}>
-                <Pencil size={16} strokeWidth={1.5} />
-              </Button>
+              <div className="flex shrink-0 items-center">
+                <Button variant="ghost" size="icon-sm" aria-label="Edit item" className="translate-y-0.5" onClick={() => setIsEditingName(true)}>
+                  <Pencil size={16} strokeWidth={1.5} />
+                </Button>
+                {/* Opens the same confirm dialog as the row menu's Delete
+                    (rendered below as a sibling of the Sheet); on confirm
+                    handleDeleteProduct also closes this sheet. */}
+                <Button variant="ghost" size="icon-sm" aria-label="Delete item" className="translate-y-0.5" onClick={() => setIsDeleteDialogOpen(true)}>
+                  <Trash2 size={16} strokeWidth={1.5} />
+                </Button>
+              </div>
             </div>
           </SheetHeader>
           <div className="flex flex-col gap-4 px-4">
@@ -873,12 +881,34 @@ function ProductRow({
   );
 }
 
+// Issue #66 — second toast of the add-item flow: for every product in
+// `pending` (added from this tab, first scrape not yet announced) that has
+// stopped "processing" in `list`, announce it and drop it from `pending`. A
+// product missing from `list` (refetch hasn't landed) stays pending; one
+// paused meanwhile is dropped silently.
+function announceFinishedFirstScrapes(pending: Set<number>, list: Product[]) {
+  if (pending.size === 0) return;
+  for (const id of Array.from(pending)) {
+    const product = list.find((p) => p.id === id);
+    if (!product || product.status === "processing") continue;
+    pending.delete(id);
+    if (product.status === "paused") continue;
+    const name = product.name ?? "Untitled";
+    if (product.status === "failed") toast.error(`Processing failed for "${name}"`);
+    else toast.success(`Processing completed for "${name}"`);
+  }
+}
+
 export default function WatchlistPage() {
   const navSlotEl = useNavSlot();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortState | null>(null);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Issue #66 — ids of products added from this tab whose first scrape hasn't
+  // been announced yet (see announceFinishedFirstScrapes). A ref, not state:
+  // nothing renders from it.
+  const pendingFirstScrapeRef = useRef<Set<number>>(new Set());
   const [openId, setOpenId] = useState<number | null>(null);
   const [chartReady, setChartReady] = useState(false);
   const [editState, dispatchEdit] = useReducer(sheetEditReducer, { type: "none" });
@@ -952,16 +982,26 @@ export default function WatchlistPage() {
         currency: newItem.currency === "auto" ? undefined : newItem.currency,
         urls: newItemUrlLines,
       });
-      await mutate("/api/proxy/items");
+      const fresh = await mutate<Product[]>("/api/proxy/items");
       closeAddDialog();
       // product.name may still be null here — inference runs async on the
-      // first scrape (#41's dispatch), not before this response returns.
-      const displayName = product.name ?? "item";
+      // first scrape (#41's dispatch), not before this response returns. So
+      // this is the first of two toasts (issue #66): "added, fetching
+      // details" now, `Processing completed for "<name>"` from the effect
+      // below once the first scrape resolves.
       if (failed.length === 0) {
-        toast.success(`Added "${displayName}"`);
+        toast.success(`${product.name ? `"${product.name}"` : "Item"} added, fetching details…`);
       } else {
         const detail = failed.map((f) => `${f.retailer} (${f.detail})`).join(", ");
-        toast.error(`"${displayName}": ${failed.length} of ${newItemUrlLines.length} URL(s) failed — ${detail}`, { persist: true });
+        toast.error(`"${product.name ?? "New item"}": ${failed.length} of ${newItemUrlLines.length} URL(s) failed — ${detail}`, { persist: true });
+      }
+      // Registered after the first toast, then checked against the list just
+      // fetched: a scrape fast enough to finish during the add request would
+      // otherwise never be announced (the effect ran before it was pending),
+      // and would come out before the "added" toast if registered earlier.
+      if (newItemUrlLines.length > failed.length) {
+        pendingFirstScrapeRef.current.add(product.id);
+        if (fresh) announceFinishedFirstScrapes(pendingFirstScrapeRef.current, fresh);
       }
     } catch (e) {
       // Nothing committed server-side in this case (createProduct itself
@@ -1027,6 +1067,13 @@ export default function WatchlistPage() {
 
   const { data, error, isLoading } = useSWR<Product[]>("/api/proxy/items", fetcher);
   const products = data ?? [];
+
+  // Issue #66 — the SSE handler above refetches /api/proxy/items on every
+  // scrape event (the completion one included, for oos/error too), which
+  // changes `data` and re-runs this.
+  useEffect(() => {
+    if (data) announceFinishedFirstScrapes(pendingFirstScrapeRef.current, data);
+  }, [data]);
 
   // Issue #45 — fetched once on load (SWR's default revalidate-on-focus is
   // harmless here, rates only change daily server-side). getFxRates()

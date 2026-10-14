@@ -1,3 +1,4 @@
+import unicodedata
 from urllib.parse import urlparse
 
 _ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -47,3 +48,35 @@ def strip_name_or_none(value: str | None) -> str | None:
     one actually coerces "" and which doesn't."""
     stripped = strip_whitespace(value)
     return stripped or None
+
+
+# U+200C / U+200D (ZWNJ / ZWJ) are format characters too, but meaningful:
+# emoji ZWJ sequences, Persian. Tag characters (U+E0020-E007F) build subdivision
+# flag emoji. Everything else in the Unicode "format" category (Cf) is invisible
+# and never wanted in a product name: zero-width space, LRM/RLM and the other
+# bidi controls, word joiner, soft hyphen, BOM...
+_KEEP_FORMAT_CHARS = {"\u200c", "\u200d"}
+
+
+def _is_invisible(char: str) -> bool:
+    if char in _KEEP_FORMAT_CHARS or "\U000e0020" <= char <= "\U000e007f":
+        return False
+    return unicodedata.category(char) == "Cf"
+
+
+def normalize_title(value: str | None) -> str | None:
+    """Cleans a scraped product title before it is stored as Product.name:
+    drops invisible format characters (str.strip()/split() don't treat those
+    as whitespace, yet they render as — and copy as — a stray space, e.g. the
+    U+200E left-to-right mark retailers append to titles), turns every
+    whitespace run (tabs, newlines, NBSP) into one space and trims the ends.
+    "" / all-whitespace becomes None.
+
+    Scraped names never pass through the request schemas, so the
+    strip_name_or_none validator above never sees them — this is their
+    equivalent, applied where the scheduler writes the name (issue #44/#66).
+    """
+    if value is None:
+        return None
+    visible = "".join(c for c in value if not _is_invisible(c))
+    return " ".join(visible.split()) or None

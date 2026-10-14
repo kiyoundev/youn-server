@@ -9,6 +9,7 @@ from app.models.event import Event
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.watch_item import Listing
+from app.schemas.validators import normalize_title
 from app.services.fx import refresh_fx_rates
 from app.services.scrape_tracking import clear_in_flight, mark_in_flight
 from app.services.scraper.base import _describe_exception
@@ -151,6 +152,18 @@ def _clear_failure(listing: Listing) -> None:
     listing.last_scrape_error = None
 
 
+def _announce_scrape_done(listing: Listing) -> None:
+    """Issue #66 — the completion counterpart of the "started" broadcast
+    (#51), sent after the commit on every outcome, not just a successful
+    scrape: the page refetches only on SSE events, so without it a listing
+    marked "processing" by the started broadcast stays that way until a
+    manual refresh. The in-flight flag is cleared first so the refetch this
+    triggers can't still see the listing as "processing" (the `finally` in
+    process_item stays as the backstop for an exception)."""
+    clear_in_flight(listing.id)
+    broadcast({"product_id": listing.product_id, "listing_id": listing.id})
+
+
 def _apply_scrape_metadata(listing: Listing, product: Product, scrape) -> None:
     """Issue #64 — the three guarded metadata fills (#44 / #45), applied for
     every scrape outcome, not just "ok": whatever the scraper managed to read
@@ -181,8 +194,11 @@ def _apply_scrape_metadata(listing: Listing, product: Product, scrape) -> None:
             # _derive_retailer's own fallback uses, so both paths agree on
             # one display name per retailer.
             listing.retailer = _strip_tld_suffix(scrape.site_name)
-    if scrape.product_title and product.name is None:
-        product.name = scrape.product_title
+    # Scraped titles skip the request schemas' whitespace stripping, so
+    # normalize here (stray trailing spaces / invisible marks).
+    title = normalize_title(scrape.product_title)
+    if title and product.name is None:
+        product.name = title
     if scrape.currency and product.currency is None:
         product.currency = scrape.currency
 
@@ -259,6 +275,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 if product is not None:
                     _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
+                _announce_scrape_done(listing)
                 return
 
             if scrape.status == "error":
@@ -272,6 +289,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 if product is not None:
                     _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
+                _announce_scrape_done(listing)
                 return
 
             if scrape.price is None:
@@ -290,6 +308,7 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
                 if product is not None:
                     _apply_scrape_metadata(listing, product, scrape)
                 await session.commit()
+                _announce_scrape_done(listing)
                 return
 
             # Issue #61 — row lock on the listing, then re-read: the object
@@ -405,8 +424,9 @@ async def process_item(item_id: int, router: RetailerRouter, queue: asyncio.Queu
             # change, as a sibling to the alert-only Event/queue write above, not
             # a consumer of it. Placed after all three commit branches (not right
             # after the PriceHistory insert) so the broadcast never fires ahead of
-            # the transaction that's supposed to have already persisted it.
-            broadcast({"product_id": product.id, "listing_id": listing.id})
+            # the transaction that's supposed to have already persisted it. The
+            # other outcomes announce completion the same way (issue #66).
+            _announce_scrape_done(listing)
         finally:
             clear_in_flight(listing.id)
 
@@ -448,6 +468,7 @@ async def _bounded_process_item(listing_id: int, semaphore: asyncio.Semaphore, q
                     if listing is not None and listing.last_scrape_status is None:
                         _record_failure(listing, _describe_exception(exc), datetime.now(timezone.utc))
                         await session.commit()
+                        _announce_scrape_done(listing)
             except Exception:
                 _log.error(
                     "bounded scrape: failed to persist error status for listing %d",
