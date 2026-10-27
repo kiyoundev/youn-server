@@ -3533,3 +3533,58 @@ Found live: an out-of-stock Walmart listing showed `—` although #54 had made p
 
 - A sold-out page's listed price can be a placeholder or stale; it is display-only (never in `PriceHistory`, charts or alerts).
 - `error` listings still count toward Best Price with their last known price (a transient failure, unlike a confirmed sold-out).
+
+---
+
+## [ ] Issue #69 — Small-Model Fallback Tiers for Unmapped Domains (DOM-Price-Table + JSON-Key-Table)
+
+**Type:** feat / AFK
+**Estimate:** ~6h
+**Blocked by:** None (related: #50 — NEXT_DATA/RSC tiers this builds on, #68 — oos/price keeping behavior these new tiers must preserve)
+
+### What to build
+
+Today an unmapped domain that doesn't match any tier in `_run_hierarchy()` (`base.py:744` — Shopify API, JSON-LD, og-meta, `__NEXT_DATA__`, RSC/Flight) just returns `status: "error"`. No LLM anywhere in the scraper path currently (verified by grep). Add two new fallback tiers, both built on the same small pattern (inspired by TypeSafe's Jev — a small model picking a row from a harness-built table, never generating a selector or touching the DOM/JSON directly):
+
+**Shared pattern ("harness table → model picks index → harness resolves"):**
+1. Harness (plain code) scans the already-fetched page content and builds a small table of candidates (capped rows), computing all disambiguating signals itself — no model involvement in this step.
+2. A small/cheap model call (our own choice of model — **not** TypeSafe's hosted Jev API, which would ship our page content to their servers) sees only the reduced table and returns one row index. No free text, no selector, no code.
+3. Harness maps the index back to the real node/key it already holds, extracts the value with existing parsing code (currency/Decimal parser, etc).
+4. Result is cached per domain (same pattern as `detect_scraper_type()` caching on `Listing`, `router.py:79`) so the model runs once per new domain, not on every poll.
+
+**Tier A — DOM-price-table (last resort, no structured data found at all):**
+- Harness regex-scans rendered text for price-shaped candidates (`[$€£]\s?\d[\d,.]*`), builds table columns: `nearby_title`, `title_match` (fuzzy match against stored `Listing.name`/URL slug, computed deterministically), `repeated_block` (flags candidates sitting in a ≥3x repeated sibling pattern — catches "related items" grids), `strikethrough`/`was_price` styling, DOM position.
+- Pre-filter deterministically before the model ever sees the table: drop `repeated_block: true` rows unless that would empty the table.
+- Model picks the remaining row.
+
+**Tier B — JSON-key-table (structured blob found, but field names unseen):**
+- Triggers when `__NEXT_DATA__`/RSC chunks are found (same parsing already in `base.py`) but none of `_PRICE_KEY_PRIORITY` (line 194) match inside the node `_find_node_by_id` (line 233) already scoped to the right product.
+- Harness flattens that node's leaf key/value pairs where the value looks numeric, builds table: `{idx, key_name, sample_value}`.
+- Model picks which key is the current payable price.
+- Static `_PRICE_KEY_PRIORITY`/`_ID_KEY_CANDIDATES` tuples stay as-is and are tried first — this tier only plugs the gap for genuinely new field names, doesn't replace the deterministic/test-pinned path.
+
+**Placement:** both tiers live once inside the shared `_run_hierarchy()` in `base.py`, so `HTTPScraper` and `PatchrightScraper` both get them for free (they already funnel into the same function regardless of fetch method). `AmazonCAScraper` overrides `get_price()` entirely and is out of scope — it's a mapped retailer, doesn't need the unmapped-domain fallback.
+
+### Why (context)
+
+Grew out of a design discussion about TypeSafe's Jev (small-table-driven browser-nav model) and whether the same "constrained table, not free-form generation" trick applies to our price-scraping gap: genuinely unmapped domains currently just error out with no fallback beyond the generic heuristic hierarchy. The core idea transfers (small model, narrow structured input, harness owns all DOM/JSON mechanics and the actual mutation/extraction) even though the problem shape differs (single-page value read, not multi-step UI navigation) — so no need for Jev's full loop (CLICK/TYPE_TEXT/SCROLL/DONE/BLOCKED), just the one-shot "pick the right row" step.
+
+### Acceptance criteria
+
+- [ ] Tier A and Tier B added to `_run_hierarchy()`, only invoked after all existing deterministic tiers miss
+- [ ] Both tiers reachable from `HTTPScraper` and `PatchrightScraper` without per-scraper wiring
+- [ ] Model call scoped to a small, capped table — never raw HTML, never the full JSON blob, never asked to output a selector/string/code
+- [ ] `repeated_block` pre-filter correctly drops "related/recommended items" candidates in Tier A on a known multi-item test fixture
+- [ ] Tier B only triggers when a structured blob exists but none of the static priority keys match; static tuples remain the first-tried, unchanged path
+- [ ] Resolved domain/key result cached (e.g. on `Listing`) so the model is called at most once per new domain under normal operation
+- [ ] `AmazonCAScraper` and all currently-mapped retailers are unaffected
+- [ ] Existing `oos`/price-keeping behavior (#68) preserved through both new tiers
+- [ ] Test fixtures for at least one synthetic "unmapped domain with related-items grid" and one synthetic "new JSON price field name" case
+- [ ] Model-picker call sits behind an injectable seam (plain callable), so tests exercise harness resolve-by-index logic with a stubbed picker returning a fixed index — no real model call in the `pytest` suite, same as `respx` stubs HTTP today
+- [ ] A small (~10-20) hand-curated list of real unmapped domains with known-correct expected prices, run manually/periodically against the real model (not part of CI) as an accuracy sanity check when the prompt or model changes — documented alongside the fixtures, not graded pass/fail in the automated suite
+
+### Known limitations
+
+- Not test-pinned the way the static lists are: a wrong model pick on a new site's first encounter isn't caught by a fixture the way a static-list miss is — needs monitoring/alerting on first-seen-domain outcomes, not just silent trust.
+- Adds latency and a model-call cost on a domain's first scrape (one-time, given caching); still a net-new cost line versus today's zero-LLM pipeline.
+- Doesn't help if the price itself requires further page interaction (e.g. selecting a variant/size before a price appears) — still a single-page read, not Jev's multi-step nav loop; out of scope here.
