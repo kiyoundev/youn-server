@@ -3533,3 +3533,164 @@ Found live: an out-of-stock Walmart listing showed `—` although #54 had made p
 
 - A sold-out page's listed price can be a placeholder or stale; it is display-only (never in `PriceHistory`, charts or alerts).
 - `error` listings still count toward Best Price with their last known price (a transient failure, unlike a confirmed sold-out).
+
+---
+
+## [ ] Issue #69 — Real Quote & Stats on the Ticker Detail Page (Replace `mock-market.ts`)
+
+**Type:** feat / AFK
+**Estimate:** ~4h *(rough; to be re-estimated when planned)*
+**Blocked by:** #19 (reuses its `PriceService` cache)
+
+### What to build
+
+`/market/[ticker]` renders real alerts but **mock market data**: `getMarketDetail()` in `frontend/src/lib/mock-market.ts` supplies the price, stats, financials and about text. #31 is marked done, but no backend market routes exist (`backend/app` has no `api/market.py` and no `get_market_details`), so the page still shows invented numbers for any ticker. Found while planning #19.
+
+- Backend `app/api/market.py`: `GET /api/market/{ticker}/details` — current price and currency, open/high/low/volume, 52-week range, market cap, shares outstanding, P/E, exchange, dividend fields (when present) and the company description. Sourced from yfinance (consistent with #30), priced through #19's `PriceService` so the 15s cache and `stale`/`currency_mismatch` handling apply here too.
+- Frontend: replace `getMarketDetail()` on `/market/[ticker]` with a 30s SWR call; keep the mock only for the Popular Assets carousel until #30.
+- #46 (news) and #10.6 (`/api/market/quotes`) are planned to add to the same `market.py` file.
+
+### Why (context)
+
+#19 makes Holdings rows real, but each row links to `/market/{ticker}`, whose detail panel is still mock. #46 deliberately kept its scope to news and left this gap open.
+
+### Acceptance criteria
+
+- [ ] `GET /api/market/{ticker}/details` returns real price, stats and about text for a US and a CAD (`.TO`) ticker
+- [ ] The price goes through `PriceService` — no second, uncached quote path
+- [ ] `/market/[ticker]` shows no values from `mock-market.ts`; an unknown ticker shows a clear not-found state
+- [ ] Dividend panel appears only when dividend data exists
+
+---
+
+## [ ] Issue #70 — One Lifecycle Pattern for Backend Services (Move `synology_client` Into `lifespan`)
+
+**Type:** refactor / AFK
+**Estimate:** ~1h *(rough; to be re-estimated when planned)*
+**Blocked by:** none (#19 introduces the target pattern for `PriceService`)
+
+### What to build
+
+Backend services are wired two different ways today:
+
+| | `synology_client` | `FinnhubClient`, `PriceService` (#19) |
+|---|---|---|
+| Created | At import time, bottom of `services/synology.py` (`synology_client = SynologyClient()`) | In `lifespan` (`main.py`), stored on `app.state` |
+| Reached by | `from app.services.synology import synology_client` (used directly in `api/system.py`) | `request.app.state.<name>` through a dependency |
+| Cleanup | `await synology_client.close()` in `lifespan` shutdown | `await <name>.stop()` in `lifespan` shutdown |
+
+`FinnhubClient` and `PriceService` have to be built in `lifespan` because their constructors need objects that only exist at startup (the event queue, the Finnhub client). `SynologyClient` takes no arguments, so nothing forced it either way; it is the odd one out.
+
+- Create `SynologyClient()` in `lifespan`, store it as `app.state.synology`, keep the existing `close()` in shutdown.
+- Add a `get_synology_client(request)` dependency and use it in `api/system.py` instead of the module import.
+- Delete the module-level `synology_client` instance (keep the class).
+- Update tests that patch `app.api.system.synology_client` to override the dependency instead.
+- Write down the chosen pattern (construct in `lifespan`, expose through `app.state` and a `Depends` getter) in `.doc/architecture.md` so new services follow it.
+
+### Why (context)
+
+Raised while wiring `PriceService` in #19: the two shapes are easy to mix up, and the import-time singleton is the harder one to test (state survives across tests, and the patch target is the importing module's name). Nothing is broken today; this is consistency and testability only.
+
+### Acceptance criteria
+
+- [ ] No service instance is created at import time (`settings` and `app` excepted)
+- [ ] `/api/system` reads Synology through `app.state` and a dependency; behavior unchanged
+- [ ] `SynologyClient.close()` still runs on shutdown
+- [ ] Synology and system tests pass against the dependency override
+- [ ] The service wiring pattern is documented in `architecture.md`
+
+---
+
+## [ ] Issue #71 — Log Which Scraper + Extraction Tier Actually Ran Per Scrape
+
+**Type:** fix / AFK
+**Estimate:** ~2h *(rough; to be re-estimated when planned)*
+**Blocked by:** none
+
+RetailerRouter.get_price(url)
+  → muji.ca not in RETAILER_MAP → generic path
+  → HTTPScraper (or PatchrightScraper, if HTTPScraper errored that poll)
+      → BaseScraper._run_hierarchy(html, url)
+          1. _extract_shopify(html, url)       ← tried FIRST, always
+             (ignores `html` — makes its OWN httpx call to {handle}.js,
+              matches ?variant= against the real variants list)
+             if this returns a result → DONE, nothing below ever runs
+          2. _extract_jsonld(soup)             ← only reached if step 1 was None
+             takes the FIRST <script type="application/ld+json"> with
+             a Product+offers → returns immediately, no second look
+          3. _extract_og_price(soup)           ← only if 1 AND 2 both None
+          4. next_data / rsc_flight tiers      ← always attempted, but only
+             override an existing result if "scoped AND strictly cheaper"
+
+### What to build
+
+Today nothing in the scraper stack logs which scraper class (`HTTPScraper` vs `PatchrightScraper`) actually served a given poll, or distinguishes a correct extraction from a wrong-but-plausible one on the same success path:
+
+- `router.py`'s `RetailerRouter.get_price()` (`router.py:64-76`) silently escalates from `HTTPScraper` to `PatchrightScraper` on `status == "error"` — no log line marks that this happened.
+- `_run_hierarchy()`'s one per-scrape log line (`base.py:858`, INFO) logs `extractor=%s status=%s price=%s currency=%s currency_source=%s url=%s` — names which extraction tier won (`shopify`/`jsonld`/`og_price`/`next_data`/`rsc_flight`/`none`), but nothing identifies which scraper class called it, and a wrong-but-plausible result logs identically to a correct one (`status=ok`, no warning).
+- `_shopify_fetch()` (`base.py:586-636`) swallows every exception from both the `.js` and `.json` Ajax endpoints into a bare `return None` — no `exc_info`, no message. The only breadcrumb is one `_log.info("Shopify .js gave no result for %s, trying .json", url)` (`base.py:583`) if `.js` fails before `.json` is tried; nothing at all if `.json` then also fails.
+- Neither `http_scraper.py` nor `patchright_scraper.py` logs anything on a successful run — only on a total, scraper-ending exception (`http_scraper.py:23`, `patchright_scraper.py:243`).
+
+Net effect: there's currently no way to answer "which scraper ran, and which extraction method produced this price" from logs alone.
+
+- Add scraper-class identity to the one shared log line in `_run_hierarchy()` (`base.py:858`) — pass it down from `HTTPScraper.get_price()`/`PatchrightScraper.get_price()` so the single INFO line reads `scraper=http extractor=shopify status=ok price=11.9 ...` (or `scraper=patchright ...`).
+- Log the `HTTPScraper` → `PatchrightScraper` escalation in `router.py:64-76` — name the URL and why (the HTTPScraper result's `status`/`error_reason`).
+- Give `_shopify_fetch()`'s failure path a real log line (exception type or HTTP status) when both `.js` and `.json` come up empty — mirror this file's existing `_describe_exception` pattern instead of a bare swallowed `None`.
+
+### Why (context)
+
+Surfaced while diagnosing a MUJI listing (`watch_items.id=42`) that recorded the wrong variant's price — the "Thick" URL's `last_price` matched the "Thin" variant instead. Root-caused by direct testing against the live site, not logs, since none existed: MUJI's page ships two conflicting `Product` JSON-LD blocks (a stale one from what looks like a reviews-app widget, and the theme's own correct one), and `_extract_jsonld()`'s first-match-wins logic picks the wrong one whenever the normally-reliable Shopify API tier fails to produce a price first. Confirming that this is actually what happened required eliminating every other path by hand; a log line naming the scraper and extraction tier would have answered it directly. Filed separately from the `_extract_jsonld()` hardening fix itself — same investigation, different fix, pure observability with no behavior change, should land independently.
+
+### Acceptance criteria
+
+- [ ] `base.py:858`'s per-scrape log line includes which scraper class ran (`http` or `patchright`)
+- [ ] `router.py`'s `HTTPScraper` → `PatchrightScraper` escalation is logged, including the status/error_reason that triggered it
+- [ ] `_shopify_fetch()` logs a real reason (exception type or status code) when both `.js` and `.json` fail, instead of a silently swallowed `None`
+- [ ] No change to `ScraperResult`'s shape or to any extraction logic — logging only
+- [ ] Verified live: trigger a poll for any Shopify-backed listing and confirm the log line names both the scraper class and the winning extraction tier
+
+---
+
+## [ ] Issue #72 — Group the API in Swagger UI: Tags per Router, Prefix Aligned to the Tag
+
+**Type:** refactor / AFK
+**Estimate:** ~2h *(rough; to be re-estimated when planned. The tags part alone is ~30 min; the prefix part is the larger share)*
+**Blocked by:** none (#19 adds the `positions` router but does not depend on this)
+
+### What to build
+
+Swagger UI (`/docs`) shows every route in one flat **default** section, because no router sets a tag. A prefix does not fix that: it only changes the URL. Grouping needs tags. This issue does both and keeps them consistent, so a route's tag, its URL prefix and its router file name all line up.
+
+Today every router is a bare `APIRouter()` and each handler writes its full path:
+
+| Router file | Paths today |
+|---|---|
+| `activities.py` | `/api/activities`, `/api/activities/import` |
+| `analysis.py` | `/api/analysis/tradingagents/{update,version}` |
+| `events.py` | `/api/events/stream` |
+| `fx.py` | `/api/fx-rates` |
+| `health.py` | `/api/health` |
+| `items.py` | `/api/items`, `/api/items/{product_id}/...` (listings, poll, history) |
+| `poll.py` | `/api/poll/{prices,stocks}` |
+| `positions.py` (#19) | `/api/positions`, `/api/portfolio/summary` |
+| `stock_alerts.py` | `/api/stockalerts/...` (file is `stock_alerts`, URL is `stockalerts`) |
+| `system.py` | `/api/system/storage` |
+
+- **Tags:** give each router a tag, set once in `main.py` (`include_router(..., tags=[...])`) so the router files don't change. Optionally add `openapi_tags=[...]` to `FastAPI(...)` for section order and a one-line description per tag.
+- **Prefix:** move the shared path stem into `APIRouter(prefix=...)` so it matches the tag, and drop it from each decorator. The exact tag names and prefixes are **to be decided by the issue owner** before planning. Known mismatches to settle: `stockalerts` vs `stock_alerts`, `fx-rates` vs `fx`, and `positions` + `portfolio/summary` sharing one prefix (or becoming one `portfolio` tag with `activities`).
+- **Callers move with the prefix.** Any renamed URL has to change in the Next proxy (`frontend/src/app/api/proxy/...`, including the explicit `activities/import` and `events/stream` handlers), the `frontend/src/lib/api/*` fetchers, `use-listing-history.ts`, `sse-leader.ts`, and every test that hits a path. The tags part has no such cost; only a changed URL does.
+- Add a test that reads `/openapi.json` and fails if any operation has no tag, so a future router can't skip it.
+
+### Why (context)
+
+Raised while setting up Swagger access for #19: every route lands in one **default** list, which gets hard to scan as the API grows (29 routes across 10 routers by now). Prefix and tag were discussed together; tags alone fix the Swagger view, and aligning the prefix makes the URL layout match what Swagger shows. The prefix half is a breaking URL change for the frontend, so it's worth deciding the names first and landing it as one change with its callers.
+
+### Acceptance criteria
+
+- [ ] Every operation in `/openapi.json` has a tag; `/docs` shows one section per tag instead of a single **default**
+- [ ] Router `prefix` matches its tag, and the full path is no longer repeated in each decorator
+- [ ] Frontend proxy, fetchers and SSE/history hooks use the new paths; no remaining reference to a removed path (checked by grep)
+- [ ] Backend and frontend tests updated to the new paths and pass; `npx tsc --noEmit` clean
+- [ ] `/api/health` stays open and every other router still sits behind `verify_api_key` (existing real-`app` 401 tests pass)
+- [ ] A test asserts no operation is left untagged
+- [ ] Verified live (user): the UI still loads Watchlist, Portfolio, Activities import and the SSE stream after the rename
