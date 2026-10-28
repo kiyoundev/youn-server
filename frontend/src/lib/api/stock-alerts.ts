@@ -1,10 +1,11 @@
 // Thin data layer between the alarm Sheet's mutation handlers (on
-// /market/[ticker]) and fetch() — same shape as lib/api/items.ts's
-// request()/ApiError pattern, pointed at /api/proxy/stockalerts instead.
+// /market/[ticker]) and fetch() — built on lib/api/api-client.ts's
+// request()/ApiError, pointed at /api/proxy/stockalerts instead.
 //
 // Always goes through /api/proxy/stockalerts — never the backend directly — same
 // reason the proxy exists at all: the backend's X-API-Key must never reach
 // the browser.
+import { request } from "@/lib/api/api-client";
 
 // Matches backend/app/schemas/stock_alert.py's StockAlertResponse.
 // TradingAgents config fields (deep_think_llm, quick_think_llm,
@@ -43,35 +44,7 @@ export interface StockAlertUpdatePayload {
   run_analysis?: boolean;
 }
 
-// Thrown on any non-2xx response so callers can branch on status (e.g. 409
-// -> "alert already exists" toast vs. a generic failure toast) instead of
-// every call site re-parsing the response body by hand.
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(detail);
-  }
-}
-
 const BASE = "/api/proxy/stockalerts";
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new ApiError(res.status, body?.detail ?? `Request failed with status ${res.status}`);
-  }
-
-  // DELETE returns 204 with no body — nothing to parse.
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
 
 // listStockAlerts() is deliberately not exported here — both /portfolio and
 // /market/[ticker] read the list via useSWR("/api/proxy/stockalerts", ...)

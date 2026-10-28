@@ -7,7 +7,7 @@ import { LoaderCircle, Search, Upload } from "lucide-react";
 import { Command as CommandPrimitive } from "cmdk";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
-import { ApiError } from "@/lib/api/items";
+import { ApiError } from "@/lib/api/api-client";
 import { importActivities } from "@/lib/api/activities";
 import { Command, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { holdingsData, stockWatchlistData, mockTickerDirectory } from "@/lib/mock-portfolio";

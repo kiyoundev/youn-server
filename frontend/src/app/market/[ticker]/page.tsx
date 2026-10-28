@@ -14,7 +14,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { stockWatchlistData } from "@/lib/mock-portfolio";
 import { MarketDetailChart, type ChartPoint } from "@/components/ui/market-detail-chart";
 import { RecentActivityCard } from "@/components/ui/recent-activity-card";
-import { ApiError, createStockAlert, updateStockAlert, deleteStockAlert, type StockAlert } from "@/lib/api/stock-alerts";
+import { createStockAlert, updateStockAlert, deleteStockAlert, type StockAlert } from "@/lib/api/stock-alerts";
+import { ApiError } from "@/lib/api/api-client";
 import { toast } from "@/lib/toast";
 import {
   DATE_RANGES,

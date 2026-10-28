@@ -39,7 +39,6 @@ import {
   deleteProduct,
   pollAllPrices,
   pollProduct,
-  ApiError,
   getFxRates,
   type Product,
   type Listing,
@@ -47,6 +46,7 @@ import {
   type FxRates,
   type Currency,
 } from "@/lib/api/items";
+import { ApiError } from "@/lib/api/api-client";
 import { toast } from "@/lib/toast";
 
 type HistoryPoint = { date: string; price: number };
