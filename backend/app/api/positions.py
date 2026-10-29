@@ -48,24 +48,38 @@ async def _load_snapshot(ledger: LedgerCache, db: AsyncSession) -> LedgerSnapsho
         raise HTTPException(status_code=500, detail={"code": e.code, "message": e.message}) from e
 
 
+async def _load_usd_rate(db: AsyncSession) -> tuple[float | None, bool]:
+    """Today's USD->CAD rate from fx_rates and whether it is over 24h old.
+    A primary-key lookup; None before the first refresh."""
+    usd = await db.get(FxRate, "USD")
+    if usd is None:
+        return None, False
+    stale = usd.fetched_at < datetime.now(timezone.utc) - timedelta(hours=STALE_THRESHOLD_HOURS)
+    return usd.rate_to_cad, stale
+
+
 async def _load_priced_rows(
     ledger: LedgerCache, prices: PriceService, db: AsyncSession, types: AssetTypeService | None = None
-) -> tuple[LedgerSnapshot, tuple[PositionRow, ...]]:
-    """What both routes start from: the ledger snapshot and its holdings
-    joined with their quotes, already sorted. Both come from caches, so the
-    second route of a page load costs no query and no upstream call.
+) -> tuple[LedgerSnapshot, tuple[PositionRow, ...], tuple[float | None, bool]]:
+    """What both routes start from: the ledger snapshot, its holdings joined
+    with their quotes (already sorted), and the USD rate as (rate, stale). The
+    rate is read once here because allocation needs it and the summary needs it
+    for the balance. All three come from caches or a key lookup, so the second
+    route of a page load costs no ledger query and no upstream call.
 
     Pass `types` to also fill each row's asset_type; the lookups run alongside
     the price fetches, so a first call takes as long as the slower of the two.
     Without it every asset_type is None, which is what the summary wants: it
     never shows a badge, so it must not wait on one."""
     snapshot = await _load_snapshot(ledger, db)
+    usd_rate, usd_stale = await _load_usd_rate(db)
     pairs = {(h.symbol, h.native_currency) for h in snapshot.holdings}
     if types is None:
         quotes, asset_types = await prices.get_prices(pairs), {}
     else:
         quotes, asset_types = await asyncio.gather(prices.get_prices(pairs), types.get_types(pairs))
-    return snapshot, build_rows(snapshot.holdings, quotes, asset_types)
+    rows = build_rows(snapshot.holdings, quotes, asset_types, usd_rate)
+    return snapshot, rows, (usd_rate, usd_stale)
 
 
 @router.get(
@@ -74,11 +88,15 @@ async def _load_priced_rows(
     summary="Get portfolio holdings with current prices",
     description=(
         "One row per (symbol, native currency), merged across accounts, "
-        "sorted by market value descending with unpriced rows last. Money is "
+        "sorted by value descending with unpriced rows last. Money is "
         "in the holding's native currency. A row with no usable price still "
         "appears, with price_status explaining why and the price-derived "
         "fields null. asset_type is Stock, ETF or CDR, or null when the type "
-        "is unknown; it never affects the price fields. An empty ledger is []."
+        "is unknown; it never affects the price fields. allocation is the "
+        "row's share of the priced holdings' total value in CAD (USD at "
+        "today's fx_rates rate), a fraction, or null when the row is unpriced "
+        "or the USD rate is missing. Rows are sorted largest first by that "
+        "CAD value. An empty ledger is []."
     ),
 )
 async def get_positions(
@@ -87,7 +105,7 @@ async def get_positions(
     prices: PriceService = Depends(get_price_service),
     types: AssetTypeService = Depends(get_asset_type_service),
 ) -> list[PositionResponse]:
-    _, rows = await _load_priced_rows(ledger, prices, db, types)
+    _, rows, _ = await _load_priced_rows(ledger, prices, db, types)
     return [PositionResponse(**asdict(row)) for row in rows]
 
 
@@ -101,7 +119,9 @@ async def get_positions(
         "balance converts USD at today's fx_rates USD rate and is null when "
         "a priced USD holding exists but no rate does (fx_available false). "
         "fx_stale means that rate is over 24h old. unpriced_count > 0 means "
-        "the balance leaves those holdings out."
+        "the balance leaves those holdings out. invested_cad is what the held "
+        "shares cost in CAD at the rates of the days they were bought, "
+        "whether or not they are priced."
     ),
 )
 async def get_portfolio_summary(
@@ -109,10 +129,5 @@ async def get_portfolio_summary(
     ledger: LedgerCache = Depends(get_ledger_cache),
     prices: PriceService = Depends(get_price_service),
 ) -> PortfolioSummary:
-    snapshot, rows = await _load_priced_rows(ledger, prices, db)
-
-    usd = await db.get(FxRate, "USD")  # primary key lookup; None before the first refresh
-    rate = usd.rate_to_cad if usd else None
-    stale = usd is not None and usd.fetched_at < datetime.now(timezone.utc) - timedelta(hours=STALE_THRESHOLD_HOURS)
-
-    return PortfolioSummary(**asdict(build_summary(rows, snapshot.cash, rate, stale)))
+    snapshot, rows, (rate, stale) = await _load_priced_rows(ledger, prices, db)
+    return PortfolioSummary(**asdict(build_summary(rows, snapshot.cash, rate, stale, snapshot.invested_cad)))

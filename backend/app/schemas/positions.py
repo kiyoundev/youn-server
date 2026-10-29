@@ -28,6 +28,7 @@ class PositionResponse(BaseModel):
     unrealized_gain_pct: float | None
     last_traded_at: datetime  # never null: a holding has at least one trade
     asset_type: AssetType | None  # None = unknown type or failed lookup: no badge
+    allocation: float | None  # a fraction of the priced holdings' CAD value; None = unpriced or no USD rate
 
 
 class CurrencySubtotal(BaseModel):
@@ -56,3 +57,4 @@ class PortfolioSummary(BaseModel):
     fx_available: bool
     fx_stale: bool
     unpriced_count: int
+    invested_cad: float  # what the held shares cost in CAD at purchase-time rates, priced or not

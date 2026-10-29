@@ -14,7 +14,7 @@ def _row(symbol, currency, shares, avg_cost, price, status="ok") -> PositionRow:
     value = None if price is None else shares * price
     gain = None if value is None else value - invested
     pct = None if gain is None or not invested else gain / invested
-    return PositionRow(symbol, currency, shares, avg_cost, invested, price, status, None, value, gain, pct, _TRADED, None)
+    return PositionRow(symbol, currency, shares, avg_cost, invested, price, status, None, value, gain, pct, _TRADED, None, None)
 
 
 # 15 NVDA @110 priced 120 (+150) | 20 SOFI @8.25 unpriced | 40 AVGO CDR @12.5 priced 13.08 (stale)
@@ -91,7 +91,20 @@ def test_all_unpriced_currency_has_zero_value_and_no_pct() -> None:
 def test_empty_ledger_balance_is_just_cash() -> None:
     summary = build_summary([], cash=0.0, usd_rate=None, usd_rate_stale=False)
 
-    assert summary == SummaryData((), 0.0, 0.0, True, False, 0)
+    assert summary == SummaryData((), 0.0, 0.0, True, False, 0, 0.0)
+
+
+def test_invested_cad_is_passed_through_untouched() -> None:
+    summary = build_summary([NVDA, AVGO], cash=0.0, usd_rate=1.4, usd_rate_stale=False, invested_cad=1234.5)
+
+    assert summary.invested_cad == 1234.5
+
+
+def test_invested_cad_covers_unpriced_holdings_too() -> None:
+    # the caller totals it from the ledger, so a missing price changes nothing
+    summary = build_summary([SOFI], cash=0.0, usd_rate=None, usd_rate_stale=False, invested_cad=500.0)
+
+    assert (summary.unpriced_count, summary.invested_cad) == (1, 500.0)
 
 
 def test_dataclasses_have_exactly_the_fields_of_their_schemas() -> None:

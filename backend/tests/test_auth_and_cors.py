@@ -97,7 +97,7 @@ def test_portfolio_route_correct_api_key_reaches_the_handler(client: TestClient)
     types = SimpleNamespace(get_types=AsyncMock(return_value={}))
 
     async def _override_get_db():
-        yield MagicMock()
+        yield SimpleNamespace(get=AsyncMock(return_value=None))  # the USD rate lookup: no row
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[positions.get_ledger_cache] = lambda: ledger

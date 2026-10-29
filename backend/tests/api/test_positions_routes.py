@@ -77,6 +77,7 @@ class _Db:
 
 
 def _request(path: str, ledger: _Ledger, prices: _Prices, db: _Db | None = None, types: _Types | None = None):
+    db = db or _Db()  # every route reads the USD rate; no row = no rate
     app = FastAPI()
     app.include_router(positions.router)
 
@@ -122,6 +123,7 @@ def test_a_priced_row_carries_every_field_the_page_needs() -> None:
         "unrealized_gain_pct": pytest.approx(150 / 1650),
         "last_traded_at": "2026-07-27T14:36:00Z",
         "asset_type": None,  # no type known: the key is present and null
+        "allocation": None,  # no USD rate in this test's fx_rates, so a USD row cannot be converted
     }
 
 
@@ -151,6 +153,55 @@ def test_a_failed_type_lookup_leaves_the_price_fields_alone() -> None:
     assert (typed["price_status"], typed["market_value"]) == ("ok", 1800.0)
 
 
+def _allocation_ledger() -> tuple[_Ledger, _Prices]:
+    ledger = _Ledger(LedgerSnapshot((
+        _holding("NVDA", "USD", 10, 100.0),  # 10 * 100 = 1000 USD -> 1400 CAD at 1.4
+        _holding("XYZ", "CAD", 10, 50.0),    # 10 * 60  = 600 CAD
+    ), cash=0.0))
+    return ledger, _Prices({("NVDA", "USD"): _ok(100.0), ("XYZ", "CAD"): _ok(60.0)})
+
+
+def test_allocation_converts_usd_at_the_fx_rate_and_orders_rows_by_cad_value() -> None:
+    ledger, prices = _allocation_ledger()
+
+    rows = _request("/api/positions", ledger, prices, _usd_rate(1.4)).json()
+
+    # 1000 USD x 1.4 = 1400 CAD of a 2000 CAD total, and 600 CAD of 2000
+    assert [(r["symbol"], r["allocation"]) for r in rows] == [
+        ("NVDA", pytest.approx(0.7)), ("XYZ", pytest.approx(0.3)),
+    ]
+
+
+def test_rows_are_ordered_by_value_in_cad_not_by_native_value() -> None:
+    # 1500 CAD is bigger in native units than 1200 USD, but 1200 USD is 1680 CAD
+    ledger = _Ledger(LedgerSnapshot((
+        _holding("CADCO", "CAD", 10, 100.0),
+        _holding("USCO", "USD", 10, 100.0),
+    ), cash=0.0))
+    prices = _Prices({("CADCO", "CAD"): _ok(150.0), ("USCO", "USD"): _ok(120.0)})
+
+    rows = _request("/api/positions", ledger, prices, _usd_rate(1.4)).json()
+
+    assert [r["symbol"] for r in rows] == ["USCO", "CADCO"]
+
+
+def test_allocation_is_null_for_every_row_when_the_usd_rate_is_missing() -> None:
+    ledger, prices = _allocation_ledger()
+
+    rows = _request("/api/positions", ledger, prices, _Db()).json()
+
+    assert [r["allocation"] for r in rows] == [None, None]
+
+
+def test_positions_reads_the_usd_row_of_fx_rates_once() -> None:
+    ledger, prices = _allocation_ledger()
+    db = _usd_rate(1.4)
+
+    _request("/api/positions", ledger, prices, db)
+
+    assert db.gets == [(FxRate, "USD")]
+
+
 async def test_prices_and_types_are_fetched_concurrently() -> None:
     # each side waits for the other to start, so a sequential load never finishes
     prices_started, types_started = asyncio.Event(), asyncio.Event()
@@ -169,7 +220,7 @@ async def test_prices_and_types_are_fetched_concurrently() -> None:
 
     ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 1, 1.0),), cash=0.0))
 
-    await asyncio.wait_for(positions._load_priced_rows(ledger, _WaitingPrices(), None, _WaitingTypes()), timeout=2)
+    await asyncio.wait_for(positions._load_priced_rows(ledger, _WaitingPrices(), _Db(), _WaitingTypes()), timeout=2)
 
 
 def test_the_summary_does_not_look_up_types() -> None:
@@ -199,7 +250,7 @@ def test_an_unpriced_row_is_still_returned_with_null_price_fields() -> None:
     assert row["price_status"] == "unavailable"
     assert row["invested"] == 800.0  # cost does not depend on a price
     assert row["last_traded_at"] == "2026-07-27T14:36:00Z"  # nor does the date
-    for field in ("current_price", "price_as_of", "market_value", "unrealized_gain", "unrealized_gain_pct"):
+    for field in ("current_price", "price_as_of", "market_value", "unrealized_gain", "unrealized_gain_pct", "allocation"):
         assert row[field] is None  # the key is present and null, not missing
 
 
@@ -281,7 +332,7 @@ def _mixed() -> tuple[_Ledger, _Prices]:
     ledger = _Ledger(LedgerSnapshot((
         _holding("NVDA", "USD", 15, 110.0),  # cost 1650, worth 1800 USD
         _holding("XYZ", "CAD", 10, 20.0),    # cost 200, worth 250 CAD
-    ), cash=500.0))
+    ), cash=500.0, invested_cad=1800.0))  # what the two cost in CAD when bought
     return ledger, _Prices({("NVDA", "USD"): _ok(120.0), ("XYZ", "CAD"): _ok(25.0)})
 
 
@@ -307,7 +358,18 @@ def test_summary_totals_each_currency_and_converts_usd_at_todays_rate() -> None:
         "fx_available": True,
         "fx_stale": False,
         "unpriced_count": 0,
+        "invested_cad": 1800.0,  # passed through as is, not recomputed from the native costs
     }
+
+
+def test_invested_cad_is_reported_even_when_nothing_is_priced() -> None:
+    # what was paid does not depend on a price
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0, invested_cad=2300.0))
+
+    body = _summary(ledger, _Prices({}), _usd_rate()).json()
+
+    assert body["unpriced_count"] == 1
+    assert body["invested_cad"] == 2300.0
 
 
 def test_summary_looks_up_the_usd_row_of_fx_rates() -> None:
@@ -365,7 +427,7 @@ def test_an_empty_ledger_summary_is_zero_not_an_error() -> None:
     body = _summary(_Ledger(LedgerSnapshot((), cash=0.0)), _Prices({}), _Db(None)).json()
 
     assert body == {"subtotals": [], "cash_cad": 0.0, "balance_cad": 0.0,
-                    "fx_available": True, "fx_stale": False, "unpriced_count": 0}
+                    "fx_available": True, "fx_stale": False, "unpriced_count": 0, "invested_cad": 0.0}
 
 
 def test_summary_integrity_failure_is_a_500_with_the_error_code() -> None:

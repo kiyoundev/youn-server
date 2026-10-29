@@ -134,5 +134,75 @@ def test_asset_type_never_changes_a_price_field() -> None:
     assert replace(with_type, asset_type=None) == without
 
 
+def _alloc(holdings, quotes, rate):
+    return {r.symbol: r.allocation for r in build_rows(holdings, quotes, {}, rate)}
+
+
+def test_allocation_is_each_rows_share_of_the_total_in_cad() -> None:
+    holdings = [MergedHolding("NVDA", "USD", 10, 90.0, _TRADED), MergedHolding("XYZ", "CAD", 10, 50.0, _TRADED)]
+    quotes = {("NVDA", "USD"): _ok(100.0), ("XYZ", "CAD"): _ok(60.0)}
+
+    alloc = _alloc(holdings, quotes, 1.4)  # 1000 USD = 1400 CAD, and 600 CAD
+
+    assert alloc == {"NVDA": pytest.approx(0.7), "XYZ": pytest.approx(0.3)}
+
+
+def test_allocations_add_up_to_one() -> None:
+    holdings = [MergedHolding(s, c, 3, 1.0, _TRADED) for s, c in (("A", "USD"), ("B", "CAD"), ("C", "USD"))]
+    quotes = {("A", "USD"): _ok(7.0), ("B", "CAD"): _ok(11.0), ("C", "USD"): _ok(13.0)}
+
+    assert sum(_alloc(holdings, quotes, 1.37).values()) == pytest.approx(1.0)
+
+
+def test_an_unpriced_row_has_no_allocation_and_is_left_out_of_the_total() -> None:
+    holdings = [MergedHolding("AAA", "CAD", 1, 1.0, _TRADED), MergedHolding("BBB", "CAD", 1, 1.0, _TRADED)]
+    quotes = {("AAA", "CAD"): _ok(50.0), ("BBB", "CAD"): PriceQuote(None, None, None, "unavailable")}
+
+    assert _alloc(holdings, quotes, None) == {"AAA": pytest.approx(1.0), "BBB": None}
+
+
+def test_a_stale_price_still_counts_toward_allocation() -> None:
+    holdings = [MergedHolding("AAA", "CAD", 1, 1.0, _TRADED), MergedHolding("BBB", "CAD", 1, 1.0, _TRADED)]
+    quotes = {("AAA", "CAD"): _ok(75.0), ("BBB", "CAD"): PriceQuote(25.0, "CAD", _AT, "stale")}
+
+    assert _alloc(holdings, quotes, None) == {"AAA": pytest.approx(0.75), "BBB": pytest.approx(0.25)}
+
+
+def test_without_a_usd_rate_every_row_is_none_even_the_cad_ones() -> None:
+    holdings = [MergedHolding("NVDA", "USD", 1, 1.0, _TRADED), MergedHolding("XYZ", "CAD", 1, 1.0, _TRADED)]
+    quotes = {("NVDA", "USD"): _ok(100.0), ("XYZ", "CAD"): _ok(60.0)}
+
+    assert _alloc(holdings, quotes, None) == {"NVDA": None, "XYZ": None}
+
+
+def test_cad_only_holdings_need_no_rate() -> None:
+    holdings = [MergedHolding("XYZ", "CAD", 1, 1.0, _TRADED)]
+
+    assert _alloc(holdings, {("XYZ", "CAD"): _ok(60.0)}, None) == {"XYZ": pytest.approx(1.0)}
+
+
+def test_a_usd_row_with_no_price_does_not_need_the_rate() -> None:
+    holdings = [MergedHolding("NVDA", "USD", 1, 1.0, _TRADED), MergedHolding("XYZ", "CAD", 1, 1.0, _TRADED)]
+    quotes = {("NVDA", "USD"): PriceQuote(None, None, None, "unavailable"), ("XYZ", "CAD"): _ok(60.0)}
+
+    assert _alloc(holdings, quotes, None) == {"NVDA": None, "XYZ": pytest.approx(1.0)}
+
+
+def test_nothing_priced_or_a_zero_total_gives_no_allocation() -> None:
+    holdings = [MergedHolding("XYZ", "CAD", 1, 1.0, _TRADED)]
+
+    assert _alloc(holdings, {}, 1.4) == {"XYZ": None}
+    assert _alloc(holdings, {("XYZ", "CAD"): _ok(0.0)}, 1.4) == {"XYZ": None}
+
+
+def test_rows_are_ordered_by_cad_value_when_a_rate_is_known() -> None:
+    # 1500 CAD beats 1200 USD in native units, but 1200 USD is 1680 CAD
+    holdings = [MergedHolding("CADCO", "CAD", 10, 1.0, _TRADED), MergedHolding("USCO", "USD", 10, 1.0, _TRADED)]
+    quotes = {("CADCO", "CAD"): _ok(150.0), ("USCO", "USD"): _ok(120.0)}
+
+    assert [r.symbol for r in build_rows(holdings, quotes, {}, 1.4)] == ["USCO", "CADCO"]
+    assert [r.symbol for r in build_rows(holdings, quotes, {}, None)] == ["CADCO", "USCO"]  # no rate: native values
+
+
 def test_empty_input_gives_empty_tuple() -> None:
     assert build_rows([], {}, {}) == ()

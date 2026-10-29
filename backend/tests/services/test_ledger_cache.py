@@ -161,3 +161,39 @@ async def test_snapshot_holdings_are_merged_across_accounts() -> None:
     snapshot = await LedgerCache().get(_FakeDb(rows))
 
     assert [(h.symbol, h.shares) for h in snapshot.holdings] == [("NVDA", 15)]
+
+
+async def test_snapshot_invested_cad_is_the_cash_paid_for_what_is_still_held() -> None:
+    def trade(day: int, symbol: str, qty: float, price: float, cash: float, fx_rate=None):
+        return _row(
+            day, "Trade", symbol=symbol, quantity=qty, unit_price=price,
+            net_cash_amount=cash, fx_rate=fx_rate,
+        )
+
+    rows = [
+        _deposit(1, 10000.0),
+        trade(2, "NVDA", 2, 280.0, -560.0, fx_rate=1.4),  # a USD stock: 560 CAD paid
+        trade(3, "XYZ", 10, 20.0, -200.0),                # CAD-native: 200 CAD paid
+        trade(4, "ABC", 10, 10.0, -100.0),
+        trade(5, "ABC", 4, 12.0, 48.0),                   # sells 4 of 10 at the average: 60 CAD of cost stays
+    ]
+    snapshot = await LedgerCache().get(_FakeDb(rows))
+
+    assert snapshot.invested_cad == pytest.approx(560.0 + 200.0 + 60.0)
+
+
+async def test_an_empty_ledger_has_nothing_invested() -> None:
+    assert (await LedgerCache().get(_FakeDb([]))).invested_cad == 0.0
+
+
+async def test_invested_cad_adds_up_across_accounts() -> None:
+    rows = [
+        _deposit(1, 10000.0),
+        _row(1, "MoneyMovement", account_id="RRSP", net_cash_amount=10000.0),
+        _row(2, "Trade", account_id="TFSA", symbol="XYZ", quantity=10, unit_price=20.0, net_cash_amount=-200.0),
+        _row(3, "Trade", account_id="RRSP", symbol="XYZ", quantity=5, unit_price=30.0, net_cash_amount=-150.0),
+    ]
+    snapshot = await LedgerCache().get(_FakeDb(rows))
+
+    assert [(h.symbol, h.shares) for h in snapshot.holdings] == [("XYZ", 15)]  # one merged row
+    assert snapshot.invested_cad == pytest.approx(350.0)

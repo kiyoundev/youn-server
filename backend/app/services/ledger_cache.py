@@ -21,6 +21,7 @@ class LedgerSnapshot:
 
     holdings: tuple[MergedHolding, ...]
     cash: float
+    invested_cad: float = 0.0  # what the held shares cost in CAD, at the rates of the days they were bought
 
 
 class LedgerCache:
@@ -65,4 +66,5 @@ class LedgerCache:
     async def _load(self, db: AsyncSession) -> LedgerSnapshot:
         rows = (await db.execute(select(Activity))).scalars().all()
         holdings, cash, _warnings = compute_positions(rows)  # warnings are an import-time notice (#33)
-        return LedgerSnapshot(merge_holdings(holdings), cash)
+        invested_cad = sum(h.shares * h.avg_cost_cad for h in holdings)  # per account, before merging: exact
+        return LedgerSnapshot(merge_holdings(holdings), cash, invested_cad)

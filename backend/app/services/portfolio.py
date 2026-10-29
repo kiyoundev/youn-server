@@ -3,7 +3,7 @@ portfolio page shows (issue #19). Pure — no DB, no FastAPI, no prices — so
 it is cheap to test and safe to share between the two read routes."""
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -55,7 +55,10 @@ class PositionRow:
     """One table row: a merged holding joined with its price. Money fields are
     in the holding's native currency and unrounded. The price-derived fields
     are None when there is no usable price (unavailable / currency_mismatch).
-    asset_type is None when the type is unknown or its lookup failed."""
+    asset_type is None when the type is unknown or its lookup failed.
+    allocation is the row's share of the priced holdings' total value in CAD,
+    a fraction (0.2468 is 24.68%); None when the row is unpriced or the USD
+    rate it needs is missing."""
 
     symbol: str
     native_currency: Literal["CAD", "USD"]
@@ -70,6 +73,7 @@ class PositionRow:
     unrealized_gain_pct: float | None
     last_traded_at: datetime
     asset_type: AssetType | None
+    allocation: float | None
 
 
 def _build_row(h: MergedHolding, quote: PriceQuote | None, asset_type: AssetType | None) -> PositionRow:
@@ -86,31 +90,57 @@ def _build_row(h: MergedHolding, quote: PriceQuote | None, asset_type: AssetType
     return PositionRow(
         h.symbol, h.native_currency, h.shares, h.avg_cost, invested,
         quote.price, quote.status, quote.fetched_at,
-        market_value, gain, pct, h.last_traded_at, asset_type,
+        market_value, gain, pct, h.last_traded_at, asset_type, None,
     )
+
+
+def _allocate(rows: Sequence[PositionRow], usd_rate: float | None) -> list[PositionRow]:
+    """Fill in each priced row's allocation: its value in CAD over the priced
+    holdings' total in CAD. USD is converted at usd_rate (today's rate, as for
+    the balance), because a share of a mixed-currency total can't be taken in
+    native units. Without a rate, a priced USD row can't be converted and
+    neither can the total, so every allocation stays None; CAD-only holdings
+    need no rate. Unpriced rows are left out of the total and stay None, so the
+    percentages add up to 100 over what could be valued."""
+    priced = [r for r in rows if r.market_value is not None]
+    if usd_rate is None and any(r.native_currency == "USD" for r in priced):
+        return list(rows)
+
+    def cad(r: PositionRow) -> float:
+        return r.market_value * (usd_rate if r.native_currency == "USD" else 1.0)
+
+    total = sum(cad(r) for r in priced)
+    if total <= 0:
+        return list(rows)
+    return [replace(r, allocation=cad(r) / total) if r.market_value is not None else r for r in rows]
 
 
 def build_rows(
     holdings: Iterable[MergedHolding],
     quotes: Mapping[tuple[str, str], PriceQuote],
     asset_types: Mapping[tuple[str, str], AssetType | None],
+    usd_rate: float | None = None,
 ) -> tuple[PositionRow, ...]:
     """Join merged holdings with their quotes and types and derive invested,
-    market value and unrealized gain. A stale quote still has a price, so it is
-    valued like a fresh one; a holding with no quote is treated as unavailable,
-    and one with no type entry has asset_type None. Types never affect a price
-    field. Sorted by market value descending, unpriced rows last, ties by
-    symbol. Pure."""
+    market value, unrealized gain and allocation. A stale quote still has a
+    price, so it is valued like a fresh one; a holding with no quote is treated
+    as unavailable, and one with no type entry has asset_type None. Types never
+    affect a price field. usd_rate (None = unknown) only feeds allocation.
+
+    Sorted largest first, unpriced rows last, ties by symbol. "Largest" is the
+    allocation when there is one, i.e. by value in CAD, so a USD and a CAD row
+    compare fairly; without a rate it falls back to the native market value.
+    Pure."""
     rows = []
     for h in holdings:
         key = (h.symbol, h.native_currency)
         rows.append(_build_row(h, quotes.get(key), asset_types.get(key)))
-    return tuple(
-        sorted(
-            rows,
-            key=lambda r: (r.market_value is None, -(r.market_value or 0.0), r.symbol, r.native_currency),
-        )
-    )
+    rows = _allocate(rows, usd_rate)
+
+    def size(r: PositionRow) -> float:
+        return r.allocation if r.allocation is not None else (r.market_value or 0.0)
+
+    return tuple(sorted(rows, key=lambda r: (r.market_value is None, -size(r), r.symbol, r.native_currency)))
 
 
 @dataclass(frozen=True)
@@ -140,6 +170,7 @@ class SummaryData:
     fx_available: bool
     fx_stale: bool
     unpriced_count: int
+    invested_cad: float
 
 
 def _totals(currency: Literal["CAD", "USD"], rows: Sequence[PositionRow]) -> CurrencyTotals:
@@ -162,8 +193,13 @@ def build_summary(
     cash: float,
     usd_rate: float | None,
     usd_rate_stale: bool,
+    invested_cad: float = 0.0,
 ) -> SummaryData:
     """Per-currency totals plus the CAD balance. Pure.
+
+    invested_cad is what the held shares cost in CAD, at the rates of the days
+    they were bought (the ledger's cash paid). It is passed in, not derived
+    from rows, because the rows carry cost only in native currency.
 
     balance_cad = CAD market value + USD market value x usd_rate + cash, where
     usd_rate is today's USD->CAD rate (fx_rates), not the rate at each trade.
@@ -199,4 +235,5 @@ def build_summary(
         fx_available=available,
         fx_stale=stale,
         unpriced_count=sum(t.unpriced_count for t in subtotals),
+        invested_cad=invested_cad,
     )
