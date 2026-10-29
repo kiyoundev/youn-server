@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.scheduler.jobs import poll_prices, refresh_fx_rates_job
+from app.services.asset_types import AssetTypeService
 from app.services.ledger_cache import LedgerCache
 from app.services.prices import PriceService
 from app.services.scraper.patchright_scraper import PatchrightScraper
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
     app.state.event_queue = queue
     app.state.finnhub = finnhub
     app.state.prices = price_service
+    app.state.asset_types = AssetTypeService()
     app.state.ledger_cache = LedgerCache()
     app.state.scheduler = scheduler
     app.state.dispatch_task = dispatch_task

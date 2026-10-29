@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from app.services.portfolio import MergedHolding
 from app.services.prices import PriceQuote, PriceService
 
 AS_OF = datetime(2026, 10, 26, 14, 30, tzinfo=timezone.utc)
+TRADED = datetime(2026, 7, 27, 14, 36, tzinfo=timezone.utc)
 
 
 class _Ledger:
@@ -42,8 +44,20 @@ class _Prices:
         return self.quotes
 
 
+class _Types:
+    """Stands in for AssetTypeService: records what was asked, answers from `types`."""
+
+    def __init__(self, types: dict | None = None) -> None:
+        self.types = types or {}
+        self.asked: set | None = None
+
+    async def get_types(self, pairs):
+        self.asked = set(pairs)
+        return self.types
+
+
 def _holding(symbol: str, currency: str, shares: float, avg_cost: float) -> MergedHolding:
-    return MergedHolding(symbol, currency, shares, avg_cost)
+    return MergedHolding(symbol, currency, shares, avg_cost, TRADED)
 
 
 def _ok(price: float) -> PriceQuote:
@@ -62,7 +76,7 @@ class _Db:
         return self.usd_rate
 
 
-def _request(path: str, ledger: _Ledger, prices: _Prices, db: _Db | None = None):
+def _request(path: str, ledger: _Ledger, prices: _Prices, db: _Db | None = None, types: _Types | None = None):
     app = FastAPI()
     app.include_router(positions.router)
 
@@ -72,11 +86,12 @@ def _request(path: str, ledger: _Ledger, prices: _Prices, db: _Db | None = None)
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[positions.get_ledger_cache] = lambda: ledger
     app.dependency_overrides[positions.get_price_service] = lambda: prices
+    app.dependency_overrides[positions.get_asset_type_service] = lambda: types or _Types()
     return TestClient(app, raise_server_exceptions=False).get(path)
 
 
-def _get(ledger: _Ledger, prices: _Prices):
-    return _request("/api/positions", ledger, prices)
+def _get(ledger: _Ledger, prices: _Prices, types: _Types | None = None):
+    return _request("/api/positions", ledger, prices, types=types)
 
 
 def test_rows_are_sorted_by_market_value_with_unpriced_last() -> None:
@@ -105,7 +120,74 @@ def test_a_priced_row_carries_every_field_the_page_needs() -> None:
         "price_as_of": "2026-10-26T14:30:00Z",
         "market_value": 1800.0, "unrealized_gain": 150.0,
         "unrealized_gain_pct": pytest.approx(150 / 1650),
+        "last_traded_at": "2026-07-27T14:36:00Z",
+        "asset_type": None,  # no type known: the key is present and null
     }
+
+
+def test_asset_types_are_requested_and_returned_per_symbol_and_currency() -> None:
+    ledger = _Ledger(LedgerSnapshot((
+        _holding("AVGO", "USD", 5, 900.0),
+        _holding("AVGO", "CAD", 20, 30.0),
+    ), cash=0.0))
+    prices = _Prices({("AVGO", "USD"): _ok(1000.0), ("AVGO", "CAD"): _ok(35.0)})
+    types = _Types({("AVGO", "USD"): "Stock", ("AVGO", "CAD"): "CDR"})
+
+    rows = _get(ledger, prices, types).json()
+
+    assert types.asked == {("AVGO", "USD"), ("AVGO", "CAD")}
+    assert {(r["native_currency"], r["asset_type"]) for r in rows} == {("USD", "Stock"), ("CAD", "CDR")}
+
+
+def test_a_failed_type_lookup_leaves_the_price_fields_alone() -> None:
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0))
+    prices = _Prices({("NVDA", "USD"): _ok(120.0)})
+
+    (plain,) = _get(ledger, prices).json()
+    (typed,) = _get(ledger, prices, _Types({("NVDA", "USD"): None})).json()
+
+    assert typed == plain
+    assert typed["asset_type"] is None
+    assert (typed["price_status"], typed["market_value"]) == ("ok", 1800.0)
+
+
+async def test_prices_and_types_are_fetched_concurrently() -> None:
+    # each side waits for the other to start, so a sequential load never finishes
+    prices_started, types_started = asyncio.Event(), asyncio.Event()
+
+    class _WaitingPrices:
+        async def get_prices(self, pairs):
+            prices_started.set()
+            await types_started.wait()
+            return {}
+
+    class _WaitingTypes:
+        async def get_types(self, pairs):
+            types_started.set()
+            await prices_started.wait()
+            return {}
+
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 1, 1.0),), cash=0.0))
+
+    await asyncio.wait_for(positions._load_priced_rows(ledger, _WaitingPrices(), None, _WaitingTypes()), timeout=2)
+
+
+def test_the_summary_does_not_look_up_types() -> None:
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0))
+    types = _Types({("NVDA", "USD"): "Stock"})
+
+    response = _request("/api/portfolio/summary", ledger, _Prices({("NVDA", "USD"): _ok(120.0)}), _Db(), types)
+
+    assert response.status_code == 200
+    assert types.asked is None
+
+
+def test_types_are_not_looked_up_for_a_ledger_we_cannot_trust() -> None:
+    ledger = _Ledger(error=LedgerImportError("negative_cash", "cash went negative"))
+    types = _Types()
+
+    assert _get(ledger, _Prices({}), types).status_code == 500
+    assert types.asked is None
 
 
 def test_an_unpriced_row_is_still_returned_with_null_price_fields() -> None:
@@ -116,6 +198,7 @@ def test_an_unpriced_row_is_still_returned_with_null_price_fields() -> None:
 
     assert row["price_status"] == "unavailable"
     assert row["invested"] == 800.0  # cost does not depend on a price
+    assert row["last_traded_at"] == "2026-07-27T14:36:00Z"  # nor does the date
     for field in ("current_price", "price_as_of", "market_value", "unrealized_gain", "unrealized_gain_pct"):
         assert row[field] is None  # the key is present and null, not missing
 
@@ -153,11 +236,13 @@ def test_a_failed_integrity_check_is_a_500_with_the_error_code() -> None:
 
 
 def test_the_dependencies_read_the_objects_lifespan_put_on_app_state() -> None:
-    ledger, prices = LedgerCache(), object()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(ledger_cache=ledger, prices=prices)))
+    ledger, prices, types = LedgerCache(), object(), object()
+    state = SimpleNamespace(ledger_cache=ledger, prices=prices, asset_types=types)
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
 
     assert positions.get_ledger_cache(request) is ledger
     assert positions.get_price_service(request) is prices
+    assert positions.get_asset_type_service(request) is types
 
 
 def test_real_price_service_and_empty_pair_set_do_not_call_upstream() -> None:

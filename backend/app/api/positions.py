@@ -2,8 +2,10 @@
 ledger (#33) and priced on request; nothing here writes to Postgres. The
 ledger comes from LedgerCache and prices from PriceService, so a 30s poll
 costs no ledger query and at most one upstream call per symbol per 15s.
+Only /positions also asks AssetTypeService for each row's badge.
 See .doc/diagrams/portfolio-page-flow-sequence.html."""
 
+import asyncio
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.models.fx_rate import FxRate
 from app.schemas.positions import PortfolioSummary, PositionResponse
+from app.services.asset_types import AssetTypeService
 from app.services.fx import STALE_THRESHOLD_HOURS
 from app.services.ledger_cache import LedgerCache, LedgerSnapshot
 from app.services.ledger_errors import LedgerImportError
@@ -30,6 +33,10 @@ def get_price_service(request: Request) -> PriceService:
     return request.app.state.prices
 
 
+def get_asset_type_service(request: Request) -> AssetTypeService:
+    return request.app.state.asset_types
+
+
 async def _load_snapshot(ledger: LedgerCache, db: AsyncSession) -> LedgerSnapshot:
     """The ledger passed the integrity checks when it was imported, so
     LedgerImportError here means the stored rows were changed behind the
@@ -42,14 +49,23 @@ async def _load_snapshot(ledger: LedgerCache, db: AsyncSession) -> LedgerSnapsho
 
 
 async def _load_priced_rows(
-    ledger: LedgerCache, prices: PriceService, db: AsyncSession
+    ledger: LedgerCache, prices: PriceService, db: AsyncSession, types: AssetTypeService | None = None
 ) -> tuple[LedgerSnapshot, tuple[PositionRow, ...]]:
     """What both routes start from: the ledger snapshot and its holdings
     joined with their quotes, already sorted. Both come from caches, so the
-    second route of a page load costs no query and no upstream call."""
+    second route of a page load costs no query and no upstream call.
+
+    Pass `types` to also fill each row's asset_type; the lookups run alongside
+    the price fetches, so a first call takes as long as the slower of the two.
+    Without it every asset_type is None, which is what the summary wants: it
+    never shows a badge, so it must not wait on one."""
     snapshot = await _load_snapshot(ledger, db)
-    quotes = await prices.get_prices({(h.symbol, h.native_currency) for h in snapshot.holdings})
-    return snapshot, build_rows(snapshot.holdings, quotes)
+    pairs = {(h.symbol, h.native_currency) for h in snapshot.holdings}
+    if types is None:
+        quotes, asset_types = await prices.get_prices(pairs), {}
+    else:
+        quotes, asset_types = await asyncio.gather(prices.get_prices(pairs), types.get_types(pairs))
+    return snapshot, build_rows(snapshot.holdings, quotes, asset_types)
 
 
 @router.get(
@@ -61,15 +77,17 @@ async def _load_priced_rows(
         "sorted by market value descending with unpriced rows last. Money is "
         "in the holding's native currency. A row with no usable price still "
         "appears, with price_status explaining why and the price-derived "
-        "fields null. An empty ledger is []."
+        "fields null. asset_type is Stock, ETF or CDR, or null when the type "
+        "is unknown; it never affects the price fields. An empty ledger is []."
     ),
 )
 async def get_positions(
     db: AsyncSession = Depends(get_db),
     ledger: LedgerCache = Depends(get_ledger_cache),
     prices: PriceService = Depends(get_price_service),
+    types: AssetTypeService = Depends(get_asset_type_service),
 ) -> list[PositionResponse]:
-    _, rows = await _load_priced_rows(ledger, prices, db)
+    _, rows = await _load_priced_rows(ledger, prices, db, types)
     return [PositionResponse(**asdict(row)) for row in rows]
 
 

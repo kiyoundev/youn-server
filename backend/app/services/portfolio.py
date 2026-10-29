@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from app.services.asset_types import AssetType
 from app.services.positions import Holding
 from app.services.prices import PriceQuote, PriceStatus
 
@@ -20,6 +21,7 @@ class MergedHolding:
     native_currency: Literal["CAD", "USD"]
     shares: float
     avg_cost: float
+    last_traded_at: datetime  # latest across the accounts that hold it
 
 
 def merge_holdings(holdings: Iterable[Holding]) -> tuple[MergedHolding, ...]:
@@ -29,17 +31,21 @@ def merge_holdings(holdings: Iterable[Holding]) -> tuple[MergedHolding, ...]:
     The currency is part of the key so the USD stock 'AVGO' and the CAD-native
     CDR 'AVGO' stay two rows — their costs are in different currencies and are
     never averaged together. Shares are summed; avg_cost is
-    sum(shares * avg_cost_native) / sum(shares). compute_positions already
-    drops fully-sold holdings, so every input has shares > 0 and the division
-    is safe. Output is sorted by (symbol, currency) so it is deterministic."""
+    sum(shares * avg_cost_native) / sum(shares); last_traded_at is the latest
+    of the accounts'. compute_positions already drops fully-sold holdings, so
+    every input has shares > 0 and the division is safe. Output is sorted by
+    (symbol, currency) so it is deterministic."""
     totals: dict[tuple[str, Literal["CAD", "USD"]], list[float]] = {}  # key -> [shares, cost]
+    latest: dict[tuple[str, Literal["CAD", "USD"]], datetime] = {}
     for h in holdings:
-        total = totals.setdefault((h.symbol, h.native_currency), [0.0, 0.0])
+        key = (h.symbol, h.native_currency)
+        total = totals.setdefault(key, [0.0, 0.0])
         total[0] += h.shares
         total[1] += h.shares * h.avg_cost_native
+        latest[key] = max(latest.get(key, h.last_traded_at), h.last_traded_at)
 
     return tuple(
-        MergedHolding(symbol, currency, shares, cost / shares)
+        MergedHolding(symbol, currency, shares, cost / shares, latest[(symbol, currency)])
         for (symbol, currency), (shares, cost) in sorted(totals.items())
     )
 
@@ -48,7 +54,8 @@ def merge_holdings(holdings: Iterable[Holding]) -> tuple[MergedHolding, ...]:
 class PositionRow:
     """One table row: a merged holding joined with its price. Money fields are
     in the holding's native currency and unrounded. The price-derived fields
-    are None when there is no usable price (unavailable / currency_mismatch)."""
+    are None when there is no usable price (unavailable / currency_mismatch).
+    asset_type is None when the type is unknown or its lookup failed."""
 
     symbol: str
     native_currency: Literal["CAD", "USD"]
@@ -61,9 +68,11 @@ class PositionRow:
     market_value: float | None
     unrealized_gain: float | None
     unrealized_gain_pct: float | None
+    last_traded_at: datetime
+    asset_type: AssetType | None
 
 
-def _build_row(h: MergedHolding, quote: PriceQuote | None) -> PositionRow:
+def _build_row(h: MergedHolding, quote: PriceQuote | None, asset_type: AssetType | None) -> PositionRow:
     if quote is None:  # should not happen; never let it turn into a 500
         quote = PriceQuote(None, None, None, "unavailable")
 
@@ -77,19 +86,25 @@ def _build_row(h: MergedHolding, quote: PriceQuote | None) -> PositionRow:
     return PositionRow(
         h.symbol, h.native_currency, h.shares, h.avg_cost, invested,
         quote.price, quote.status, quote.fetched_at,
-        market_value, gain, pct,
+        market_value, gain, pct, h.last_traded_at, asset_type,
     )
 
 
 def build_rows(
     holdings: Iterable[MergedHolding],
     quotes: Mapping[tuple[str, str], PriceQuote],
+    asset_types: Mapping[tuple[str, str], AssetType | None],
 ) -> tuple[PositionRow, ...]:
-    """Join merged holdings with their quotes and derive invested, market value
-    and unrealized gain. A stale quote still has a price, so it is valued like
-    a fresh one; a holding with no quote is treated as unavailable. Sorted by
-    market value descending, unpriced rows last, ties by symbol. Pure."""
-    rows = [_build_row(h, quotes.get((h.symbol, h.native_currency))) for h in holdings]
+    """Join merged holdings with their quotes and types and derive invested,
+    market value and unrealized gain. A stale quote still has a price, so it is
+    valued like a fresh one; a holding with no quote is treated as unavailable,
+    and one with no type entry has asset_type None. Types never affect a price
+    field. Sorted by market value descending, unpriced rows last, ties by
+    symbol. Pure."""
+    rows = []
+    for h in holdings:
+        key = (h.symbol, h.native_currency)
+        rows.append(_build_row(h, quotes.get(key), asset_types.get(key)))
     return tuple(
         sorted(
             rows,

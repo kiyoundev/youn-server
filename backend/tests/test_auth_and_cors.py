@@ -94,6 +94,7 @@ def test_portfolio_routes_wrong_api_key_returns_401(client: TestClient, path: st
 def test_portfolio_route_correct_api_key_reaches_the_handler(client: TestClient) -> None:
     ledger = SimpleNamespace(get=AsyncMock(return_value=LedgerSnapshot((), cash=0.0)))
     prices = SimpleNamespace(get_prices=AsyncMock(return_value={}))
+    types = SimpleNamespace(get_types=AsyncMock(return_value={}))
 
     async def _override_get_db():
         yield MagicMock()
@@ -101,10 +102,13 @@ def test_portfolio_route_correct_api_key_reaches_the_handler(client: TestClient)
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[positions.get_ledger_cache] = lambda: ledger
     app.dependency_overrides[positions.get_price_service] = lambda: prices
+    app.dependency_overrides[positions.get_asset_type_service] = lambda: types
     try:
         response = client.get("/api/positions", headers={"X-API-Key": "secret-test-key"})
     finally:
-        for dependency in (get_db, positions.get_ledger_cache, positions.get_price_service):
+        for dependency in (
+            get_db, positions.get_ledger_cache, positions.get_price_service, positions.get_asset_type_service
+        ):
             app.dependency_overrides.pop(dependency, None)
 
     assert response.status_code == 200

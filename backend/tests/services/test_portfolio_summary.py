@@ -1,9 +1,12 @@
 from dataclasses import asdict, fields
+from datetime import datetime, timezone
 
 import pytest
 
 from app.schemas.positions import CurrencySubtotal, PortfolioSummary
 from app.services.portfolio import CurrencyTotals, PositionRow, SummaryData, build_summary
+
+_TRADED = datetime(2026, 7, 27, 14, 36, tzinfo=timezone.utc)
 
 
 def _row(symbol, currency, shares, avg_cost, price, status="ok") -> PositionRow:
@@ -11,7 +14,7 @@ def _row(symbol, currency, shares, avg_cost, price, status="ok") -> PositionRow:
     value = None if price is None else shares * price
     gain = None if value is None else value - invested
     pct = None if gain is None or not invested else gain / invested
-    return PositionRow(symbol, currency, shares, avg_cost, invested, price, status, None, value, gain, pct)
+    return PositionRow(symbol, currency, shares, avg_cost, invested, price, status, None, value, gain, pct, _TRADED, None)
 
 
 # 15 NVDA @110 priced 120 (+150) | 20 SOFI @8.25 unpriced | 40 AVGO CDR @12.5 priced 13.08 (stale)

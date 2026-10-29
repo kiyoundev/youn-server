@@ -16,25 +16,30 @@ def test_position_out_has_exactly_the_fields_of_position_row() -> None:
 
 def test_row_maps_to_position_out_and_serializes_as_iso() -> None:
     at = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)
-    row = PositionRow("NVDA", "USD", 15, 110.0, 1650.0, 120.0, "ok", at, 1800.0, 150.0, 150 / 1650)
+    row = PositionRow("NVDA", "USD", 15, 110.0, 1650.0, 120.0, "ok", at, 1800.0, 150.0, 150 / 1650, at, "Stock")
 
     out = PositionResponse(**asdict(row))
 
-    assert out.model_dump(mode="json")["price_as_of"] == "2026-10-26T14:00:00Z"
+    dumped = out.model_dump(mode="json")
+    assert dumped["price_as_of"] == "2026-10-26T14:00:00Z"
+    assert dumped["last_traded_at"] == "2026-10-26T14:00:00Z"
 
 
 def test_unpriced_row_keeps_none_fields() -> None:
-    row = PositionRow("SOFI", "USD", 20, 8.25, 165.0, None, "unavailable", None, None, None, None)
+    traded = datetime(2026, 7, 15, 13, 42, tzinfo=timezone.utc)
+    row = PositionRow("SOFI", "USD", 20, 8.25, 165.0, None, "unavailable", None, None, None, None, traded, None)
 
     out = PositionResponse(**asdict(row))
 
     assert (out.current_price, out.price_as_of, out.unrealized_gain_pct) == (None, None, None)
+    assert out.last_traded_at == traded  # never null, priced or not
 
 
 def test_unknown_currency_or_status_is_rejected() -> None:
     base = dict(
         symbol="X", shares=1, avg_cost=1.0, invested=1.0, current_price=None,
-        price_as_of=None, market_value=None, unrealized_gain=None, unrealized_gain_pct=None,
+        price_as_of=None, market_value=None, unrealized_gain=None, unrealized_gain_pct=None, asset_type=None,
+        last_traded_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
     )
     with pytest.raises(ValidationError):
         PositionResponse(**base, native_currency="KRW", price_status="ok")

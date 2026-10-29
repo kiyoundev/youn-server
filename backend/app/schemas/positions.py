@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 NativeCurrency = Literal["USD", "CAD"]
 PriceStatus = Literal["ok", "stale", "unavailable", "currency_mismatch"]
+AssetType = Literal["Stock", "ETF", "CDR"]
 
 
 class PositionResponse(BaseModel):
@@ -25,6 +26,8 @@ class PositionResponse(BaseModel):
     market_value: float | None
     unrealized_gain: float | None
     unrealized_gain_pct: float | None
+    last_traded_at: datetime  # never null: a holding has at least one trade
+    asset_type: AssetType | None  # None = unknown type or failed lookup: no badge
 
 
 class CurrencySubtotal(BaseModel):
