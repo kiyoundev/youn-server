@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ledger Cache Lifecycle Sequence</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1100px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Diagram Design</p>
+    <h1>Ledger cache — cleared by an import, rebuilt by the first read</h1>
+
+    <svg viewBox="0 0 880 920" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ledger-cache-lifecycle-sequence-title ledger-cache-lifecycle-sequence-desc">
+      <title id="ledger-cache-lifecycle-sequence-title">Ledger cache lifecycle — cleared by import, rebuilt on first read</title>
+      <desc id="ledger-cache-lifecycle-sequence-desc">Sequence diagram showing an import writing rows to the activities table and then clearing the ledger cache without recomputing; the first API read after it misses, reads all rows, computes and merges the holdings and stores a new snapshot; a later read hits the cache with no query; an opt fragment shows that a ledger error propagates and nothing is stored.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- ============ LIFELINES ============ -->
+      <line x1="150" y1="88" x2="150" y2="232" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="350" y1="88" x2="350" y2="380" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="560" y1="88" x2="560" y2="764" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="760" y1="88" x2="760" y2="764" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- ============ PHASE DIVIDERS ============ -->
+      <text x="32" y="112" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">1 · IMPORT</text>
+      <line x1="32" y1="240" x2="848" y2="240" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="256" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">2 · FIRST READ · MISS</text>
+      <line x1="32" y1="472" x2="848" y2="472" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="488" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">3 · LATER READ · HIT</text>
+      <line x1="32" y1="592" x2="848" y2="592" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="608" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">4 · IF COMPUTE RAISES · REPLACES THE STORE</text>
+
+      <!-- ============ OPT FRAGMENT ============ -->
+      <rect x="520" y="624" width="268" height="132" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <rect x="520" y="624" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <text x="540" y="636" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+      <text x="576" y="656" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[compute_positions raises]</text>
+
+      <!-- ============ ACTIVATION BARS ============ -->
+      <rect x="146" y="128" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="346" y="128" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="346" y="320" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="556" y="160" width="8" height="64" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="556" y="288" width="8" height="160" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="556" y="520" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="556" y="680" width="8" height="64" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="756" y="288" width="8" height="160" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="756" y="520" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="756" y="680" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+      <!-- ============ MESSAGES ============ -->
+      <!-- 1: import writes rows -->
+      <path d="M154,136 H346" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="210" y="116" width="80" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="250" y="125" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">INSERT+COMMIT</text>
+
+      <!-- 2: import clears the cache (no recompute) -->
+      <path d="M154,168 H556" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="423" y="148" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="455" y="157" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">INVALIDATE</text>
+      <path d="M564,192 H580 Q588,192 588,200 V208 Q588,216 580,216 H566" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="596" y="196" width="100" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="602" y="205" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SNAPSHOT=NONE</text>
+
+      <!-- 3: first read after the import -->
+      <path d="M756,296 H564" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="634" y="276" width="52" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="660" y="285" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET(DB)</text>
+
+      <!-- 4: miss, read all rows -->
+      <path d="M556,328 H354" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="423" y="308" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="455" y="317" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SELECT ALL</text>
+
+      <!-- 5: rows come back -->
+      <path d="M354,360 H556" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="437" y="340" width="36" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="455" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ROWS</text>
+
+      <!-- 6: compute, merge, store -->
+      <path d="M564,384 H580 Q588,384 588,392 V400 Q588,408 580,408 H566" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="596" y="388" width="100" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="602" y="397" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">COMPUTE+STORE</text>
+
+      <!-- 7: snapshot returned -->
+      <path d="M564,440 H756" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="630" y="420" width="60" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="660" y="429" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SNAPSHOT</text>
+
+      <!-- 8: a later read -->
+      <path d="M756,528 H564" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="634" y="508" width="52" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="660" y="517" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET(DB)</text>
+
+      <!-- 9: headline - hit, no query -->
+      <path d="M564,560 H756" fill="none" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="618" y="540" width="84" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="660" y="549" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">HIT · NO QUERY</text>
+
+      <!-- 10: failure, error propagates -->
+      <path d="M564,688 H756" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="622" y="668" width="76" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="660" y="677" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RAISES ERROR</text>
+      <path d="M564,712 H580 Q588,712 588,720 V728 Q588,736 580,736 H566" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="596" y="716" width="100" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="602" y="725" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">NOTHING STORED</text>
+
+      <!-- ============ NODES ============ -->
+      <rect x="80" y="32" width="140" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="80" y="32" width="140" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="88" y="38" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="102" y="47" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="150" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Import route</text>
+      <text x="150" y="80" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">POST /activities/import</text>
+      <rect x="280" y="32" width="140" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="280" y="32" width="140" height="56" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="288" y="38" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="302" y="47" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="350" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">activities</text>
+      <text x="350" y="80" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Postgres ledger</text>
+      <rect x="490" y="32" width="140" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="490" y="32" width="140" height="56" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <rect x="498" y="38" width="28" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="512" y="47" fill="rgba(235,108,54,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MEM</text>
+      <text x="560" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">LedgerCache</text>
+      <text x="560" y="80" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">holds one snapshot</text>
+      <rect x="690" y="32" width="140" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="690" y="32" width="140" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="698" y="38" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="712" y="47" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="760" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">API routes</text>
+      <text x="760" y="80" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">/positions · /summary</text>
+
+      <!-- ============ CALLOUTS (editorial) ============ -->
+      <text x="48" y="800" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">IMPORT ONLY CLEARS</text>
+      <text x="48" y="816" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">invalidate() empties the box, nothing more.</text>
+      <text x="48" y="832" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">The first reader after it pays for the recompute.</text>
+      <text x="400" y="800" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">REPLACED, NEVER EDITED</text>
+      <text x="400" y="816" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">A new snapshot takes the old one's place.</text>
+      <text x="400" y="832" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Each is frozen, so readers never see half of one.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="32" y1="856" x2="848" y2="856" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="872" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="32" y="884" width="12" height="12" rx="3" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="52" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">LEDGER CACHE</text>
+
+      <rect x="168" y="884" width="12" height="12" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="188" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">ROUTE</text>
+
+      <rect x="252" y="884" width="12" height="12" rx="3" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="272" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">TABLE</text>
+
+      <line x1="340" y1="890" x2="364" y2="890" stroke="#2e5aa8" stroke-width="1.2"/>
+      <text x="372" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">SQL CALL</text>
+
+      <line x1="468" y1="890" x2="492" y2="890" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="500" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">RETURN</text>
+
+      <line x1="572" y1="890" x2="596" y2="890" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="604" y="893" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">CACHE HIT (HEADLINE)</text>
+    </svg>
+  </div>
+</body>
+</html>

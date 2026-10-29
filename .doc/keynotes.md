@@ -456,6 +456,38 @@ The **second** check is what actually prevents duplicate work — it catches the
 
 Both are the *same* underlying shape: "expensive setup step, must happen at most once, multiple concurrent callers might all trigger it simultaneously." The lock doesn't make the setup step itself faster — it makes "only one caller actually does it" true regardless of how many ask at once.
 
+### Cache + lock + retry — positive vs. negative caching (2026-10-20, `#19`)
+
+A third instance of the same lock pattern, with a twist: `PriceService.get_price` (`backend/app/services/prices.py`) protects not a one-time setup but a *repeatable* expensive call (a live stock quote), and has to decide what to do after that call **fails**. Three separate ideas work together here; keeping them apart is the whole trick.
+
+| Idea | What it answers | Mechanism |
+|---|---|---|
+| **Lock** (per key) | "Two requests want the same quote at the same instant — who fetches?" | `asyncio.Lock` per `(symbol, currency)`: first caller fetches, the rest wait, then find the answer already stored. Different keys never wait on each other |
+| **Positive cache** | "We just fetched a good answer — can we reuse it?" | Store the `ok` quote; reuse it for `_PRICE_TTL_SECONDS = 15` |
+| **Negative cache** | "We just *failed* — should we try again right away?" | Store the failure for a short `_FAILURE_TTL_SECONDS` (e.g. 5s); during that window, answer from it without calling the source |
+
+**Which does what on a retry.** The lock never decides *whether* to retry. It only decides *who* does the work when several callers arrive together. Whether a second caller retries is decided by the cache check it does *after* getting the lock: a fresh entry (good or failed) means "don't call the source again"; an expired or missing entry means "you're the one who fetches."
+
+**Worked example — yfinance is down, `/positions` and `/summary` arrive together** (each failed attempt takes ~3s to time out):
+
+| | Positive cache only | Positive + negative cache |
+|---|---|---|
+| `/positions` takes the lock, calls the source | waits 3s, fails | waits 3s, fails, stores "failed" for 5s |
+| `/summary` was waiting on the lock; gets it | cache has no fresh `ok` quote → calls the source again | finds the fresh "failed" entry → returns immediately |
+| `/summary` response time | ~6s (two timeouts back to back) | ~3s (one timeout, shared) |
+| Source calls per poll cycle | 2 per symbol | 1 per symbol |
+| Next retry | next poll, 30s later | first request after the 5s window |
+
+**What a failure returns is a separate question** (identical in both variants): if an earlier good quote exists, return a copy of it marked `stale` (keeping its original `fetched_at` so the UI can show its age); if not, return `unavailable`. Neither case raises.
+
+**What `#19` does.** It uses both caches (decided 2026-10-20): `_PRICE_TTL_SECONDS = 15` for good quotes, `_FAILURE_TTL_SECONDS = 5` for failed or withheld ones. The cost is a second piece of state: the failed result is cached in `_cache`, while the last good quote is kept apart in `_last_good`, otherwise a failure would overwrite the only good price and `stale` would have nothing to copy. A one-dict version without the negative cache was considered and works too, at the price of one extra failed call per symbol per poll cycle while a source is down.
+
+**The general rule:** a positive cache protects the *source* from repeated requests for something we already know; a negative cache protects the *source and the caller* from repeated requests for something we already failed to get. Skipping the second is the simpler default when failures are cheap; DNS resolvers, API gateways and CDNs all add it once failures become slow or expensive. Do not confuse either with the lock: a lock with no cache serializes the calls but still makes every caller do the work, one after another.
+
+Message-by-message trace of the lock plus cache (two routes, one fetch, and the failure branch): `.doc/diagrams/price-cache-lock-sequence.html`.
+
+Related: `.doc/architecture.md` → "Stock data source routing", `.doc/diagrams/portfolio-pricing-flow.html` (15s cache), and the Synology `_get_sid` instance above (a cache of one value, expired by an error code rather than a timer).
+
 ### Related but distinct: Lock vs. Semaphore vs. Queue vs. Event
 
 Easy to conflate since they're all `asyncio` concurrency primitives — each solves a different problem:
@@ -797,6 +829,105 @@ Came up clarifying `main.py`'s `event_queue` object (`asyncio.Queue`, distinct f
 `event_queue` is created once in `lifespan()` and handed to three places: `app.state.event_queue`, `poll_prices`'s job args, and `dispatcher.run()`. All three, plus every producer that later calls `.put()` on it (`jobs.py`'s `process_item`, `stocks.py`'s `FinnhubClient`, `#41`'s planned add-time trigger), are coroutines/`Task`s on **one event loop, in one OS process** — the same single-threaded cooperative model traced above. "Shared" here is ordinary Python reference semantics (multiple functions holding a reference to the same object, no different from passing a list around), not inter-process communication. Full producer/consumer breakdown: `.doc/architecture.md` → "Event-Driven Flow" → "One shared queue object, multiple producers, one sequential consumer."
 
 Worth the explicit contrast precisely because this file's own TradingAgents section, right above, describes a case where "process" is literal — `create_subprocess_exec` really does spawn a separate OS process per analysis, needing pipes rather than a shared in-memory object. Don't let one section's "process" bleed into the other's — `event_queue`'s producers/consumer are never that.
+
+## FastAPI app wiring — `include_router`, `lifespan` and `app.state` (2026-10-27, `#19`)
+
+Why this section exists: `main.py` is only about forty lines of wiring, but three separate mechanisms in it each answer a different question, and they are easy to blur together. Learned while adding `GET /api/positions` — the route was written and tested before it was reachable, because it takes all three to make one real request work.
+
+| Question | Mechanism | Happens |
+|---|---|---|
+| Which URLs exist, and who may call them? | `app.include_router(x.router, dependencies=[...])` | Once, when `main.py` is imported |
+| Which long-lived objects exist? | `lifespan` (code before `yield`) | Once, at server startup |
+| How does a route find those objects? | `app.state` + a `Depends` getter | On every request |
+
+### The four moments in the life of the app
+
+```
+1. IMPORT      uvicorn imports app.main:app
+               · each api/*.py runs:  router = APIRouter()  + its @router.get/post decorators
+               · app = FastAPI(..., lifespan=lifespan)
+               · app.include_router(...) × 9      ← the URL table is final after this
+
+2. STARTUP     uvicorn runs lifespan() up to its `yield`
+               · queue, FinnhubClient, scheduler, dispatcher task
+               · app.state.prices = PriceService(finnhub)
+               · app.state.asset_types = AssetTypeService()
+               · app.state.ledger_cache = LedgerCache()
+               ── only now does the server accept requests ──
+
+3. REQUESTS    any number, all sharing whatever startup put on app.state
+
+4. SHUTDOWN    uvicorn resumes lifespan() after the `yield`
+               · cancel the dispatcher, stop the scheduler, close Finnhub / Synology / browser
+```
+
+Everything created in step 1 is *definitions* (routes, the app object). Everything created in step 2 is *live things* (open connections, timers, caches). Nothing that needs an event loop or must be cleaned up belongs in step 1.
+
+### `include_router` — the route table
+
+`@router.get("/api/positions")` does not register anything on the app. It registers the route on the `APIRouter` object that lives in `api/positions.py`. The app only learns about it when `main.py` calls `include_router`, which **copies that router's routes into the app's route table** at that moment.
+
+```python
+app.include_router(health.router)                                          # no auth: a liveness probe
+app.include_router(fx.router, dependencies=[Depends(verify_api_key)])      # every route in fx.router needs the key
+```
+
+- **`dependencies=[Depends(verify_api_key)]`** is attached to every copied route, and runs before that route's own dependencies (`get_db` and the rest). That is why no individual route in `fx.py` or `activities.py` mentions the API key — and why `health.router`, included without it, is the one open endpoint.
+- **A router that is never included does not exist** as far as clients are concerned: the request gets a plain 404, no error at startup, no warning. `api/positions.py` showed this on the day it was written: it passed its own tests but would have 404'd on the running server, because those tests build a tiny `FastAPI()` and include the router themselves. Only a test against the real `app` (as in `tests/test_auth_and_cors.py`, where a 401 instead of a 404 proves the router is included) catches a missing `include_router`.
+- The copy happens once, at the call. Routes added to a router *after* `include_router` ran are not picked up, so decorators must run at import time (they do — they are module-level).
+
+### `lifespan` — startup and shutdown in one function
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ...            # startup: everything before the yield
+    yield          # the server runs here, serving requests
+    ...            # shutdown: everything after the yield
+```
+
+- It is an *async context manager*: the code before `yield` is `__aenter__`, the code after is `__aexit__`. uvicorn enters it once before accepting traffic and exits it once on shutdown (Ctrl-C / SIGTERM). Passed to FastAPI with `FastAPI(lifespan=lifespan)`.
+- If startup raises, the app does not start at all — a missing resource fails loudly at boot, not on the first request.
+- Putting setup and teardown in one function keeps them next to each other: `scheduler.start()` and `scheduler.shutdown()` are in the same place, so a resource can't be started and forgotten. (The older `@app.on_event("startup")` / `("shutdown")` pair split them across two functions and is deprecated in favour of this.)
+
+### `app.state` — the shelf that connects startup to requests
+
+`app.state` is a plain namespace object on the app. `lifespan` writes to it; routes read from it:
+
+```python
+# startup (lifespan)
+app.state.ledger_cache = LedgerCache()
+
+# request time (api/positions.py)
+def get_ledger_cache(request: Request) -> LedgerCache:
+    return request.app.state.ledger_cache      # request.app is the same FastAPI object lifespan received
+```
+
+Every request gets the **identical** object, which is the point: `PriceService`'s 15s cache and `LedgerCache`'s snapshot would be useless if each request built its own. Per-request things (a DB session) do the opposite and come from `Depends(get_db)`.
+
+Why a `Depends` getter instead of writing `request.app.state.prices` in the route (as `poll.py` and `stock_alerts.py` do): the route signature then states what it needs, the type is declared in one place (`app.state` itself is untyped — a wrong attribute name is only an `AttributeError` at request time), and tests can replace it: `app.dependency_overrides[get_price_service] = lambda: fake`.
+
+| Where a shared object can live | Created | Cleaned up | Swappable in tests |
+|---|---|---|---|
+| Module-level global (`synology_client = SynologyClient()`) | At import, before any event loop | Nowhere unless remembered in `lifespan` (see `#70`) | Awkward — monkeypatch the module |
+| `Depends(get_x)` that builds a new one | Per request | Per request | Yes |
+| `app.state` set in `lifespan` | Once, at startup | In `lifespan`, after `yield` | Yes, via the getter's `dependency_overrides` |
+
+### One request through all three
+
+`GET /api/positions` with `X-API-Key` set:
+
+1. **Route table (`include_router`)** — path and method match `get_positions`; the router-level `verify_api_key` runs first and returns 401 on a bad key.
+2. **`Depends` resolution** — FastAPI calls `get_db` (new session), `get_ledger_cache(request)`, `get_price_service(request)` and `get_asset_type_service(request)`. It supplies `request` itself because the parameter is typed `Request`.
+3. **`app.state`** — the three getters return the `LedgerCache`, `PriceService` and `AssetTypeService` that `lifespan` created at startup, the same objects the previous request used.
+4. **The handler** runs with all four as ordinary arguments and never knows where they came from.
+
+### Pitfalls
+
+- **`TestClient(app)` does not run `lifespan`** unless used as a context manager (`with TestClient(app) as client:`). Without it nothing is on `app.state`, and the first read raises `AttributeError`. This repo's route tests avoid the issue by overriding the getters; `test_activities_routes.py`'s `_client()` builds the app without lifespan, so it needs a `get_ledger_cache` override once the import route depends on one.
+- **State is per process.** Run uvicorn with several workers and each has its own `LedgerCache`, `PriceService` and `AssetTypeService`: an import handled by worker A would not clear worker B's cache. `LedgerCache` and `PriceService` both say "single uvicorn process assumed"; the Pi runs one.
+- **Never assign to `app.state` inside a route.** The route runs on every request, so each one would replace the shared object and throw away its cache.
+- **Module-level globals bypass `lifespan`.** `synology_client` is created at import and closed from `lifespan`, so its creation and its cleanup live in different places — the inconsistency `#70` tracks.
 
 # Challenges
 

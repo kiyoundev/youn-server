@@ -1,0 +1,46 @@
+# #19: Challenges & Notes
+
+## Potential Challenges
+1. **Finnhub free tier is US-only** — verified live: `.TO` symbols return HTTP 403 on our key. CAD holdings (including CDRs) must go through yfinance; Finnhub is never tried for them. If a paid plan is ever bought, only `PriceService` routing changes.
+2. **CDR symbol collision** — the ledger records the CDR as `AVGO` (CAD-native), the same string as the US stock (~344 USD vs ~13 CAD). Routing is by native currency, never by symbol; yfinance's reported `currency` is compared to the native currency and a mismatch withholds the price. A wrong-currency price would silently inflate the balance ~25×.
+3. **yfinance is an unofficial scrape** — no key or SLA; Yahoo's raw endpoint returned 429 without a browser `User-Agent`, and `fast_info` may return `None` or raise by version. Mitigation: try/except around every call, 15s cache, last-known fallback, `<0.3` pin already in place, raw chart endpoint as a manual fallback if the library breaks.
+3a. **Exchange suffix can't be read from the export** — the activities CSV has no exchange field (`symbol` is sometimes suffixed, e.g. `RY.TO`, but a CDR like `AVGO` is bare; `name` and `description` carry no exchange). Decided 2026-10-19: plain rule — keep an existing Canadian suffix, otherwise append `.TO`, with `PRICE_SYMBOL_OVERRIDES` as the manual escape hatch. Rejected: trying `.TO` then `.NE` on a 404, and searching yfinance by name (it finds both `AVGO.TO` and `AVGO.NE` under the ledger's exact name, so it can't choose either). Known gap: a symbol listed only on NEO shows `unavailable` until an override is added; if both listings exist the price may come from the other one (about a cent apart for AVGO and SHOP). Other conventions not seen in the ledger yet: share classes (`RCI-B.TO`) and trust units (`REI-UN.TO`) use hyphens on Yahoo.
+4. **Finnhub REST budget (60/min per key) shared with the Pi** — Mac and Pi probably run the same key (assumed). `/positions` + `/summary` poll every 30s; with the shared 15s cache that is ≤ N USD symbols per cycle per client. A 20-symbol portfolio ≈ 40 calls/min from one open tab — fine, but a second tab adds nothing (cache), while a Pi instance + Mac instance doubles it. Watch for 429; stale fallback covers a bad minute.
+5. **Finnhub WebSocket 429 already seen in Docker logs** (`InvalidStatusCode: HTTP 429` in `FinnhubClient._listen`, exponential backoff, full traceback each retry). Same root cause family (one key, multiple clients). Not part of #19 but #19 must not make it worse — holdings never subscribe. Separate follow-up: log it as one line and use a distinct dev key.
+6. **Last-known price is in-memory** — lost on backend restart; right after a rebuild, an upstream outage shows "—" for those rows until the next success. Accepted (decision 4).
+7. **Unpriced holdings make the balance a lower bound** — excluded from market value and gain, counted in `unpriced_count`, and the UI says so rather than showing a misleadingly low "complete" total.
+8. **FX gaps** — `fx_rates` has no USD row before the first refresh and may be >24h stale. Summary degrades (`balance_cad: null` / `fx_stale: true`) instead of failing.
+9. **Merging across accounts** — weighted native avg cost is exact for holdings in one native currency. A symbol that is USD in one account and CAD in another is kept as two rows (merge key includes currency) so costs are never mixed.
+10. **Zero-cost holdings** — a bonus share bought at 0 gives `invested = 0`; percent gain is `None` (no divide-by-zero), dollar gain still shown.
+11. **Mixed-mock page** — after #19 the page has real holdings next to a mock chart, donut, growth rate, watchlist and popular assets. The big "Current Value" number is still driven by mock chart data until #23. Call this out so it isn't mistaken for a bug.
+12. **Stale ledger cache** — if any code path writes `activities` without calling `invalidate()`, `/portfolio` keeps showing old holdings until restart. Today only the import and reset routes write the table; both are covered by tests, and the invalidate call goes after commit. Anyone adding a new writer must clear the cache too.
+13. **Single-process assumption** — the cache is in process memory and uvicorn runs without `--workers` (`backend/Dockerfile`). Adding workers would leave the others stale after an import; the cache would have to move out of process (or key on a ledger version read from the DB).
+14. **Cold-start stampede** — after a restart, the first poll from each open tab reads the ledger. The `asyncio.Lock` in `LedgerCache.get` makes that one query, not one per request.
+15. **Blocking yfinance in the event loop** — must go through `run_in_executor` with a per-key lock, or two concurrent polls stall the API.
+16. **Yahoo files CDRs as ETF** — checked 2026-10-28 on yfinance 0.2.59 and 1.7.0: `AVGO.TO` reports `quoteType: ETF` in both `fast_info` and `.info`, with no fund data (no `fundFamily`, `legalType`, `totalAssets` or `navPrice`) and Broadcom's own market cap. Its `shortName` is `BROADCOM CDR (CAD HEDGED)`, so a CAD-native ETF whose `shortName` contains "CDR" is labelled CDR. Verified on one symbol only: a CDR whose `shortName` lacks "CDR" would show as ETF.
+17. **Type lookups must not slow or break prices** — a security's type never changes while a price expires in 15 s, so `AssetTypeService` is separate from `PriceService`. Each lookup has a 5 s limit; a failure gives `null` (no badge), is retried after 5 min, and cannot change a row's `price_status`. The first `/positions` call after a restart waits for the lookups (about a second each, in parallel); later calls read the cache.
+18. **`last_traded_at` means last purchase today** — the importer allows only `Trade/BUY` (`wealthsimple_csv.py` allowlist), so no sell can be in the ledger yet. `compute_positions` already handles sells, so the field is named for any trade and stays correct if sells are added.
+
+19. **Ledger is a snapshot, so cash and totals lag the real account** — the export is as of its date (`activities-export-2026-09-20.csv`, last row 2026-09-15). A dividend or interest paid later is missing until the next import: the page showed cash 8.06 while Wealthsimple showed 11.56 (checked 2026-10-29). Our 8.06 is exactly what the export adds up to. Re-export and import.
+20. **Totals never match Wealthsimple to the cent** — they use live quotes (including extended hours) and their own FX, we use Finnhub's last regular-session price and the daily `fx_rates` rate. On 2026-10-29 our USD prices were their previous close (the gap per share equalled their "today's return" per share) and their implied USD→CAD rate was ~1.399 against our 1.4047. About 0.8% on the total.
+21. **Trade-time FX includes Wealthsimple's markup** — the ledger's `FX Rate:` runs ~2% above the market rate (1.4510 vs Frankfurter's 1.4233 on 2026-06-24). So `invested_cad` (Committed) is ~2% higher than the same USD cost at market rates; a return measured against it carries that drag for USD buys. The USD cost (`price ÷ rate`) is still the real USD price.
+22. **Committed means CAD paid for what is still held** — `invested_cad` is Σ shares × `avg_cost_cad` over current holdings. A fully sold holding drops out; the importer allows only buys today, so it is the total spent.
+23. **Logo host is unofficial and the exchange is guessed** — `logos.wealthsimple.com/{ticker}-{exchange}.png` has no documentation. A wrong guess costs one small 403 (`xnas` then `xnys` for USD, `xtse` for CAD); ETFs and the AVGO CDR have no logo and show the ticker box. Other exchanges would need adding to the list in `ticker-logo.tsx`.
+24. **A stale backend crashes the page** — the summary trio calls `.toLocaleString` on `invested_cad`; an older backend without it throws and the page errors (seen 2026-10-29 until the container was rebuilt). Frontend and backend must be deployed together; not guarded on purpose.
+25. **`/positions` and the summary each read `fx_rates`** — one primary-key lookup per request (allocation needs the rate), about two per 30s poll.
+
+## Key Differences
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Holdings on `/portfolio` | Hardcoded mock (AAPL/GOOGL/MSFT) | Derived from `activities` via `compute_positions()` |
+| `compute_positions` callers | Import integrity gate only | Import gate + two read endpoints |
+| Live prices for holdings | None | Finnhub (USD) + yfinance (CAD), cached 15s |
+| Ledger reads per 30s poll | n/a | Zero after the first read — cached until import / reset clears it |
+| Accounts | Per `(account_id, symbol)` in ledger | Merged per `(symbol, native_currency)` in the API |
+| Overview trio (Companies / Balance / Committed) | Hardcoded | Real counts and CAD balance |
+
+## Rollback Plan
+1. Revert the commit; no migration or stored data to undo (nothing new is persisted).
+2. Verify `/portfolio` renders the mock holdings again and `GET /api/positions` returns 404.
+3. If holdings look stale after an import: restart the backend (the cache is process memory) to clear it, then check that the import route calls `invalidate()` after commit.
+4. If only prices misbehave in production: temporarily return `unavailable` from `PriceService` (single switch) — holdings and cost basis keep working without any prices.

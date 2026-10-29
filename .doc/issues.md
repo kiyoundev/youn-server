@@ -86,7 +86,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #21 | System/Infra Status API (Docker, Pi Resources, Services, Schedules) | feat / AFK | ~3h | #8, #20 |
 | ✅ Done | #21.5 | Synology Storage Status API | feat / AFK | ~1h | #1.5 |
 | ⬜ Open | #22 | Overview Dashboard (`/`, Bentobox Summary) | feat / AFK | ~4h | #10.1–#10.5, #11, #19, #20, #21 |
-| ⬜ Open | #23 | Stock Price History Chart (Portfolio) | feat / AFK | ~3h | #19 |
+| ⬜ Open | #23 | Portfolio Value & Stock Price History Charts | feat / AFK | ~3h (re-estimate pending) | #19 |
 | ✅ Done | #25 | Claude OAuth Auth Working in Docker | feat / AFK | ~1h | None |
 | ⬜ Open | #26 | Per-Report Chat Backend (Non-Streaming) | feat / AFK | ~4h | #8, #25 |
 | ⬜ Open | #27 | Streaming Chat Responses | feat / AFK | ~1.5h | #26 |
@@ -152,7 +152,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | 21 | **#20** | youn-server self-update (check + auto-apply) | ~3h | #8, #13 |
 | 22 | **#21** | System/infra status API (Docker, Pi resources, services, schedules) | ~3h | #8, #20 |
 | 23 | **#22** | Overview dashboard (`/`, bentobox summary) | ~4h | #10.1–#10.5, #11, #19, #20, #21 |
-| 24 | **#23** | Stock price history chart (portfolio) | ~3h | #19 |
+| 24 | **#23** | Portfolio value & stock price history charts | ~3h (re-estimate pending) | #19 |
 | 25 | **#25** | Claude OAuth auth working in Docker | ~1h | — |
 | 26 | **#26** | Per-report chat backend (non-streaming) | ~4h | #8, #25 |
 | 27 | **#27** | Streaming chat responses | ~1.5h | #26 |
@@ -1217,14 +1217,14 @@ Reachable identically from all four entry points already established in `#31` (P
 **Type:** feat / AFK
 **Estimate:** ~4h *(re-estimated from ~4h original → ~3h → ~4h: the manual CRUD is gone, but the balance card, two price providers and the symbol rule are new)*
 **Blocked by:** #33
-**Status:** design settled 2026-09-20 (grill session). Originally "Manual Portfolio Position Tracking" — superseded when a real Wealthsimple activities export turned out to contain the complete ledger (see #33), so nothing needs to be entered by hand.
+**Status:** design settled 2026-09-20 (grill session); refined 2026-10-15 (ledger cache, cross-account merge, page scope, price statuses — see below). Originally "Manual Portfolio Position Tracking" — superseded when a real Wealthsimple activities export turned out to contain the complete ledger (see #33), so nothing needs to be entered by hand.
 
 ### What to build
 
 Portfolio insights page — holdings, invested amount, current value, unrealized P&L, cash and account balance — **computed from the activity ledger (#33), not entered by hand.** There is no manually maintained `Position` table and no add/edit/delete flow: after trading on Wealthsimple, the user re-uploads an activities export.
 
 **Read API (`app/api/positions.py`):**
-- `GET /api/positions` — the holdings derived by #33's `compute_positions()`, each enriched at read time with `current_price` in the holding's **native currency**.
+- `GET /api/positions` — the holdings derived by #33's `compute_positions()`, each enriched at read time with `current_price` in the holding's **native currency**, `last_traded_at` (the latest trade across accounts) and `asset_type` (`Stock`, `ETF`, `CDR` or `null`).
 - `GET /api/portfolio/summary` — invested, market value, unrealized gain and gain % as **per-currency subtotals** (USD and CAD), the cash balance, and the **account balance**.
 - No `POST`/`PATCH`/`DELETE` — the manual-entry routes from the original design are dropped.
 
@@ -1234,8 +1234,9 @@ Portfolio insights page — holdings, invested amount, current value, unrealized
 
 **Price sources (verified 2026-09-20 with the app's own key):**
 - **USD-native holdings → Finnhub REST `get_price()`.** Finnhub's free tier returns `403` for `.TO` tickers, so it cannot price the Canadian holdings.
-- **CAD-native holdings → yfinance** (already in the stack for history, #4): free, no key, unofficial, so it can break or rate-limit — acceptable for a couple of tickers.
-- **Quote-symbol rule:** derive the quote symbol from the native currency #33 infers. A CAD-native holding gets `.TO` appended if it's missing (an `AVGO` CDR → `AVGO.TO`); a USD-native holding is used as is. A config override map covers oddities (e.g. a CDR that only exists on `.NE`).
+- **CAD-native holdings → yfinance** (already in the stack for history, #4): free, no key, unofficial, so it can break or rate-limit — acceptable for a couple of tickers. Re-verified 2026-10-15: `AVGO.TO`, `SHOP.TO` and `XIU.TO` all return `403` from Finnhub `/quote` on our key, while yfinance `fast_info` returns `AVGO.TO` at ~13.08 CAD (`currency: CAD`, `exchange: TOR`).
+- **How native currency is known:** `compute_positions()` marks a holding USD-native when its trades carry an FX rate (`activities.fx_rate`, parsed from the `FX Rate:` text in the export's description) and CAD-native when they don't — never from the ticker string. A symbol with both kinds of trades is rejected at import (`mixed_native_currency`).
+- **Quote-symbol rule:** derive the quote symbol from the native currency #33 infers. A CAD-native holding gets `.TO` appended if it's missing (an `AVGO` CDR → `AVGO.TO`); a USD-native holding is used as is. A config override map covers oddities (e.g. a CDR that only exists on `.NE`). The export has no exchange field (decided 2026-10-19), so this stays a plain rule: a symbol that already ends in a Canadian suffix (`RY.TO`) is kept, and no ordered fallback or name search is used — a NEO-only symbol shows no price until it is added to the override map.
 - **Currency cross-check:** yfinance reports each quote's currency; if it doesn't match the inferred native currency, show no price and flag it, so a CDR can never be priced as the US listing with the same symbol (probe: US `AVGO` is ~360 USD, the CDR `AVGO.TO` ~13.70 CAD).
 - **All holdings use REST plus a short TTL cache** (~15s, shared server-side so open tabs don't multiply calls). The earlier branch that read `StockAlert.last_price` for alert-backed tickers is dropped — that field is only written at a threshold crossing and is stale by design — unless #4's unbuilt in-memory per-tick cache extension is built.
 
@@ -1243,12 +1244,25 @@ Portfolio insights page — holdings, invested amount, current value, unrealized
 
 **Live price transport:** REST plus a 30-second SWR poll, no SSE — the same convention as #10.1/#10.4/#30. Portfolio data changes only when the user imports (a synchronous POST) or prices move (polled REST); the one true push source is Finnhub's websocket, which by design covers only alert-bearing US tickers (#37 remains the path to live ticks for those, and only those). The Finnhub websocket subscription list stays exclusively `StockAlert`-driven — a holding never calls `subscribe()`/`unsubscribe()`.
 
-**Logo (decided 2026-08-02):** rendered directly in the frontend as `<img src="https://static2.finnhub.io/file/publicdatany/finnhubimage/stock_logo/{ticker}.png">`, no backend call — an unauthenticated static asset (`200` for real stock tickers, `404` for ETFs and invalid tickers). `onError` falls back to the existing colored-placeholder box.
+**Ledger cache (decided 2026-10-15):** positions only change when the user imports or resets, so re-reading `activities` and re-running `compute_positions()` on every 30s poll is wasted work. The merged holdings and cash are held in an in-memory cache, filled on first read and **cleared after commit** by the two routes that write the ledger — `POST /api/activities/import` and `DELETE` (reset) in `app/api/activities.py`. A failed import leaves it untouched, and a `LedgerImportError` result is not cached. Valid only because uvicorn runs a single process (`backend/Dockerfile`, no `--workers`); adding workers means moving this cache out of process. Only the price lookups are recomputed on each poll: market value, gain, gain % and the balance are cheap arithmetic over cached holdings and 15s-cached quotes.
 
-**`/portfolio` page (dashboard):** replaces `mock-portfolio.ts`.
-- Holdings table: logo (or placeholder), ticker, shares, avg cost, current price, market value, unrealized gain ($ and %, color-coded) — each in the holding's native currency.
-- Summary card: per-currency subtotals, cash, and the account balance (CAD).
+**Asset type and last traded (decided 2026-10-28):** `asset_type` comes from yfinance's `quote_type` (EQUITY is Stock, ETF is ETF) through `AssetTypeService` (`app/services/asset_types.py`), separate from `PriceService` because a type never changes while a price expires in 15s. Yahoo files a CDR as ETF with no fund data, so a CAD-native ETF whose `shortName` contains the word CDR is labelled CDR (checked on `AVGO.TO`: `BROADCOM CDR (CAD HEDGED)`). Anything else, or a failed lookup, is `null` and the page shows no badge. A success is cached for the process, a failure for 5 minutes; each lookup has a 5s limit, and a lookup can never change a row's price or `price_status`. Only `/api/positions` uses it, not the summary. `last_traded_at` is the latest `Trade` row per `(account, symbol)`, the latest across accounts once merged, and is kept after a full sell; the importer allows only `Trade/BUY` today, so in practice it is the last purchase.
+
+**Merging across accounts (decided 2026-10-15):** `/api/positions` returns one row per `(symbol, native_currency)` — shares summed, average cost share-weighted. The same symbol held in USD in one account and CAD in another stays two rows, so costs never mix.
+
+**Price status (decided 2026-10-15):** each holding carries `price_status` — `ok`, `stale` (upstream failed, last known price served), `unavailable` (no price and none ever cached, or Finnhub key unset), or `currency_mismatch` (price withheld). The last known price lives in the same in-memory cache and is lost on a backend restart. Holdings without a price are excluded from market value and gain and counted in `unpriced_count`, so the CAD balance is a lower bound when it is above zero. A missing USD row in `fx_rates` gives `balance_cad: null` rather than an error; a stale one still converts and sets `fx_stale`.
+
+**Reuse:** the price cache lives in a `PriceService` (`app/services/prices.py`) rather than inside the routes, because `#10.6`'s `GET /api/market/quotes` and `#30` are planned to sit on the same per-ticker TTL cache.
+
+**Logo (decided 2026-08-02, source changed 2026-10-29):** rendered directly in the frontend with `<img>`, no backend call. Wealthsimple's static logo host is used (`https://logos.wealthsimple.com/{ticker}-{exchange}.png`, lowercase, e.g. `ry-xtse.png`, `nvda-xnas.png`) because it matches the app being mirrored; the first choice was Finnhub's `static2.finnhub.io/.../stock_logo/{ticker}.png`. The ledger has no exchange, so the component (`components/ui/ticker-logo.tsx`) tries the likely ones in order from the native currency: `xtse` for CAD, `xnas` then `xnys` for USD; the `.TO` style suffix is stripped. A missing logo returns a 403 (probed: ETFs such as `SPY` and `XIU`, and the AVGO CDR, have none), and when every URL fails the row shows a plain white box with the full ticker. Unofficial, undocumented host: the fallback covers it disappearing.
+
+**`/portfolio` page (dashboard):** replaces the mock holdings in `mock-portfolio.ts`.
+- Holdings row: logo (or the ticker box), ticker, a type badge (`asset_type`: Stock, ETF or CDR; hidden when unknown), shares (whole numbers from 1 up, two decimals below 1), "Last traded Mon YYYY" (`last_traded_at`), market value and unrealized gain ($ and %, color-coded) — money in the holding's native currency. Per-share price and average cost are not shown (decided 2026-10-29); the backend still returns both. An allocation column is postponed (the backend already returns `allocation`). The badge and the date come back from real data (reversed 2026-10-28; the earlier design dropped the mock-only `assetType` and `purchasedAt`). A `stale` price renders muted, `unavailable` and `currency_mismatch` render `—` with a tooltip saying why.
+- Summary trio, replacing the hardcoded Companies / Balance / Committed (revised 2026-10-29): **Companies** is the holdings count, **Balance** is the cash left over (`cash_cad`), **Committed** is what the held shares cost in CAD at the rates of the days they were bought (`invested_cad`). The per-currency subtotals and `balance_cad` (total value) stay in the API but are not shown. The big "Current Value" on the overview is the real `balance_cad`, the same for every range, with no change figure until #23 supplies value history.
+- **Allocation (added 2026-10-29):** `allocation` on each position row is its share of the priced holdings' total in CAD (USD at today's `fx_rates` rate, a fraction), `null` when unpriced or when a priced USD row has no rate. Rows are ordered by that CAD value, so USD and CAD rows compare fairly; without a rate they fall back to native value. `/api/positions` therefore reads the USD rate too.
+- Empty ledger: an empty state pointing to the activities import upload.
 - Realized gain is not shown for now (see #33's possible future features).
+- **Scope (decided 2026-10-15):** only the Holdings tile and the summary figures become real. The value chart (#23), allocation donut, growth rate, Watchlist tile (#10.6) and Popular Assets (#30) stay mock until their own issues, so the big "Current Value" number is still chart-driven for now.
 
 ### Why (context)
 
@@ -1256,13 +1270,19 @@ User wants portfolio insights in-app while continuing to trade directly on Wealt
 
 ### Acceptance criteria
 
-- [ ] `GET /api/positions` returns the holdings derived from #33 with `current_price` in each holding's native currency; no manual create/update/delete routes exist
-- [ ] Holdings never call `FinnhubClient.subscribe()`/`unsubscribe()` — the websocket subscription list is affected only by `StockAlert` CRUD (#4)
-- [ ] USD-native holdings are priced via Finnhub REST and CAD-native ones via yfinance, with the `.TO` symbol rule; a CDR is never priced as the US listing, and a currency mismatch shows no price rather than a wrong one
-- [ ] All holdings share one server-side TTL cache (~15s) — two near-simultaneous requests for the same ticker produce one upstream call — and a rate-limit or upstream error shows the last known price
-- [ ] USD holdings' gain is computed in USD against their USD cost basis; CAD holdings' in CAD
-- [ ] `GET /api/portfolio/summary` returns per-currency subtotals, the cash balance, and the account balance (holdings market value + cash, CAD-equivalent via `fx_rates`)
-- [ ] `/portfolio` displays the holdings table (real logos, placeholder fallback on load error) and summary card from real data — no mock data remains
+- [x] `GET /api/positions` returns the holdings derived from #33 with `current_price` in each holding's native currency; no manual create/update/delete routes exist
+- [x] Holdings never call `FinnhubClient.subscribe()`/`unsubscribe()` — the websocket subscription list is affected only by `StockAlert` CRUD (#4)
+- [x] USD-native holdings are priced via Finnhub REST and CAD-native ones via yfinance, with the `.TO` symbol rule; a CDR is never priced as the US listing, and a currency mismatch shows no price rather than a wrong one
+- [x] All holdings share one server-side TTL cache (~15s) — two near-simultaneous requests for the same ticker produce one upstream call — and a rate-limit or upstream error shows the last known price, marked `stale`
+- [x] Holdings and cash are cached in memory after the first read; the import and reset routes clear the cache after commit, and a second poll reads no `activities` rows
+- [x] A failed import leaves the cache untouched, and a ledger error is never cached
+- [x] `GET /api/positions` rows carry `last_traded_at` and `asset_type` (`Stock` / `ETF` / `CDR` / `null`; a CAD-native CDR is not reported as a plain ETF); a failed or slow type lookup never changes a row's price or `price_status`
+- [x] The same symbol held in several accounts appears as one merged row (shares summed, weighted average cost); a symbol that is USD in one account and CAD in another stays two rows
+- [x] Holdings without a price are excluded from market value and gain and counted in `unpriced_count`; a missing USD FX rate gives `balance_cad: null`, not an error
+- [x] USD holdings' gain is computed in USD against their USD cost basis; CAD holdings' in CAD
+- [x] `GET /api/portfolio/summary` returns per-currency subtotals, the cash balance, the account balance (holdings market value + cash, CAD-equivalent via `fx_rates`), and `invested_cad` (the CAD paid for the held shares at purchase-time rates, priced or not)
+- [x] `GET /api/positions` rows carry `allocation` (a fraction of the priced holdings' CAD value, `null` when unpriced or when the USD rate is missing) and are ordered by CAD value
+- [ ] `/portfolio` displays the holdings table (real logos, placeholder fallback on load error, type badge when known, last-traded month) and summary card from real data, with an empty state when the ledger is empty — no mock holdings or summary figures remain (the chart, donut, growth rate, Watchlist tile and Popular Assets stay mock, per the scope note)
 ---
 
 ## Group 6 — iOS
@@ -1767,11 +1787,11 @@ mechanism the nav refactor lands on.
 
 ---
 
-## [ ] Issue #23 — Stock Price History Chart (Portfolio)
+## [ ] Issue #23 — Portfolio Value & Stock Price History Charts
 
 **Type:** feat / AFK
-**Estimate:** ~3h
-**Blocked by:** #19
+**Estimate:** ~3h for the per-ticker chart; the portfolio value history added 2026-10-29 is not yet estimated
+**Blocked by:** #19, #74 (USD→CAD rate history, for the portfolio value part)
 
 ### What to build
 
@@ -1801,6 +1821,16 @@ Hourly is only offered on the `1M` preset — Yahoo's intraday data window caps 
 - Preset buttons (`1M` / `1Y` / `3Y` / `ALL`) above the chart, click swaps the active fetch
 - Attached per-position — click a holdings-table row to expand, same interaction pattern as #10.3's wishlist row expansion
 
+### Portfolio value history (added 2026-10-29)
+
+The overview chart at the top of `/portfolio` (`PortfolioLineChart`, ranges `1D` / `1W` / `1M` / `3M` / `6M` / `YTD` / `ALL`) is still mock data (`chartDataByRange` in `page.tsx`), and so is the change shown beside the total. #19 made the **total** real: the big "Current Value" is `balance_cad` from `GET /api/portfolio/summary` (holdings, USD converted at today's rate, plus cash), the same whichever range is selected. This issue makes the **chart and the per-range change** real.
+
+- **Series:** `GET /api/portfolio/history?range=1W` returns `[{date, value}]` in CAD. Each point is, for that date: the shares held then (from the activity ledger, so a stock bought later contributes nothing before its first buy) × that day's close, with USD-native holdings converted at that day's USD→CAD rate, plus the cash balance then. A holding with no close that day (holiday, gap) carries its last known close, never zero.
+- **Change beside the total:** `(current total − value at the start of the range) ÷ value at the start`, colour-coded, recomputed when the range changes. The total itself does not move with the range or with chart hover.
+- **Frontend:** replace `chartDataByRange` with the fetched series; hover shows the point's own value on the chart. The chart's dashed "invested" reference line comes back using `summary.invested_cad` (#19 dropped it because the real figure would squash the mock chart).
+- **Sources:** historical closes through yfinance (`get_price_history()`, above), CAD-native via the `.TO` rule. The USD→CAD history is #74's (`fx_rates` keeps only the latest rate per currency). `1D` needs intraday price bars; use that day's rate for the conversion.
+- **Not covered:** the allocation donut and the Growth Rate figure stay mock.
+
 ### Why (context)
 
 `get_price_history()` already exists (#4) but is currently unreachable from any API route — nothing wires it to the frontend. The user wants historical charts on individual portfolio holdings; since `Position` is ticker-based (not alert-based), the new route is scoped by ticker directly rather than nested under `/api/stockalerts/{alert_id}/...`, keeping it reusable for any ticker regardless of whether it also has a `StockAlert` or `Position` row.
@@ -1814,6 +1844,10 @@ Preset buttons (not independent interval+range controls) were chosen specificall
 - [ ] `3Y` preset returns real 3-year-range data (not silently falling back to a native yfinance period)
 - [ ] `StockHistoryChart` renders on `/portfolio`, attached per-position, preset buttons switch the displayed data
 - [ ] Chart follows the same row-expand interaction pattern as #10.3's `PriceHistoryChart`
+- [ ] The `/portfolio` overview chart plots the real portfolio value in CAD for `1D` / `1W` / `1M` / `3M` / `6M` / `YTD` / `ALL`; no mock `chartDataByRange` remains
+- [ ] The big Current Value total is identical for every range, and the change beside it equals (total − value at range start) ÷ value at range start for the selected range
+- [ ] A past point uses the shares held on that date and that date's prices and USD→CAD rate; a stock first bought later adds nothing before its first buy, and a day with no close carries the last known one
+- [ ] The dashed invested line on the chart uses `summary.invested_cad`
 
 ---
 
@@ -3694,3 +3728,67 @@ Raised while setting up Swagger access for #19: every route lands in one **defau
 - [ ] `/api/health` stays open and every other router still sits behind `verify_api_key` (existing real-`app` 401 tests pass)
 - [ ] A test asserts no operation is left untagged
 - [ ] Verified live (user): the UI still loads Watchlist, Portfolio, Activities import and the SSE stream after the rename
+
+---
+
+## [ ] Issue #73 — Portfolio Page: Let the Holdings and Watchlist Tiles Fill the Viewport
+
+**Type:** style / AFK
+**Estimate:** ~0.5h *(rough; to be re-estimated when planned)*
+**Blocked by:** none (#19 builds the Holdings tile this applies to)
+
+### What to build
+
+On `/portfolio` the Holdings and Watchlist tiles at the bottom are only as tall as their rows. With a few holdings the page ends part-way down the screen, leaving an empty band under the tiles. Make the tiles stretch to the bottom of the viewport.
+
+- `app/layout.tsx`: make `<body>` a flex column with `min-h-screen`, so `<main>` can take the height left under the nav. **This is global**: it applies to every page, which is why it was kept out of #19.
+- `portfolio/page.tsx`: `flex-1` on `<main>`, on the bottom section, and on each tile's list panel. The tiles are already a flex row, so they stay equal in height, and the rows stay at the top of the panel.
+- Use `min-h-screen`, not a fixed height: a list longer than the screen keeps scrolling the page. A fixed-viewport layout with each list scrolling inside its tile is the alternative; the issue owner decides.
+- Check the other pages (`/`, `/wishlist`, `/market/[ticker]`) still look right after the `<body>` change.
+
+### Why (context)
+
+Raised while building #19's Holdings tile, which can have 1 to 20 rows: the page height depends on the data. #19 left it out because the `<body>` change affects every page and wants its own visual check.
+
+### Acceptance criteria
+
+- [ ] With one holding, or none (empty state), the Holdings and Watchlist tiles reach the bottom of the viewport
+- [ ] A list longer than the viewport scrolls the page with no clipped rows
+- [ ] The other pages render as before (checked by the user in the browser)
+
+---
+
+## [ ] Issue #74 — USD→CAD Rate History (Source for Past Portfolio Values)
+
+**Type:** feat / AFK
+**Estimate:** ~2h *(rough; to be re-estimated when planned)*
+**Blocked by:** none
+
+### What to build
+
+`fx_rates` holds one row per currency, the latest rate only (`services/fx.py` refreshes it daily from Frankfurter, `FxRate` is "never a history table"). #23's portfolio value chart needs the USD→CAD rate **for past dates**, to value USD holdings on each day of a range. Decide the source and build a small lookup that returns the rate for a date or a date range.
+
+Candidates, both checked live on 2026-10-29:
+
+| Source | History | Notes |
+|---|---|---|
+| Frankfurter (`/v1/{date}` and `/v1/{start}..{end}?base=USD&symbols=CAD`) | Daily, business days only (ECB reference rate) | Already the source of today's `fx_rates`, no key. E.g. `2026-06-24` → 1.4233. |
+| yfinance `CAD=X` | Hourly bars over recent days, daily further back | Unofficial scrape, but it is a market quote. It returned 1.3983 where `fx_rates` held 1.4047 (Frankfurter, previous day's ECB rate), and Wealthsimple's own total implied about 1.399. |
+
+- Options for the lookup: fetch on demand with a short cache, or a small table of daily rates (date, currency, rate) filled by the existing scheduler job. Weekends and holidays reuse the last known rate.
+- **Keep one source for both** the live rate and the history: if today's `balance_cad` uses one source and the chart's last point another, the chart's end would not equal the big total. Decide whether `fx_rates` should also move.
+- KRW is in `FOREIGN_CURRENCIES` for the wishlist, but only USD→CAD is needed here; keep the lookup generic over currency.
+- **Worth knowing:** the FX rates in the activity ledger run about 2% above the market rate (the `FX Rate:` on the 2026-06-24 NVDA buy is 1.4510; Frankfurter's rate that day is 1.4233), which is Wealthsimple's markup. So "Committed" (what was paid) sits about 2% above the same USD cost at market rates, and a return computed against it carries that drag for USD buys.
+
+### Why (context)
+
+Raised while deciding what #23's per-range change needs. The total on `/portfolio` is real (#19), but a change over `1W` or `ALL` needs the value on the first day of the range, and `fx_rates` cannot say what the rate was.
+
+### Acceptance criteria
+
+- [ ] A function returns the USD→CAD rate for any past date, and for a date range as a series
+- [ ] A date with no published rate (weekend, holiday) gets the last earlier rate; a date before the first available one is a clear error, not 0 or 1
+- [ ] The chosen source is the same one the live `fx_rates` refresh uses, or the decision to differ is written down with its effect on the chart's last point
+- [ ] A failed upstream call returns an error the caller can handle, never a wrong rate
+- [ ] Tests cover the weekend carry-forward and the failure path (network mocked)
+
