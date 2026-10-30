@@ -11,8 +11,8 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.positions import get_ledger_cache
 from app.core.db import get_db
+from app.core.deps import get_ledger_cache
 from app.models.activity import Activity
 from app.schemas.activity import AccountCoverage, AccountImportResult, ImportResult, ResetResult
 from app.services.ledger_cache import LedgerCache

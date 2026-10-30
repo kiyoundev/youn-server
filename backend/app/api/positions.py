@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
+from app.core.deps import get_ledger_cache
 from app.models.fx_rate import FxRate
 from app.schemas.positions import PortfolioSummary, PositionResponse
 from app.services.asset_types import AssetTypeService
@@ -23,10 +24,6 @@ from app.services.portfolio import PositionRow, build_rows, build_summary
 from app.services.prices import PriceService
 
 router = APIRouter()
-
-
-def get_ledger_cache(request: Request) -> LedgerCache:
-    return request.app.state.ledger_cache
 
 
 def get_price_service(request: Request) -> PriceService:
@@ -73,6 +70,11 @@ async def _load_priced_rows(
     never shows a badge, so it must not wait on one."""
     snapshot = await _load_snapshot(ledger, db)
     usd_rate, usd_stale = await _load_usd_rate(db)
+    # Both reads are done and the results are plain values. End the read
+    # transaction so the pooled connection goes back now, not after the
+    # upstream waits below: a slow Yahoo or Finnhub would otherwise leave it
+    # idle for the whole wait, on every request.
+    await db.rollback()
     pairs = {(h.symbol, h.native_currency) for h in snapshot.holdings}
     if types is None:
         quotes, asset_types = await prices.get_prices(pairs), {}

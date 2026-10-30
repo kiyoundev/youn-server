@@ -26,6 +26,11 @@ _FAILURE_TTL_SECONDS = 5
 # Negative cache: a failed or withheld result (stale / unavailable /
 # currency_mismatch) is reused this long, so a dead source is not retried by
 # every request that arrives right behind the one that failed.
+_YFINANCE_TIMEOUT_SECONDS = 5
+# A hung Yahoo call counts as a failed fetch after this long. Without it the
+# key's lock is never released, no cache entry is written, and every request
+# for the symbol (and so the whole gathered response) waits behind it. The
+# executor thread cannot be cancelled and runs on until yfinance gives up.
 
 PriceStatus = Literal["ok", "stale", "unavailable", "currency_mismatch"]
 
@@ -170,8 +175,11 @@ class PriceService:
             return fi["last_price"], fi["currency"]
 
         try:
-            price, currency = await asyncio.get_running_loop().run_in_executor(None, _call)
-        except Exception:
+            price, currency = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, _call),
+                _YFINANCE_TIMEOUT_SECONDS,
+            )
+        except Exception:  # includes TimeoutError
             _log.warning("yfinance quote failed for %s", symbol)
             return None
         if not price or price <= 0:

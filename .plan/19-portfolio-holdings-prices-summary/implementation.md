@@ -16,7 +16,7 @@
 
 ### 2. Position building (`backend/app/api/positions.py` helpers)
 - [x] `LedgerCache` + frozen `LedgerSnapshot(holdings, cash)` (`app/services/ledger_cache.py`) — `get(db)` loads on a miss, `invalidate()` clears. `asyncio.Lock` so two simultaneous cold reads run the query once; a `_version` counter bumped by `invalidate()` so a load that overlapped a commit is returned but not stored. `LedgerImportError` propagates (not cached); the route maps it to HTTP 500. Created in `main.py` lifespan → `app.state.ledger_cache`
-- [x] Dependency `get_ledger_cache(request)` (`api/positions.py`) — returns `request.app.state.ledger_cache`
+- [x] Dependency `get_ledger_cache(request)` (`app/core/deps.py`, shared by `api/positions.py` and `api/activities.py`) — returns `request.app.state.ledger_cache`
 - [x] Load path: `LedgerCache._load` → `compute_positions()` → merge, failure not stored (see `LedgerCache` above); the route helper `_load_snapshot` maps `LedgerImportError` → HTTP 500 `{"detail": {"code", "message"}}`, shared by `/positions` and `/summary`
 - [x] `merge_holdings(holdings)` (`app/services/portfolio.py`, public name, returns frozen `MergedHolding`s sorted by symbol) — group by `(symbol, native_currency)`: shares summed; `avg_cost = Σ(shares×avg_cost_native)/Σshares`. Pure function, no DB. Tests: `tests/services/test_positions_merge.py` (6, weighting and currency key mutation-checked)
 - [x] Row builder `build_rows(holdings, quotes) -> tuple[PositionRow, ...]` (`app/services/portfolio.py`): `invested`, `market_value`, `unrealized_gain`, `unrealized_gain_pct` (None when price None; pct None when `invested == 0`, e.g. bonus-share holding). Stale quotes are valued like fresh; missing quote = unavailable; sorted by market value desc, unpriced last, ties by symbol. Tests: `tests/services/test_positions_build_rows.py` (9, stale-as-unpriced and zero-cost guard mutation-checked)
@@ -66,7 +66,17 @@ Reverses the earlier "drop `assetType` / `purchasedAt`" (decisions 2, 12, 13 in 
 - [ ] Kill network / bad yfinance symbol → row shows last-known (muted) then "—"
 - [ ] Backend logs: no new Finnhub WS subscribe lines when `/portfolio` loads
 - [ ] Upload a second export → `/portfolio` reflects the new holdings on the next poll with no restart (cache invalidated); reset the ledger → empty state appears
+- [ ] Stop the backend while `/portfolio` is open → after the next poll the Holdings header shows "Couldn't refresh. Showing the last data." and the rows stay; start it again → the note disappears
 
 ### 8. Cleanup
 - [x] Remove dead imports / unused mock exports — none left (lint clean); `holdingsData` / `Position` stay in `mock-portfolio.ts` for `/market/[ticker]` (#69)
 - [x] Tick #19 criteria in `.doc/issues.md` (the design text and criteria were already updated 2026-10-15; issue #69 already covers real `/market/[ticker]` data) — ticked 2026-10-29, except the `/portfolio` UI criterion, which waits for step 7
+
+### 9. Review fixes (2026-10-29, see `review.md`)
+- [x] #1 `PriceService._fetch`: yfinance call under `asyncio.wait_for` (`_YFINANCE_TIMEOUT_SECONDS = 5`); a timeout is a failed fetch (stale / unavailable). Tests in `test_prices.py`; `price-cache-lock-sequence.html` updated
+- [x] #2 `_load_priced_rows`: `await db.rollback()` after the ledger and FX reads, before the price and type awaits; order test in `test_positions_routes.py`
+- [x] #3 `FinnhubClient.get_price`: token sent as `X-Finnhub-Token` header, not `?token=`; tests in `test_stocks.py`. The WebSocket URL keeps `?token=` (header ignored there)
+- [x] #4 `get_ledger_cache` moved to `app/core/deps.py`
+- [x] #5 `invested_cad` required on `LedgerSnapshot` and `build_summary`; `test_invested_cad_must_be_passed`
+- [x] #7 Holdings header note when a poll fails over existing data
+- [x] #6, #8, #9 closed as won't fix, reasons in `review.md`

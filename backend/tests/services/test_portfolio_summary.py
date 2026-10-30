@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.schemas.positions import CurrencySubtotal, PortfolioSummary
+from app.services.ledger_cache import LedgerSnapshot
 from app.services.portfolio import CurrencyTotals, PositionRow, SummaryData, build_summary
 
 _TRADED = datetime(2026, 7, 27, 14, 36, tzinfo=timezone.utc)
@@ -24,7 +25,7 @@ AVGO = _row("AVGO", "CAD", 40, 12.5, 13.08, "stale")
 
 
 def test_subtotals_cover_each_currency_usd_first() -> None:
-    summary = build_summary([AVGO, SOFI, NVDA], cash=200.0, usd_rate=1.38, usd_rate_stale=False)
+    summary = build_summary([AVGO, SOFI, NVDA], cash=200.0, usd_rate=1.38, usd_rate_stale=False, invested_cad=0.0)
 
     usd, cad = summary.subtotals
     assert (usd.currency, usd.holdings_count, usd.unpriced_count) == ("USD", 2, 1)
@@ -36,14 +37,14 @@ def test_subtotals_cover_each_currency_usd_first() -> None:
 
 
 def test_pct_is_against_the_priced_holdings_cost_only() -> None:
-    summary = build_summary([NVDA, SOFI], cash=0.0, usd_rate=1.38, usd_rate_stale=False)
+    summary = build_summary([NVDA, SOFI], cash=0.0, usd_rate=1.38, usd_rate_stale=False, invested_cad=0.0)
 
     # 150 / 1650 (NVDA alone), not 150 / 1815: the unpriced SOFI must not dilute it
     assert summary.subtotals[0].unrealized_gain_pct == pytest.approx(150 / 1650)
 
 
 def test_balance_converts_usd_at_todays_rate() -> None:
-    summary = build_summary([NVDA, SOFI, AVGO], cash=200.0, usd_rate=1.38, usd_rate_stale=False)
+    summary = build_summary([NVDA, SOFI, AVGO], cash=200.0, usd_rate=1.38, usd_rate_stale=False, invested_cad=0.0)
 
     assert summary.balance_cad == pytest.approx(523.2 + 1800.0 * 1.38 + 200.0)
     assert (summary.fx_available, summary.fx_stale) == (True, False)
@@ -51,14 +52,14 @@ def test_balance_converts_usd_at_todays_rate() -> None:
 
 
 def test_stale_rate_is_still_used_and_flagged() -> None:
-    summary = build_summary([NVDA], cash=0.0, usd_rate=1.40, usd_rate_stale=True)
+    summary = build_summary([NVDA], cash=0.0, usd_rate=1.40, usd_rate_stale=True, invested_cad=0.0)
 
     assert summary.balance_cad == pytest.approx(1800.0 * 1.40)
     assert (summary.fx_available, summary.fx_stale) == (True, True)
 
 
 def test_usd_holdings_with_no_rate_give_no_balance() -> None:
-    summary = build_summary([NVDA, AVGO], cash=200.0, usd_rate=None, usd_rate_stale=False)
+    summary = build_summary([NVDA, AVGO], cash=200.0, usd_rate=None, usd_rate_stale=False, invested_cad=0.0)
 
     assert summary.balance_cad is None
     assert (summary.fx_available, summary.fx_stale) == (False, False)
@@ -67,14 +68,14 @@ def test_usd_holdings_with_no_rate_give_no_balance() -> None:
 
 def test_no_usd_holdings_needs_no_rate() -> None:
     # a missing or stale rate must not flag a balance that never used it
-    summary = build_summary([AVGO], cash=200.0, usd_rate=None, usd_rate_stale=True)
+    summary = build_summary([AVGO], cash=200.0, usd_rate=None, usd_rate_stale=True, invested_cad=0.0)
 
     assert summary.balance_cad == pytest.approx(523.2 + 200.0)
     assert (summary.fx_available, summary.fx_stale) == (True, False)
 
 
 def test_usd_holdings_all_unpriced_need_no_rate() -> None:
-    summary = build_summary([SOFI, AVGO], cash=0.0, usd_rate=None, usd_rate_stale=True)
+    summary = build_summary([SOFI, AVGO], cash=0.0, usd_rate=None, usd_rate_stale=True, invested_cad=0.0)
 
     assert summary.balance_cad == pytest.approx(523.2)
     assert (summary.fx_available, summary.fx_stale) == (True, False)
@@ -82,14 +83,14 @@ def test_usd_holdings_all_unpriced_need_no_rate() -> None:
 
 
 def test_all_unpriced_currency_has_zero_value_and_no_pct() -> None:
-    (usd,) = build_summary([SOFI], cash=0.0, usd_rate=1.38, usd_rate_stale=False).subtotals
+    (usd,) = build_summary([SOFI], cash=0.0, usd_rate=1.38, usd_rate_stale=False, invested_cad=0.0).subtotals
 
     assert (usd.market_value, usd.unrealized_gain, usd.unrealized_gain_pct) == (0.0, 0.0, None)
     assert usd.invested == pytest.approx(165.0)
 
 
 def test_empty_ledger_balance_is_just_cash() -> None:
-    summary = build_summary([], cash=0.0, usd_rate=None, usd_rate_stale=False)
+    summary = build_summary([], cash=0.0, usd_rate=None, usd_rate_stale=False, invested_cad=0.0)
 
     assert summary == SummaryData((), 0.0, 0.0, True, False, 0, 0.0)
 
@@ -107,6 +108,14 @@ def test_invested_cad_covers_unpriced_holdings_too() -> None:
     assert (summary.unpriced_count, summary.invested_cad) == (1, 500.0)
 
 
+def test_invested_cad_must_be_passed() -> None:
+    # no default: a caller that forgets it must fail loudly, not show 0 committed
+    with pytest.raises(TypeError):
+        build_summary([NVDA], cash=0.0, usd_rate=1.38, usd_rate_stale=False)
+    with pytest.raises(TypeError):
+        LedgerSnapshot((), cash=0.0)
+
+
 def test_dataclasses_have_exactly_the_fields_of_their_schemas() -> None:
     # the route maps with PortfolioSummary(**asdict(summary)); drift would only fail at request time
     assert {f.name for f in fields(SummaryData)} == set(PortfolioSummary.model_fields)
@@ -114,7 +123,7 @@ def test_dataclasses_have_exactly_the_fields_of_their_schemas() -> None:
 
 
 def test_summary_maps_to_the_schema_through_asdict() -> None:
-    summary = build_summary([NVDA, AVGO], cash=200.0, usd_rate=1.38, usd_rate_stale=False)
+    summary = build_summary([NVDA, AVGO], cash=200.0, usd_rate=1.38, usd_rate_stale=False, invested_cad=0.0)
 
     out = PortfolioSummary(**asdict(summary))
 

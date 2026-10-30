@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,9 +31,12 @@ class _FakeYFinance:
         self.fast_info: dict = {"last_price": 13.08, "currency": "CAD"}
         self.error: Exception | None = None
         self.symbols: list[str] = []
+        self.gate: threading.Event | None = None  # when set, Ticker() blocks until it is released
 
     def Ticker(self, symbol: str):  # noqa: N802 - mirrors yfinance.Ticker
         self.symbols.append(symbol)
+        if self.gate is not None:
+            self.gate.wait(timeout=5)
         if self.error:
             raise self.error
         return SimpleNamespace(fast_info=self.fast_info)
@@ -126,6 +130,15 @@ async def test_yfinance_exception_is_a_failure(service, yf, error) -> None:
     yf.error = error
 
     assert await service._fetch("AVGO", "CAD") is None
+
+
+async def test_hung_yfinance_call_is_a_failure(service, yf, monkeypatch) -> None:
+    monkeypatch.setattr(prices, "_YFINANCE_TIMEOUT_SECONDS", 0.05)
+    yf.gate = threading.Event()
+    try:
+        assert await service._fetch("AVGO", "CAD") is None
+    finally:
+        yf.gate.set()  # release the executor thread
 
 
 async def test_finnhub_none_is_a_failure(service, finnhub) -> None:
@@ -233,6 +246,44 @@ async def test_failure_is_not_retried_inside_the_failure_ttl(
     clock.advance(prices._FAILURE_TTL_SECONDS)  # window over, the source is asked again
     await service.get_price("NVDA", "USD")
     assert finnhub.get_price.await_count == 2
+
+
+async def test_hung_yfinance_serves_stale_once_for_concurrent_callers_then_recovers(
+    service, yf, clock, monkeypatch
+) -> None:
+    monkeypatch.setattr(prices, "_YFINANCE_TIMEOUT_SECONDS", 0.05)
+    first = await service.get_price("XIU", "CAD")
+    clock.advance(prices._PRICE_TTL_SECONDS + 1)
+
+    yf.gate = threading.Event()  # Yahoo hangs from here on
+    try:
+        # /positions and /summary arrive together: one waits out the timeout,
+        # the other reads its stale result instead of starting a second call
+        quotes = await asyncio.wait_for(
+            asyncio.gather(service.get_price("XIU", "CAD"), service.get_price("XIU", "CAD")),
+            timeout=2,
+        )
+    finally:
+        yf.gate.set()  # release the executor thread
+
+    assert [q.status for q in quotes] == ["stale", "stale"]
+    assert quotes[0].price == first.price and quotes[0].fetched_at == first.fetched_at
+    assert len(yf.symbols) == 2  # the first good fetch plus one attempt that hung
+
+    yf.gate = None  # Yahoo is back; the failure window is over
+    clock.advance(prices._FAILURE_TTL_SECONDS + 1)
+    assert (await service.get_price("XIU", "CAD")).status == "ok"
+
+
+async def test_hung_yfinance_with_no_history_is_unavailable(service, yf, monkeypatch) -> None:
+    monkeypatch.setattr(prices, "_YFINANCE_TIMEOUT_SECONDS", 0.05)
+    yf.gate = threading.Event()
+    try:
+        quote = await asyncio.wait_for(service.get_price("XIU", "CAD"), timeout=2)
+    finally:
+        yf.gate.set()
+
+    assert (quote.status, quote.price) == ("unavailable", None)
 
 
 async def test_success_after_stale_replaces_it(service, finnhub, clock) -> None:

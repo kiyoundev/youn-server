@@ -65,15 +65,21 @@ def _ok(price: float) -> PriceQuote:
 
 
 class _Db:
-    """Stands in for AsyncSession; the summary route only does db.get(FxRate, "USD")."""
+    """Stands in for AsyncSession; the routes only do db.get(FxRate, "USD") and
+    db.rollback(). `events` is shared with the fakes below to record order."""
 
-    def __init__(self, usd_rate: FxRate | None = None) -> None:
+    def __init__(self, usd_rate: FxRate | None = None, events: list[str] | None = None) -> None:
         self.usd_rate = usd_rate
         self.gets: list[tuple] = []
+        self.events = events if events is not None else []
 
     async def get(self, model, key):
         self.gets.append((model, key))
+        self.events.append("get")
         return self.usd_rate
+
+    async def rollback(self):
+        self.events.append("rollback")
 
 
 def _request(path: str, ledger: _Ledger, prices: _Prices, db: _Db | None = None, types: _Types | None = None):
@@ -100,7 +106,7 @@ def test_rows_are_sorted_by_market_value_with_unpriced_last() -> None:
         _holding("SOFI", "USD", 100, 8.0),    # no quote -> unpriced, must be last
         _holding("AAPL", "USD", 10, 100.0),   # 10 * 150 = 1500
         _holding("NVDA", "USD", 15, 110.0),   # 15 * 120 = 1800
-    ), cash=0.0))
+    ), cash=0.0, invested_cad=0.0))
     prices = _Prices({("NVDA", "USD"): _ok(120.0), ("AAPL", "USD"): _ok(150.0)})
 
     response = _get(ledger, prices)
@@ -110,7 +116,7 @@ def test_rows_are_sorted_by_market_value_with_unpriced_last() -> None:
 
 
 def test_a_priced_row_carries_every_field_the_page_needs() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0, invested_cad=0.0))
 
     (row,) = _get(ledger, _Prices({("NVDA", "USD"): _ok(120.0)})).json()
 
@@ -131,7 +137,7 @@ def test_asset_types_are_requested_and_returned_per_symbol_and_currency() -> Non
     ledger = _Ledger(LedgerSnapshot((
         _holding("AVGO", "USD", 5, 900.0),
         _holding("AVGO", "CAD", 20, 30.0),
-    ), cash=0.0))
+    ), cash=0.0, invested_cad=0.0))
     prices = _Prices({("AVGO", "USD"): _ok(1000.0), ("AVGO", "CAD"): _ok(35.0)})
     types = _Types({("AVGO", "USD"): "Stock", ("AVGO", "CAD"): "CDR"})
 
@@ -142,7 +148,7 @@ def test_asset_types_are_requested_and_returned_per_symbol_and_currency() -> Non
 
 
 def test_a_failed_type_lookup_leaves_the_price_fields_alone() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0, invested_cad=0.0))
     prices = _Prices({("NVDA", "USD"): _ok(120.0)})
 
     (plain,) = _get(ledger, prices).json()
@@ -157,7 +163,7 @@ def _allocation_ledger() -> tuple[_Ledger, _Prices]:
     ledger = _Ledger(LedgerSnapshot((
         _holding("NVDA", "USD", 10, 100.0),  # 10 * 100 = 1000 USD -> 1400 CAD at 1.4
         _holding("XYZ", "CAD", 10, 50.0),    # 10 * 60  = 600 CAD
-    ), cash=0.0))
+    ), cash=0.0, invested_cad=0.0))
     return ledger, _Prices({("NVDA", "USD"): _ok(100.0), ("XYZ", "CAD"): _ok(60.0)})
 
 
@@ -177,7 +183,7 @@ def test_rows_are_ordered_by_value_in_cad_not_by_native_value() -> None:
     ledger = _Ledger(LedgerSnapshot((
         _holding("CADCO", "CAD", 10, 100.0),
         _holding("USCO", "USD", 10, 100.0),
-    ), cash=0.0))
+    ), cash=0.0, invested_cad=0.0))
     prices = _Prices({("CADCO", "CAD"): _ok(150.0), ("USCO", "USD"): _ok(120.0)})
 
     rows = _request("/api/positions", ledger, prices, _usd_rate(1.4)).json()
@@ -218,13 +224,36 @@ async def test_prices_and_types_are_fetched_concurrently() -> None:
             await prices_started.wait()
             return {}
 
-    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 1, 1.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 1, 1.0),), cash=0.0, invested_cad=0.0))
 
     await asyncio.wait_for(positions._load_priced_rows(ledger, _WaitingPrices(), _Db(), _WaitingTypes()), timeout=2)
 
 
+async def test_the_db_transaction_ends_before_any_upstream_call() -> None:
+    # a connection held through the price and type waits sits idle for as long
+    # as the slowest source takes; the reads must be over and rolled back first
+    events: list[str] = []
+
+    class _RecordingPrices:
+        async def get_prices(self, pairs):
+            events.append("prices")
+            return {}
+
+    class _RecordingTypes:
+        async def get_types(self, pairs):
+            events.append("types")
+            return {}
+
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 1, 1.0),), cash=0.0, invested_cad=0.0))
+
+    await positions._load_priced_rows(ledger, _RecordingPrices(), _Db(events=events), _RecordingTypes())
+
+    assert events[:2] == ["get", "rollback"]
+    assert set(events[2:]) == {"prices", "types"}
+
+
 def test_the_summary_does_not_look_up_types() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 15, 110.0),), cash=0.0, invested_cad=0.0))
     types = _Types({("NVDA", "USD"): "Stock"})
 
     response = _request("/api/portfolio/summary", ledger, _Prices({("NVDA", "USD"): _ok(120.0)}), _Db(), types)
@@ -242,7 +271,7 @@ def test_types_are_not_looked_up_for_a_ledger_we_cannot_trust() -> None:
 
 
 def test_an_unpriced_row_is_still_returned_with_null_price_fields() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("SOFI", "USD", 100, 8.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("SOFI", "USD", 100, 8.0),), cash=0.0, invested_cad=0.0))
     prices = _Prices({("SOFI", "USD"): PriceQuote(None, None, None, "unavailable")})
 
     (row,) = _get(ledger, prices).json()
@@ -259,7 +288,7 @@ def test_prices_are_requested_for_each_symbol_and_native_currency() -> None:
     ledger = _Ledger(LedgerSnapshot((
         _holding("AVGO", "USD", 5, 900.0),
         _holding("AVGO", "CAD", 20, 30.0),
-    ), cash=0.0))
+    ), cash=0.0, invested_cad=0.0))
     prices = _Prices({("AVGO", "USD"): _ok(1000.0), ("AVGO", "CAD"): _ok(35.0)})
 
     response = _get(ledger, prices)
@@ -269,7 +298,7 @@ def test_prices_are_requested_for_each_symbol_and_native_currency() -> None:
 
 
 def test_an_empty_ledger_is_an_empty_list_not_an_error() -> None:
-    response = _get(_Ledger(LedgerSnapshot((), cash=0.0)), _Prices({}))
+    response = _get(_Ledger(LedgerSnapshot((), cash=0.0, invested_cad=0.0)), _Prices({}))
 
     assert response.status_code == 200
     assert response.json() == []
@@ -299,7 +328,7 @@ def test_the_dependencies_read_the_objects_lifespan_put_on_app_state() -> None:
 def test_real_price_service_and_empty_pair_set_do_not_call_upstream() -> None:
     # PriceService with no holdings must answer {} without touching Finnhub
     # or yfinance; the finnhub client is a bare object that would blow up if used
-    ledger = _Ledger(LedgerSnapshot((), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((), cash=0.0, invested_cad=0.0))
 
     response = _get(ledger, PriceService(finnhub=object()))
 
@@ -312,7 +341,7 @@ def test_a_usd_row_is_priced_through_finnhub_without_subscribing() -> None:
     # is the alert system's job (and the free tier caps the symbols). Real
     # PriceService, fake Finnhub client, so the whole request path is covered.
     finnhub = SimpleNamespace(get_price=AsyncMock(return_value=190.0), subscribe=MagicMock())
-    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 10, 100.0),), cash=0.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("NVDA", "USD", 10, 100.0),), cash=0.0, invested_cad=0.0))
 
     response = _get(ledger, PriceService(finnhub))
 
@@ -402,7 +431,7 @@ def test_no_usd_rate_with_a_priced_usd_holding_gives_no_balance_but_keeps_the_su
 
 
 def test_a_cad_only_ledger_needs_no_rate() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("XYZ", "CAD", 10, 20.0),), cash=500.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("XYZ", "CAD", 10, 20.0),), cash=500.0, invested_cad=0.0))
     prices = _Prices({("XYZ", "CAD"): _ok(25.0)})
 
     body = _summary(ledger, prices, _Db(None)).json()
@@ -412,7 +441,7 @@ def test_a_cad_only_ledger_needs_no_rate() -> None:
 
 
 def test_an_unpriced_usd_holding_is_counted_and_does_not_need_a_rate() -> None:
-    ledger = _Ledger(LedgerSnapshot((_holding("SOFI", "USD", 100, 8.0),), cash=500.0))
+    ledger = _Ledger(LedgerSnapshot((_holding("SOFI", "USD", 100, 8.0),), cash=500.0, invested_cad=0.0))
     prices = _Prices({("SOFI", "USD"): PriceQuote(None, None, None, "unavailable")})
 
     body = _summary(ledger, prices, _Db(None)).json()
@@ -424,7 +453,7 @@ def test_an_unpriced_usd_holding_is_counted_and_does_not_need_a_rate() -> None:
 
 
 def test_an_empty_ledger_summary_is_zero_not_an_error() -> None:
-    body = _summary(_Ledger(LedgerSnapshot((), cash=0.0)), _Prices({}), _Db(None)).json()
+    body = _summary(_Ledger(LedgerSnapshot((), cash=0.0, invested_cad=0.0)), _Prices({}), _Db(None)).json()
 
     assert body == {"subtotals": [], "cash_cad": 0.0, "balance_cad": 0.0,
                     "fx_available": True, "fx_stale": False, "unpriced_count": 0, "invested_cad": 0.0}

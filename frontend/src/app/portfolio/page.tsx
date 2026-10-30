@@ -374,8 +374,14 @@ export default function PortfolioPage() {
       <div className="flex gap-4 w-full">
         {/* Holdings Tile */}
         <div className="bg-card rounded-lg p-4 flex-1 flex flex-col gap-4">
-          <div className="flex h-5 items-center">
+          <div className="flex h-5 items-center justify-between">
             <Label className="text-lg font-medium">Holdings</Label>
+            {/* A failed poll keeps the last data on screen (SWR); say so, or old numbers look current. */}
+            {positionsError && positions && (
+              <Label className="text-[12px] font-normal text-muted-foreground">
+                Couldn&apos;t refresh. Showing the last data.
+              </Label>
+            )}
           </div>
           <div className="rounded-[12px] bg-muted/50 divide-y divide-[#383939]">
             {positionsError && !positions ? (

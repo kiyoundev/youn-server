@@ -21,7 +21,7 @@ class LedgerSnapshot:
 
     holdings: tuple[MergedHolding, ...]
     cash: float
-    invested_cad: float = 0.0  # what the held shares cost in CAD, at the rates of the days they were bought
+    invested_cad: float  # what the held shares cost in CAD, at the rates of the days they were bought; required so a new caller cannot silently show 0
 
 
 class LedgerCache:

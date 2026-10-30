@@ -193,7 +193,7 @@ def build_summary(
     cash: float,
     usd_rate: float | None,
     usd_rate_stale: bool,
-    invested_cad: float = 0.0,
+    invested_cad: float,
 ) -> SummaryData:
     """Per-currency totals plus the CAD balance. Pure.
 

@@ -140,6 +140,8 @@ class FinnhubClient:
 
     async def _listen(self) -> None:
         backoff = _RECONNECT_INITIAL
+        # The WebSocket takes the token only as a query param (a header gets a 401
+        # here, unlike the REST quote in get_price). Keep it in the URL.
         url = f"{_FINNHUB_WS_URL}?token={settings.finnhub_api_key}"
         while True:
             try:
@@ -239,9 +241,12 @@ class FinnhubClient:
             return None
         try:
             async with httpx.AsyncClient(timeout=10) as client:
+                # Header, not a ?token= param: httpx puts the request URL in
+                # its error messages, which this module logs on failure.
                 resp = await client.get(
                     f"{_FINNHUB_REST_URL}/quote",
-                    params={"symbol": ticker, "token": settings.finnhub_api_key},
+                    params={"symbol": ticker},
+                    headers={"X-Finnhub-Token": settings.finnhub_api_key},
                 )
             resp.raise_for_status()
             price = resp.json().get("c")

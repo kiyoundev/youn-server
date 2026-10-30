@@ -898,7 +898,7 @@ async def lifespan(app: FastAPI):
 # startup (lifespan)
 app.state.ledger_cache = LedgerCache()
 
-# request time (api/positions.py)
+# request time (core/deps.py: shared by the positions and activities routers)
 def get_ledger_cache(request: Request) -> LedgerCache:
     return request.app.state.ledger_cache      # request.app is the same FastAPI object lifespan received
 ```
