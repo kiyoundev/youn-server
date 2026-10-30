@@ -41,10 +41,12 @@ class Holding:
     native_currency: Literal["CAD", "USD"]
     avg_cost_native: float
     avg_cost_cad: float
+    last_traded_at: datetime  # latest Trade row for this (account, symbol)
 
 
 @dataclass
 class _Accumulator:
+    last_traded_at: datetime
     shares: float = 0.0
     total_cost_native: float = 0.0
     total_cost_cad: float = 0.0
@@ -92,9 +94,6 @@ def compute_positions(activities: Sequence[ActivityLike]) -> tuple[list[Holding]
         if row.activity_type != "Trade":
             continue
 
-        # Explicit check, not an assert: it must survive `python -O`, and it keeps
-        # the narrowing below. The parser already guarantees these on every row
-        # it produces, so this only fires for a row that got in some other way.
         if row.symbol is None or row.quantity is None or row.unit_price is None:
             missing = [
                 name
@@ -108,13 +107,10 @@ def compute_positions(activities: Sequence[ActivityLike]) -> tuple[list[Holding]
                 date=row.effective_at,
             )
         key = (row.account_id, row.symbol)
-        acc = accumulators.setdefault(key, _Accumulator())
-
-        # `<= 0`, not `< 0`: a buy that cost nothing (a bonus share) is still a
-        # buy — with `< 0` it fell into the sell branch and rejected the whole
-        # import as negative_holdings. A sell can't have zero proceeds.
+        acc = accumulators.setdefault(key, _Accumulator(row.effective_at))
+        acc.last_traded_at = row.effective_at  # rows are sorted, so the last trade seen is the latest
         is_buy = row.net_cash_amount <= 0
-        cad_cost = -row.net_cash_amount if is_buy else 0.0  # cash actually paid — decision 4
+        cad_cost = -row.net_cash_amount if is_buy else 0.0
 
         if row.fx_rate is not None:
             acc.seen_fx = True
@@ -168,6 +164,7 @@ def compute_positions(activities: Sequence[ActivityLike]) -> tuple[list[Holding]
             native_currency="USD" if acc.seen_fx else "CAD",
             avg_cost_native=acc.total_cost_native / acc.shares,
             avg_cost_cad=acc.total_cost_cad / acc.shares,
+            last_traded_at=acc.last_traded_at,
         )
         for (account_id, symbol), acc in accumulators.items()
         if acc.shares > 0

@@ -12,8 +12,10 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
+from app.core.deps import get_ledger_cache
 from app.models.activity import Activity
 from app.schemas.activity import AccountCoverage, AccountImportResult, ImportResult, ResetResult
+from app.services.ledger_cache import LedgerCache
 from app.services.ledger_errors import LedgerImportError
 from app.services.ledger_import import export_from_date, ledger_date, plan_import
 from app.services.positions import compute_positions
@@ -56,13 +58,9 @@ def _group_by_account(rows: list[ParsedRow]) -> dict[str, list[ParsedRow]]:
     return by_account
 
 
-async def _import_one_account(
-    account_id: str, account_rows: list[ParsedRow], db: AsyncSession
-) -> AccountImportResult:
+async def _import_one_account(account_id: str, account_rows: list[ParsedRow], db: AsyncSession) -> AccountImportResult:
     stored_range_row = await db.execute(
-        select(func.min(Activity.effective_at), func.max(Activity.effective_at)).where(
-            Activity.account_id == account_id
-        )
+        select(func.min(Activity.effective_at), func.max(Activity.effective_at)).where(Activity.account_id == account_id)
     )
     earliest, newest = stored_range_row.one()
     stored_range = (earliest, newest) if earliest is not None else None
@@ -83,11 +81,7 @@ async def _import_one_account(
     _holdings, _cash, warnings = compute_positions(merged)
 
     if plan.delete_from is not None:
-        await db.execute(
-            delete(Activity).where(
-                Activity.account_id == account_id, Activity.effective_at >= plan.delete_from
-            )
-        )
+        await db.execute(delete(Activity).where(Activity.account_id == account_id, Activity.effective_at >= plan.delete_from))
     db.add_all([Activity(**asdict(row)) for row in plan.to_insert])
 
     all_dates = [a.effective_at for a in merged]
@@ -120,7 +114,9 @@ async def _import_one_account(
     ),
 )
 async def import_activities(
-    file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    ledger: LedgerCache = Depends(get_ledger_cache),
 ) -> ImportResult:
     # One byte past the cap is enough to tell it's over, without reading the rest.
     content = await file.read(_MAX_UPLOAD_BYTES + 1)
@@ -144,10 +140,7 @@ async def import_activities(
         for account_id in sorted(by_account):
             await _lock_account(db, account_id)
 
-        results = [
-            await _import_one_account(account_id, account_rows, db)
-            for account_id, account_rows in by_account.items()
-        ]
+        results = [await _import_one_account(account_id, account_rows, db) for account_id, account_rows in by_account.items()]
     except LedgerImportError as e:
         await db.rollback()
         # jsonable_encoder: details can carry datetimes (coverage_gap's
@@ -160,6 +153,9 @@ async def import_activities(
         ) from e
 
     await db.commit()
+    # After the commit, never before: a read that starts between the two would
+    # load the old rows and store them (#19 LedgerCache).
+    ledger.invalidate()
     return ImportResult(accounts=results)
 
 
@@ -176,9 +172,12 @@ async def import_activities(
     ),
 )
 async def reset_ledger(
-    account_id: str = Query(...), db: AsyncSession = Depends(get_db)
+    account_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    ledger: LedgerCache = Depends(get_ledger_cache),
 ) -> ResetResult:
     await _lock_account(db, account_id)
     result = await db.execute(delete(Activity).where(Activity.account_id == account_id))
     await db.commit()
+    ledger.invalidate()  # after the commit, as in import_activities
     return ResetResult(account_id=account_id, deleted=result.rowcount or 0)

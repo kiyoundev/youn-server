@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import useSWR from "swr";
 import Link from "next/link";
 import { Plus } from "lucide-react";
-import { PortfolioLineChart, type PortfolioChartPoint } from "@/components/ui/portfolio-line-chart";
+import { PortfolioLineChart } from "@/components/ui/portfolio-line-chart";
 import { AllocationDonutChart } from "@/components/ui/allocation-donut-chart";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -11,8 +12,13 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext, type CarouselApi } from "@/components/ui/carousel";
-import { holdingsData, stockWatchlistData } from "@/lib/mock-portfolio";
+import { stockWatchlistData } from "@/lib/mock-portfolio";
 import { mockMarketDetails } from "@/lib/mock-market";
+import { POLL_INTERVAL_MS } from "@/lib/polling";
+import { POSITIONS_KEY, PORTFOLIO_SUMMARY_KEY, getPositions, getPortfolioSummary, type Position, type PortfolioSummary, type PriceStatus } from "@/lib/api/positions";
+import { TickerLogo } from "@/components/ui/ticker-logo";
+import { Spinner } from "@/components/ui/loading-screen";
+import { ApiError } from "@/lib/api/api-client";
 
 const allocationData = [
   { category: "Stocks", value: 60, thickness: 25 },
@@ -21,16 +27,47 @@ const allocationData = [
   { category: "Cash", value: 8 },
 ];
 
-function fmtValue(value: number) {
-  return `$${Math.round(value).toLocaleString("en-US")}`;
-}
-
 // Curated tickers featured on this page — full company/market data lives in
 // mock-market.ts (single source of truth, also used by /market/[ticker]).
 const POPULAR_ASSET_TICKERS: (keyof typeof mockMarketDetails)[] = ["AAPL", "NVDA", "SPY", "QQQ"];
 
 function fmtCompact(value: number) {
   return value.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 });
+}
+
+// Money in the holding's own currency, with the code ("USD 210.00"), as before.
+function fmtMoney(value: number, currency: string) {
+  return value.toLocaleString("en-US", { style: "currency", currency, currencyDisplay: "code" });
+}
+
+// Whole shares from 1 up; two decimals below 1 so a small holding never reads "0".
+function fmtShares(shares: number) {
+  return shares.toLocaleString("en-US", { maximumFractionDigits: shares < 1 ? 2 : 0 });
+}
+
+function fmtMonth(iso: string) {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+}
+
+// Dollars with cents, for the summary figures ($8.06): small cash balances must not round to $8.
+function fmtDollars(value: number) {
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Tooltip for a row whose price is old or missing; undefined when the price is fresh.
+function priceNote(status: PriceStatus, asOf: string | null) {
+  switch (status) {
+    case "stale": {
+      const at = asOf && new Date(asOf).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return at ? `Last known price, as of ${at}` : "Last known price";
+    }
+    case "unavailable":
+      return "No price available right now";
+    case "currency_mismatch":
+      return "The price source reported a different currency, so the price is withheld";
+    default:
+      return undefined;
+  }
 }
 
 type DateRange = "1D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "ALL";
@@ -141,21 +178,22 @@ export default function PortfolioPage() {
   const [popularAssetsApi, setPopularAssetsApi] = useState<CarouselApi>();
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
-  const [hoveredPoint, setHoveredPoint] = useState<PortfolioChartPoint | null>(null);
 
-  const totalInvested = holdingsData.reduce((sum, p) => sum + p.shares * p.avgPrice, 0);
+  // Two independent keys, so one failing doesn't blank the other. Both routes
+  // price through the same shared 15s server cache, so the pair costs one
+  // upstream lookup per symbol. Polled, no SSE (#19).
+  const {
+    data: positions,
+    error: positionsError,
+    isLoading: positionsLoading,
+  } = useSWR<Position[]>(POSITIONS_KEY, getPositions, { refreshInterval: POLL_INTERVAL_MS });
+  const {
+    data: summary,
+    error: summaryError,
+    isLoading: summaryLoading,
+  } = useSWR<PortfolioSummary>(PORTFOLIO_SUMMARY_KEY, getPortfolioSummary, { refreshInterval: POLL_INTERVAL_MS });
 
   const rangeData = chartDataByRange[selectedRange];
-  const firstPoint = rangeData[0]?.value ?? 0;
-  const lastPoint = rangeData[rangeData.length - 1]?.value ?? 0;
-  const displayedValue = hoveredPoint?.value ?? lastPoint;
-  const changeDollar = displayedValue - firstPoint;
-  const changePercent = firstPoint !== 0 ? (changeDollar / firstPoint) * 100 : 0;
-
-  const isChangeZero = changeDollar === 0;
-  const isChangeUp = changeDollar > 0;
-  const changeSign = isChangeZero ? "" : isChangeUp ? "+" : "-";
-  const changeColor = isChangeZero ? "var(--status-neutral)" : isChangeUp ? "var(--status-success)" : "var(--status-error)";
 
   // Tracks the Popular Assets carousel's own prev/next button state — synced
   // to popularAssetsApi (embla), not to anything this page owns. Re-subscribes
@@ -202,26 +240,28 @@ export default function PortfolioPage() {
         {/* Overview Left Section */}
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-4">
-            <Label className="font-ndot text-[40px] font-normal block">{fmtValue(displayedValue)}</Label>
+            {/* The real total in CAD (holdings, USD converted at today's rate, plus cash). It does not
+                follow the range buttons or the chart: those are mock until there is portfolio value
+                history, and a change per range needs that history too. */}
+            <Label className="font-ndot text-[40px] font-normal block">
+              {summary ? (summary.balance_cad === null ? "—" : fmtDollars(summary.balance_cad)) : summaryLoading ? "…" : "—"}
+            </Label>
             <div className="flex gap-2">
-              <Label className="text-muted-foreground">Current Value</Label>
-              <Label className="font-ndot" style={{ color: changeColor }}>
-                {changeSign}
-                {Math.abs(changePercent).toFixed(2)}%
-              </Label>
+              <Label className="text-muted-foreground">Current Value (CAD)</Label>
             </div>
           </div>
-          <div className="flex gap-20">
+          <div className="flex gap-20" title={summaryError ? "Couldn't load the summary" : undefined}>
             <div className="flex flex-col gap-1">
-              <Label className="text-md font-ndot">{holdingsData.length}</Label>
+              <Label className="text-md font-ndot">{positions ? positions.length : positionsLoading ? "…" : "—"}</Label>
               <Label className="text-muted-foreground">Companies</Label>
             </div>
+            {/* Balance is the cash left over; Committed is what the held shares cost in CAD when bought. */}
             <div className="flex flex-col gap-1">
-              <Label className="text-md font-ndot">$8,000</Label>
+              <Label className="text-md font-ndot">{summary ? fmtDollars(summary.cash_cad) : summaryLoading ? "…" : "—"}</Label>
               <Label className="text-muted-foreground">Balance</Label>
             </div>
             <div className="flex flex-col gap-1">
-              <Label className="text-md font-ndot">$5,000</Label>
+              <Label className="text-md font-ndot">{summary ? fmtDollars(summary.invested_cad) : summaryLoading ? "…" : "—"}</Label>
               <Label className="text-muted-foreground">Committed</Label>
             </div>
           </div>
@@ -236,7 +276,7 @@ export default function PortfolioPage() {
         </div>
         {/* Overview Right Section */}
         <div className="flex-1">
-          <PortfolioLineChart key={selectedRange} data={rangeData} investedAmount={totalInvested} onHoverChange={setHoveredPoint} />
+          <PortfolioLineChart key={selectedRange} data={rangeData} />
           <div className="flex justify-end gap-1">
             {DATE_RANGES.map((range) => (
               <Button
@@ -334,57 +374,88 @@ export default function PortfolioPage() {
       <div className="flex gap-4 w-full">
         {/* Holdings Tile */}
         <div className="bg-card rounded-lg p-4 flex-1 flex flex-col gap-4">
-          <div className="flex h-5 items-center">
+          <div className="flex h-5 items-center justify-between">
             <Label className="text-lg font-medium">Holdings</Label>
+            {/* A failed poll keeps the last data on screen (SWR); say so, or old numbers look current. */}
+            {positionsError && positions && (
+              <Label className="text-[12px] font-normal text-muted-foreground">
+                Couldn&apos;t refresh. Showing the last data.
+              </Label>
+            )}
           </div>
           <div className="rounded-[12px] bg-muted/50 divide-y divide-[#383939]">
-            {holdingsData.map((position) => {
-              const changePercent = ((position.currentPrice - position.avgPrice) / position.avgPrice) * 100;
-              const changeDollar = (position.currentPrice - position.avgPrice) * position.shares;
-              const isZero = changePercent === 0;
-              const isUp = changePercent > 0;
+            {positionsError && !positions ? (
+              <div className="flex flex-col items-center justify-center gap-1 p-8 text-center">
+                <Label className="text-[14px] font-normal">Couldn&apos;t load holdings</Label>
+                <Label className="text-[12px] font-normal text-muted-foreground">
+                  {positionsError instanceof ApiError ? positionsError.detail : "The server didn't answer. It will retry shortly."}
+                </Label>
+              </div>
+            ) : positionsLoading ? (
+              <div className="flex items-center justify-center p-8">
+                <Spinner className="size-5 text-muted-foreground" />
+              </div>
+            ) : positions?.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-1 p-8 text-center">
+                <Label className="text-[14px] font-normal">No holdings yet</Label>
+                <Label className="text-[12px] font-normal text-muted-foreground">
+                  Import your Wealthsimple activities export (CSV) with the upload button in the top bar.
+                </Label>
+              </div>
+            ) : (
+              positions?.map((position) => {
+              const { native_currency: currency, market_value: value } = position;
+              const gain = position.unrealized_gain;
+              const pct = position.unrealized_gain_pct;
+              const isZero = gain === 0;
+              const isUp = gain !== null && gain > 0;
               const sign = isZero ? "" : isUp ? "+" : "-";
-              const changeColor = isZero ? "var(--status-neutral)" : isUp ? "var(--status-success)" : "var(--status-error)";
+              const changeColor = gain === null || isZero ? "var(--status-neutral)" : isUp ? "var(--status-success)" : "var(--status-error)";
+              // pct is a fraction, and null for a zero-cost holding (then only the dollar gain shows)
+              const dollars = gain === null ? "" : `$${Math.abs(gain).toFixed(2)}`;
+              const gainText = gain === null ? "—" : pct === null ? `${sign}${dollars}` : `${sign}${Math.abs(pct * 100).toFixed(2)}% (${dollars})`;
+              const shares = fmtShares(position.shares);
+              const note = priceNote(position.price_status, position.price_as_of);
               return (
                 <Link
-                  key={position.symbol}
+                  key={`${position.symbol}-${currency}`}
                   href={`/market/${encodeURIComponent(position.symbol)}`}
                   className="flex min-h-[60px] items-stretch gap-3 p-3"
                 >
-                  <div className="h-[30px] w-[30px] self-center rounded bg-white" />
+                  <TickerLogo symbol={position.symbol} currency={currency} />
                   <div className="flex flex-col flex-1 justify-between py-1">
                     <Label className="h-5 items-center text-[14px] font-normal">{position.symbol}</Label>
                     <div className="flex h-4 items-stretch gap-1.5">
-                      <Label className="items-center text-[12px] font-normal text-brand-500">{position.shares} Shares</Label>
-                      <Separator orientation="vertical" />
                       <Label className="items-center text-[12px] font-normal text-brand-500">
-                        {new Date(position.purchasedAt).toLocaleDateString("en-US", {
-                          month: "short",
-                          year: "numeric",
-                        })}
+                        {shares} {shares === "1" ? "Share" : "Shares"}
                       </Label>
+                      <Separator orientation="vertical" />
+                      <Label className="items-center text-[12px] font-normal text-brand-500">Last traded {fmtMonth(position.last_traded_at)}</Label>
                     </div>
                   </div>
 
-                  <Badge variant="outline" className="self-center text-[10px] px-1.5 py-0">
-                    {position.assetType}
-                  </Badge>
-                  <div className="flex flex-col items-end justify-center min-w-[100px]">
+                  {position.asset_type && (
+                    <Badge variant="outline" className="self-center text-[10px] px-1.5 py-0">
+                      {position.asset_type}
+                    </Badge>
+                  )}
+                  <div
+                    title={note}
+                    className={`flex flex-col items-end justify-center min-w-[100px]${note ? " cursor-help" : ""}${
+                      position.price_status === "stale" ? " opacity-60" : ""
+                    }`}
+                  >
                     <Label className="h-5 items-center whitespace-nowrap text-[14px] font-normal">
-                      {position.currentPrice.toLocaleString("en-US", {
-                        style: "currency",
-                        currency: position.currency,
-                        currencyDisplay: "code",
-                      })}
+                      {value === null ? "—" : fmtMoney(value, currency)}
                     </Label>
                     <Label className="h-4 items-center whitespace-nowrap text-[12px] font-normal" style={{ color: changeColor }}>
-                      {sign}
-                      {Math.abs(changePercent).toFixed(2)}% (${Math.abs(changeDollar).toFixed(2)})
+                      {gainText}
                     </Label>
                   </div>
                 </Link>
               );
-            })}
+              })
+            )}
           </div>
         </div>
         {/* Watchlist Tile */}

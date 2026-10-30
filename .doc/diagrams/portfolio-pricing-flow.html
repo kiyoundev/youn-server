@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portfolio Pricing Flow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1100px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data flow · Diagram Design</p>
+    <h1>Portfolio pricing — positions stay fixed, only the quotes move</h1>
+
+    <svg viewBox="0 0 880 624" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="portfolio-pricing-flow-title portfolio-pricing-flow-desc">
+      <title id="portfolio-pricing-flow-title">Portfolio pricing — fixed ledger path vs moving quote path</title>
+      <desc id="portfolio-pricing-flow-desc">Data flow showing two paths behind the portfolio page: a fixed path where a CSV import writes the activities table and a ledger cache holds the computed holdings until the next import or reset, and a moving path where the page polls the positions and summary routes every 30 seconds, the routes ask a PriceService with a 15-second shared quote cache, and that service gets USD quotes from Finnhub and CAD quotes from yfinance. Beside the quotes, the positions route also asks an AssetTypeService, which looks up each holding's type (Stock, ETF or CDR) on yfinance once and keeps it.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- ============ ZONES ============ -->
+      <rect x="24" y="64" width="832" height="144" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="48" y="84" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">FIXED · CHANGES ONLY ON CSV IMPORT OR RESET</text>
+
+      <rect x="24" y="224" width="832" height="312" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="48" y="244" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">MOVING · RECOMPUTED ON EVERY POLL</text>
+
+      <!-- ============ ARROWS (drawn before boxes) ============ -->
+
+      <!-- 1: CSV import -> activities -->
+      <path d="M208,140 H256" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="210" y="122" width="44" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="232" y="131" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">INSERT</text>
+
+      <!-- 2: activities -> ledger cache -->
+      <path d="M416,140 H464" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="418" y="122" width="44" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="440" y="131" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COMPUTE</text>
+
+      <!-- 3: ledger cache -> routes (crosses zone boundary) -->
+      <path d="M544,176 V256" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="554" y="208" width="52" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="580" y="217" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">HOLDINGS</text>
+
+      <!-- 4: page -> routes (poll) -->
+      <path d="M208,276 H464" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="306" y="258" width="60" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="336" y="267" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">POLL · 30S</text>
+
+      <!-- 5: routes -> page (response, dashed) -->
+      <path d="M464,308 H208" fill="none" stroke="#2e5aa8" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-link)"/>
+      <rect x="320" y="290" width="32" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="336" y="299" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">JSON</text>
+
+      <!-- 6: routes -> PriceService (focal) -->
+      <path d="M624,292 H672" fill="none" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="626" y="274" width="44" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="648" y="283" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">QUOTES</text>
+
+      <!-- 7: PriceService -> Finnhub (USD) -->
+      <path d="M725,328 V352 Q725,360 717,360 H552 Q544,360 544,368 V392" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="618" y="342" width="36" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="351" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">USD</text>
+
+      <!-- 8: PriceService -> yfinance (CAD) -->
+      <path d="M779,328 V392" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="787" y="352" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="815" y="361" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CAD · .TO</text>
+
+      <!-- ============ NODES ============ -->
+
+      <!-- CSV import (input) -->
+      <rect x="48" y="104" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="48" y="104" width="160" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="56" y="110" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="70" y="119" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">IN</text>
+      <text x="128" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">CSV import</text>
+      <text x="128" y="154" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Wealthsimple export</text>
+      <text x="128" y="166" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">POST /activities/import</text>
+
+      <!-- activities (store) -->
+      <rect x="256" y="104" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="256" y="104" width="160" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="264" y="110" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="278" y="119" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="336" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">activities</text>
+      <text x="336" y="154" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Postgres ledger</text>
+      <text x="336" y="166" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one row per CSV line</text>
+
+      <!-- Ledger cache (store) -->
+      <rect x="464" y="104" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="464" y="104" width="160" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="472" y="110" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="486" y="119" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MEM</text>
+      <text x="544" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Ledger cache</text>
+      <text x="544" y="154" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">compute_positions · merge</text>
+      <text x="544" y="166" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">cleared on import / reset</text>
+
+      <!-- Portfolio page (input / browser) -->
+      <rect x="48" y="256" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="48" y="256" width="160" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="56" y="262" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="70" y="271" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WEB</text>
+      <rect x="172" y="262" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="186" y="271" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">30S</text>
+      <text x="128" y="292" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Portfolio page</text>
+      <text x="128" y="306" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">/portfolio · SWR poll</text>
+      <text x="128" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">no SSE, no WebSocket</text>
+
+      <!-- Routes (backend) -->
+      <rect x="464" y="256" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="464" y="256" width="160" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="472" y="262" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="486" y="271" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="544" y="292" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Positions + summary</text>
+      <text x="544" y="306" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">/positions · /portfolio/summary</text>
+      <text x="544" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">value · gain · balance</text>
+
+      <!-- PriceService (focal) -->
+      <rect x="672" y="256" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="672" y="256" width="160" height="72" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <rect x="680" y="262" width="28" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="694" y="271" fill="rgba(235,108,54,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SVC</text>
+      <rect x="764" y="262" width="60" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="794" y="271" fill="rgba(235,108,54,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">15S CACHE</text>
+      <text x="752" y="292" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PriceService</text>
+      <text x="752" y="306" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">route by native currency</text>
+      <text x="752" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">stale fallback on error</text>
+
+      <!-- Finnhub (external) -->
+      <rect x="464" y="392" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="464" y="392" width="160" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="472" y="398" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="486" y="407" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="544" y="428" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Finnhub REST</text>
+      <text x="544" y="442" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">USD-native · AVGO</text>
+      <text x="544" y="454" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">403 on .TO symbols</text>
+
+      <!-- yfinance (external) -->
+      <rect x="672" y="392" width="160" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="672" y="392" width="160" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="680" y="398" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="694" y="407" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="752" y="428" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">yfinance</text>
+      <text x="752" y="442" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CAD-native · AVGO.TO</text>
+      <text x="752" y="454" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">currency must match</text>
+
+      <!-- ============ CALLOUTS (editorial) ============ -->
+      <text x="48" y="404" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TWO CLOCKS</text>
+      <text x="48" y="420" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Page polls every 30s. Quotes stay cached for 15s.</text>
+      <text x="48" y="436" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Both routes share one cache: one upstream call per pair.</text>
+
+      <text x="48" y="456" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">WHEN A QUOTE FAILS</text>
+      <text x="48" y="472" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Upstream error: last known price, flagged stale.</text>
+      <text x="48" y="488" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Wrong currency: price withheld, never shown.</text>
+
+      <text x="48" y="508" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">ASSET TYPE · /POSITIONS ONLY</text>
+      <text x="48" y="524" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">One more yfinance lookup per holding, beside the quotes: Stock, ETF or CDR (a CAD ETF named CDR).</text>
+      <text x="48" y="540" fill="#4f5d75" font-size="12" font-style="italic" font-family="'Instrument Serif', serif">Kept for the process; a failure is retried after 5 min and never changes a price.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="32" y1="560" x2="848" y2="560" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="576" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="32" y="588" width="12" height="12" rx="3" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="52" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">PRICE SOURCE OF TRUTH</text>
+
+      <rect x="216" y="588" width="12" height="12" rx="3" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="236" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">USER / BROWSER</text>
+
+      <rect x="352" y="588" width="12" height="12" rx="3" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="372" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">STORE</text>
+
+      <rect x="432" y="588" width="12" height="12" rx="3" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="452" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">EXTERNAL</text>
+
+      <line x1="540" y1="594" x2="564" y2="594" stroke="#2e5aa8" stroke-width="1.2"/>
+      <text x="572" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">HTTP / API CALL</text>
+
+      <line x1="696" y1="594" x2="720" y2="594" stroke="#2e5aa8" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="728" y="597" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">RESPONSE</text>
+    </svg>
+  </div>
+</body>
+</html>

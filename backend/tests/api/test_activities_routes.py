@@ -8,8 +8,9 @@ import pytest
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
-from app.api import activities
+from app.api import activities, positions
 from app.core.db import get_db
+from app.services.ledger_cache import LedgerCache
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "wealthsimple"
 
@@ -64,6 +65,12 @@ def _mock_db(side_effect: list) -> MagicMock:
     return db
 
 
+def _ledger() -> MagicMock:
+    """Stand-in for the LedgerCache the routes get through Depends (#19). A
+    direct call to a handler skips Depends, so the cache has to be passed in."""
+    return MagicMock(spec=LedgerCache)
+
+
 def _csv(*rows: str) -> bytes:
     header = (
         "effective_date,effective_time,settlement_date,account_id,account_type,"
@@ -81,7 +88,7 @@ async def test_import_first_time_single_account_succeeds():
     # since plan.delete_from is None).
     db = _mock_db(side_effect=[_min_max_result(None, None)])
 
-    result = await activities.import_activities(file=_upload(content), db=db)
+    result = await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert len(result.accounts) == 1
     account = result.accounts[0]
@@ -123,7 +130,7 @@ async def test_import_message_dates_are_toronto_dates_even_when_newest_row_comes
         ]
     )
 
-    result = await activities.import_activities(file=_upload(content), db=db)
+    result = await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     message = result.accounts[0].message
     assert message == "Ledger runs 2026-06-01 \u2192 2026-07-01; next time export from 2026-06-24 or earlier."
@@ -135,7 +142,7 @@ async def test_import_rejects_unknown_activity_type_before_any_db_write():
     db = _mock_db(side_effect=[])  # parse_export fails before any db.execute
 
     with pytest.raises(HTTPException) as exc:
-        await activities.import_activities(file=_upload(content), db=db)
+        await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert exc.value.status_code == 422
     assert exc.value.detail["code"] == "unknown_activity_type"
@@ -160,7 +167,7 @@ async def test_import_rejects_coverage_gap_before_any_db_write():
     db = _mock_db(side_effect=[_min_max_result(*stored)])  # plan_import raises before the kept query
 
     with pytest.raises(HTTPException) as exc:
-        await activities.import_activities(file=_upload(content), db=db)
+        await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert exc.value.status_code == 422
     assert exc.value.detail["code"] == "coverage_gap"
@@ -180,7 +187,7 @@ async def test_import_rejects_negative_cash_before_writing():
     db = _mock_db(side_effect=[_min_max_result(None, None)])
 
     with pytest.raises(HTTPException) as exc:
-        await activities.import_activities(file=_upload(content), db=db)
+        await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert exc.value.status_code == 422
     assert exc.value.detail["code"] == "negative_cash"
@@ -204,7 +211,7 @@ async def test_import_handles_multiple_accounts_in_one_file():
         ]
     )
 
-    result = await activities.import_activities(file=_upload(content), db=db)
+    result = await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     ids = {a.account_id for a in result.accounts}
     assert ids == {"ACCT-A", "ACCT-B"}
@@ -216,7 +223,7 @@ async def test_import_handles_multiple_accounts_in_one_file():
 async def test_reset_ledger_deletes_and_returns_count():
     db = _mock_db(side_effect=[_delete_result(4)])
 
-    result = await activities.reset_ledger(account_id="TEST-ACCT-0001", db=db)
+    result = await activities.reset_ledger(account_id="TEST-ACCT-0001", db=db, ledger=_ledger())
 
     assert result.account_id == "TEST-ACCT-0001"
     assert result.deleted == 4
@@ -252,7 +259,7 @@ async def test_import_refreshes_the_tail_when_the_file_reaches_the_newest_row():
     )
 
     result = await activities.import_activities(
-        file=_upload(_csv(_ROW_JAN_1, _ROW_JAN_15, _ROW_JAN_20)), db=db
+        file=_upload(_csv(_ROW_JAN_1, _ROW_JAN_15, _ROW_JAN_20)), db=db, ledger=_ledger()
     )
 
     account = result.accounts[0]
@@ -273,7 +280,7 @@ async def test_import_of_a_file_ending_before_the_newest_row_deletes_nothing():
         ]
     )
 
-    result = await activities.import_activities(file=_upload(_csv(_ROW_JAN_1, _ROW_JAN_16)), db=db)
+    result = await activities.import_activities(file=_upload(_csv(_ROW_JAN_1, _ROW_JAN_16)), db=db, ledger=_ledger())
 
     account = result.accounts[0]
     assert (account.added, account.replaced, account.skipped) == (0, 0, 2)
@@ -300,7 +307,7 @@ async def test_import_is_all_or_nothing_across_accounts():
     )
 
     with pytest.raises(HTTPException) as exc:
-        await activities.import_activities(file=_upload(content), db=db)
+        await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert exc.value.detail["code"] == "negative_cash"
     db.add_all.assert_called_once()  # A really was staged...
@@ -315,14 +322,19 @@ async def test_import_is_all_or_nothing_across_accounts():
 # every one of them while returning a bare 500 over real HTTP.
 
 
-def _client(db: MagicMock) -> TestClient:
+def _client(db: MagicMock, ledger: MagicMock | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(activities.router)
+    ledger = ledger if ledger is not None else _ledger()
 
     async def _override():
         yield db
 
     app.dependency_overrides[get_db] = _override
+    # No lifespan here, so app.state.ledger_cache doesn't exist; FastAPI
+    # resolves this dependency before the handler runs, even for a request
+    # that is about to be rejected.
+    app.dependency_overrides[positions.get_ledger_cache] = lambda: ledger
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -385,7 +397,7 @@ async def test_import_takes_the_account_lock_before_reading_anything():
     content = (FIXTURES / "base.csv").read_bytes()
     db = _mock_db(side_effect=[_min_max_result(None, None)])
 
-    await activities.import_activities(file=_upload(content), db=db)
+    await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert "pg_advisory_xact_lock" in db.statements[0][0]  # first statement, ahead of the range query
     assert _lock_accounts(db) == ["TEST-ACCT-0001"]
@@ -407,7 +419,7 @@ async def test_multi_account_import_locks_every_account_up_front_in_sorted_order
         ]
     )
 
-    await activities.import_activities(file=_upload(content), db=db)
+    await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     assert _lock_accounts(db) == ["ACCT-A", "ACCT-B"]
     first_data_query = next(i for i, (sql, _) in enumerate(db.statements) if "pg_advisory_xact_lock" not in sql)
@@ -419,7 +431,7 @@ async def test_a_rejected_file_never_takes_a_lock():
     db = _mock_db(side_effect=[])
 
     with pytest.raises(HTTPException):
-        await activities.import_activities(file=_upload((FIXTURES / "unknown_type.csv").read_bytes()), db=db)
+        await activities.import_activities(file=_upload((FIXTURES / "unknown_type.csv").read_bytes()), db=db, ledger=_ledger())
 
     assert db.statements == []  # parse failed first — nothing touched the DB
 
@@ -428,7 +440,7 @@ async def test_a_rejected_file_never_takes_a_lock():
 async def test_reset_takes_the_same_account_lock_before_deleting():
     db = _mock_db(side_effect=[_delete_result(1)])
 
-    await activities.reset_ledger(account_id="ACCT-A", db=db)
+    await activities.reset_ledger(account_id="ACCT-A", db=db, ledger=_ledger())
 
     assert "pg_advisory_xact_lock" in db.statements[0][0]
     assert _lock_accounts(db) == ["ACCT-A"]
@@ -460,6 +472,104 @@ def test_an_upload_exactly_at_the_cap_is_still_read():
     assert response.json()["detail"]["code"] != "file_too_large"
 
 
+# ---- LedgerCache invalidation (#19) ----
+# The cache holds a copy of what the ledger adds up to. Only these two routes
+# change the ledger, so only they can say the copy is stale. It has to be after
+# the commit: a read that starts between invalidate() and the commit loads the
+# old rows and stores them, and nothing clears them again.
+
+_NEGATIVE_CASH = _csv(
+    "2026-01-01,09:00:00,,A,TFSA,Trade,BUY,"
+    "\"X - Test: Bought 1.0000 shares\",LONG,X,Test,CAD,1.0000,100.00,0.00,-100.00",
+)
+
+
+def _record_order(db: MagicMock, ledger: MagicMock) -> list[str]:
+    """The order in which the route committed and invalidated."""
+    order: list[str] = []
+    db.commit.side_effect = lambda: order.append("commit")
+    ledger.invalidate.side_effect = lambda: order.append("invalidate")
+    return order
+
+
+@pytest.mark.asyncio
+async def test_import_invalidates_the_ledger_cache_after_the_commit():
+    db = _mock_db(side_effect=[_min_max_result(None, None)])
+    ledger = _ledger()
+    order = _record_order(db, ledger)
+
+    await activities.import_activities(file=_upload((FIXTURES / "base.csv").read_bytes()), db=db, ledger=ledger)
+
+    assert order == ["commit", "invalidate"]
+
+
+@pytest.mark.asyncio
+async def test_reset_invalidates_the_ledger_cache_after_the_commit():
+    db = _mock_db(side_effect=[_delete_result(4)])
+    ledger = _ledger()
+    order = _record_order(db, ledger)
+
+    await activities.reset_ledger(account_id="ACCT-A", db=db, ledger=ledger)
+
+    assert order == ["commit", "invalidate"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [(FIXTURES / "unknown_type.csv").read_bytes(), _NEGATIVE_CASH],
+    ids=["rejected_while_parsing", "rejected_by_the_integrity_check"],
+)
+async def test_a_rejected_import_does_not_invalidate_the_ledger_cache(content):
+    # Rolled back, so the ledger is exactly what the cache already holds.
+    db = _mock_db(side_effect=[_min_max_result(None, None)])
+    ledger = _ledger()
+
+    with pytest.raises(HTTPException) as exc:
+        await activities.import_activities(file=_upload(content), db=db, ledger=ledger)
+
+    assert exc.value.status_code == 422
+    ledger.invalidate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_commit_does_not_invalidate_the_import():
+    db = _mock_db(side_effect=[_min_max_result(None, None)])
+    db.commit.side_effect = RuntimeError("connection lost")
+    ledger = _ledger()
+
+    with pytest.raises(RuntimeError):
+        await activities.import_activities(file=_upload((FIXTURES / "base.csv").read_bytes()), db=db, ledger=ledger)
+
+    ledger.invalidate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_commit_does_not_invalidate_the_reset():
+    db = _mock_db(side_effect=[_delete_result(1)])
+    db.commit.side_effect = RuntimeError("connection lost")
+    ledger = _ledger()
+
+    with pytest.raises(RuntimeError):
+        await activities.reset_ledger(account_id="ACCT-A", db=db, ledger=ledger)
+
+    ledger.invalidate.assert_not_called()
+
+
+def test_both_routes_invalidate_the_cache_they_are_given_through_dependencies():
+    # Through the real request path: proves the routes ask for the cache via
+    # positions.get_ledger_cache, so the one on app.state is the one cleared.
+    db = _mock_db(side_effect=[_min_max_result(None, None), _delete_result(2)])
+    ledger = _ledger()
+    client = _client(db, ledger)
+
+    assert _post(client, (FIXTURES / "base.csv").read_bytes()).status_code == 200
+    assert ledger.invalidate.call_count == 1
+
+    assert client.delete("/api/activities", params={"account_id": "TEST-ACCT-0001"}).status_code == 200
+    assert ledger.invalidate.call_count == 2
+
+
 # ---- contracts that ran but weren't asserted ----
 
 
@@ -470,7 +580,7 @@ async def test_import_response_carries_the_positions_warning():
     content = _csv("2026-01-01,09:00:00,,A,TFSA,Dividend,-,\"X - Test: Cash dividend\",,X,Test,CAD,5.00,,0.00,5.00")
     db = _mock_db(side_effect=[_min_max_result(None, None)])
 
-    result = await activities.import_activities(file=_upload(content), db=db)
+    result = await activities.import_activities(file=_upload(content), db=db, ledger=_ledger())
 
     warnings = result.accounts[0].warnings
     assert len(warnings) == 1

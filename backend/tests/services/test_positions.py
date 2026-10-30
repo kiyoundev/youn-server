@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -142,6 +143,37 @@ def test_rebuy_after_full_sell_starts_a_clean_cost_basis():
     ]
     holdings, _, _ = compute_positions(rows)
     assert holdings[0].avg_cost_cad == pytest.approx(50.0)
+
+
+def test_last_traded_at_is_the_latest_trade_whatever_the_input_order():
+    rows = [_deposit(1), _buy(2, "X", 1.0, 10.0), _buy(9, "X", 1.0, 10.0), _buy(5, "X", 1.0, 10.0)]
+    (holding,) = compute_positions(rows[::-1])[0]
+    assert holding.last_traded_at == datetime(2026, 1, 9, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_a_partial_sell_counts_as_the_last_trade():
+    rows = [_deposit(1), _buy(2, "X", 10.0, 10.0), _sell(5, "X", 4.0, 10.0)]
+    (holding,) = compute_positions(rows)[0]
+    assert holding.shares == pytest.approx(6.0)
+    assert holding.last_traded_at == datetime(2026, 1, 5, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_last_traded_at_after_a_rebuy_is_the_rebuy_not_the_old_trade():
+    rows = [_deposit(1), _buy(2, "X", 10.0, 10.0), _sell(3, "X", 10.0, 10.0), _buy(7, "X", 5.0, 10.0)]
+    (holding,) = compute_positions(rows)[0]
+    assert holding.last_traded_at == datetime(2026, 1, 7, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_a_dividend_does_not_move_last_traded_at():
+    dividend = _row(20, activity_type="Dividend", activity_sub_type="-", symbol="X", net_cash_amount=6.14)
+    (holding,) = compute_positions([_deposit(1), _buy(2, "X", 1.0, 10.0), dividend])[0]
+    assert holding.last_traded_at == datetime(2026, 1, 2, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_each_account_keeps_its_own_last_traded_at():
+    rows = [_deposit(1), _buy(2, "X", 1.0, 10.0), replace(_buy(8, "X", 1.0, 10.0), account_id="B")]
+    by_account = {h.account_id: h.last_traded_at.day for h in compute_positions(rows)[0]}
+    assert by_account == {"A": 2, "B": 8}
 
 
 def test_warning_when_first_row_is_not_a_funding_deposit():

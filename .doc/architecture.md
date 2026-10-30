@@ -77,7 +77,7 @@ Every backend call in the diagram above (`GET /api/proxy/*`) routes through `fro
 | ORM | SQLAlchemy + Alembic | Async-compatible via asyncpg, migration management |
 | Scheduler | APScheduler (in-process) | No Redis/Celery needed for personal use |
 | Scraping | patchright + httpx + BeautifulSoup4 | patchright for JS-rendered/bot-blocked; httpx+BS4 for SSR, Next.js `__NEXT_DATA__`, Shopify JSON API |
-| Stock data | Finnhub WebSocket (primary) + Finnhub REST (fallback/validation/metadata/news) + yfinance (history + trending + market details) | WebSocket for real-time threshold detection; Finnhub REST for degraded mode, ticker validation, company profile, and news; yfinance for dashboard price history charts, trending/popular asset screening, and per-ticker market details (bid/ask/52-week/financials/dividends — none of this is on Finnhub's free tier) |
+| Stock data | Finnhub WebSocket (primary) + Finnhub REST (fallback/validation/metadata/news) + yfinance (history + trending + market details) | WebSocket for real-time threshold detection; Finnhub REST for degraded mode, ticker validation, company profile, and news; yfinance for dashboard price history charts, current prices and asset type of CAD-native holdings, trending/popular asset screening, and per-ticker market details (bid/ask/52-week/financials/dividends — none of this is on Finnhub's free tier) |
 | Push | Pushover API | Covers iPhone, iPad, Mac, Apple Watch — no Apple Dev account needed |
 | Networking | Tailscale | Secure peer-to-peer VPN; Pi reachable from any device off-LAN |
 | Deployment | Docker Compose (ARM64) | Containerized, auto-restart, Pi native |
@@ -280,7 +280,21 @@ Connection drops
 
 **Finnhub REST** is used separately for one-off queries — ticker validation on `POST /api/stockalerts` and manual poll trigger. Independent of the WebSocket connection.
 
-**yfinance** is used only for dashboard price history charts (`Ticker.history()`). Never on the real-time path.
+**yfinance** is used for dashboard price history charts (`Ticker.history()`) and, since `#19`, for current prices of CAD-native holdings (`fast_info`, which Finnhub's free tier can't serve for `.TO` symbols) and for every holding's asset type (`quote_type`; a CAD-native ETF named CDR is a CDR, because Yahoo files CDRs as ETF). Never on the real-time alert path.
+
+### Stock data source routing
+
+Which source and transport serves which use case. Holdings prices (`#19`) route by the holding's **native currency**, never by symbol — a CDR like `AVGO` is CAD-native and must not be priced from the US listing. Finnhub's free key returns 403 for `.TO` symbols, so CAD-native holdings go through yfinance. Source and transport diagram: `.doc/diagrams/stock-data-sources-flow.html`. Holdings pricing flow (ledger cache, polling, 15s quote cache): `.doc/diagrams/portfolio-pricing-flow.html`. Ledger cache lifecycle (lazy load, invalidate after import/reset commit): `.doc/diagrams/ledger-cache-lifecycle-sequence.html`. What the `/portfolio` page requests and which caches and tables each request touches: `.doc/diagrams/portfolio-page-flow-sequence.html`.
+
+| Use case | Source | Transport | Where |
+|----------|--------|-----------|-------|
+| Stock-alert threshold detection (US) | Finnhub | WebSocket | `FinnhubClient` in `stocks.py` |
+| Holdings price, USD-native | Finnhub | REST, 15s cache, 30s poll | `prices.py` (`#19`) |
+| Holdings price, CAD-native | yfinance | Library call on a worker thread, same cache | `prices.py` (`#19`) |
+| Holdings asset type (Stock / ETF / CDR) | yfinance | `fast_info` plus one `.info` call for CAD-native ETFs, on a worker thread; kept for the process, a failure retried after 5 min | `asset_types.py` (`#19`) |
+| Holding logo | Wealthsimple static host | `<img>` in the browser, no backend call; exchange tried in order (`xtse` for CAD, `xnas` then `xnys` for USD) | `ticker-logo.tsx` (`#19`) |
+| Price history charts | yfinance | Library call | `get_price_history` |
+| Live ticks on the page | Not built | SSE from the alert WebSocket | `#37` (optional) |
 
 > **Design decision — WS subscription is `StockAlert`-only, never extended to `Position`/Holdings (revised 2026-08-10, `#19`).** `#19`'s original design (2026-08-02) had every `Position` call `FinnhubClient.subscribe()` on creation, refcounted against `StockAlert` so a ticker held by both wouldn't get unsubscribed prematurely. Reversed: the websocket is one connection shared across the whole app, capped at ~50 symbols — not scoped per-holding. A portfolio of ordinary size (20-30+ positions) risked exhausting that budget on its own, and unlike an alert (explicit, user-managed, stays small) a holding is rarely removed once bought — the subscribed count would only ratchet upward over time, with no natural release valve, eventually starving the feature the cap actually needs to protect (alerting must work even when nobody has the app open; just displaying a held position's price only needs to be fresh while that page is open). REST `get_price()` + the frontend's existing SWR poll already serves "keep this price reasonably fresh while I'm looking at it," and that exact path is needed regardless for Popular Assets and ad-hoc ticker search (never holdings, never alertable ahead of time) — so un-alerted Holdings positions reuse that same path rather than getting a second, parallel subscription mechanism. Net effect: a ticker is WS-subscribed if and only if it has an active `StockAlert`, independent of which page/tile displays it (Watchlist, Holdings, or otherwise) — see `#37`'s scope note in `.doc/issues.md` for how this bounds that issue's SSE relay too.
 

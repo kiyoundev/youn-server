@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.main import lifespan
+from app.services.asset_types import AssetTypeService
+from app.services.ledger_cache import LedgerCache
+from app.services.prices import PriceService
 
 
 class _AsyncCM:
@@ -49,6 +52,12 @@ async def test_lifespan_starts_and_stops_scheduler_and_finnhub() -> None:
             assert app.state.finnhub is finnhub
             assert app.state.scheduler is scheduler
             assert isinstance(app.state.dispatch_task, asyncio.Task)
+
+            # Issue #19 — the shared objects the portfolio routes read through
+            # get_price_service / get_ledger_cache / get_asset_type_service
+            assert isinstance(app.state.prices, PriceService)
+            assert isinstance(app.state.ledger_cache, LedgerCache)
+            assert isinstance(app.state.asset_types, AssetTypeService)
 
             finnhub_cls.assert_called_once_with(event_queue=app.state.event_queue)
             scheduler_cls.assert_called_once()

@@ -9,13 +9,16 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api import activities, analysis, events, fx, health, items, poll, stock_alerts, system
+from app.api import activities, analysis, events, fx, health, items, poll, positions, stock_alerts, system
 from app.consumers import dispatcher
 from app.core.auth import verify_api_key
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.models.event import Event
 from app.scheduler.jobs import poll_prices, refresh_fx_rates_job
+from app.services.asset_types import AssetTypeService
+from app.services.ledger_cache import LedgerCache
+from app.services.prices import PriceService
 from app.services.scraper.patchright_scraper import PatchrightScraper
 from app.services.stocks import FinnhubClient
 from app.services.synology import synology_client
@@ -30,6 +33,10 @@ _TZ = ZoneInfo("America/Toronto")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Runs once at startup, before any request is served
+    """
+
     queue: asyncio.Queue[int] = asyncio.Queue()
 
     # crash recovery: reload unprocessed events from the previous run
@@ -43,6 +50,8 @@ async def lifespan(app: FastAPI):
 
     finnhub = FinnhubClient(event_queue=queue)
     await finnhub.start()
+
+    price_service = PriceService(finnhub)
 
     scheduler = AsyncIOScheduler(timezone=_TZ)
     scheduler.add_job(
@@ -67,6 +76,9 @@ async def lifespan(app: FastAPI):
 
     app.state.event_queue = queue
     app.state.finnhub = finnhub
+    app.state.prices = price_service
+    app.state.asset_types = AssetTypeService()
+    app.state.ledger_cache = LedgerCache()
     app.state.scheduler = scheduler
     app.state.dispatch_task = dispatch_task
 
@@ -99,3 +111,4 @@ app.include_router(analysis.router, dependencies=[Depends(verify_api_key)])
 app.include_router(system.router, dependencies=[Depends(verify_api_key)])
 app.include_router(fx.router, dependencies=[Depends(verify_api_key)])
 app.include_router(activities.router, dependencies=[Depends(verify_api_key)])
+app.include_router(positions.router, dependencies=[Depends(verify_api_key)])

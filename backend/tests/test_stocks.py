@@ -364,6 +364,36 @@ async def test_get_price_success(client: FinnhubClient) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_get_price_sends_the_token_as_a_header_not_in_the_url(client: FinnhubClient) -> None:
+    route = respx.get("https://finnhub.io/api/v1/quote").mock(
+        return_value=httpx.Response(200, json={"c": 321.09})
+    )
+
+    await client.get_price("AAPL")
+
+    request = route.calls.last.request
+    assert request.headers["X-Finnhub-Token"] == "test-key"
+    assert "test-key" not in str(request.url)
+    assert "token" not in request.url.params
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_failed_quote_does_not_log_the_api_key(client: FinnhubClient, caplog) -> None:
+    # raise_for_status puts the request URL in its message and the failure is
+    # logged with exc_info, so a key in the URL would reach the logs
+    respx.get("https://finnhub.io/api/v1/quote").mock(return_value=httpx.Response(429))
+
+    with caplog.at_level("WARNING"):
+        assert await client.get_price("AAPL") is None
+
+    assert "Finnhub REST quote failed" in caplog.text  # the failure was logged
+    assert "429" in caplog.text  # with the exception, so the URL leak path is exercised
+    assert "test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_get_price_returns_none_for_zero_or_missing(client: FinnhubClient) -> None:
     respx.get("https://finnhub.io/api/v1/quote").mock(
         return_value=httpx.Response(200, json={"c": 0})

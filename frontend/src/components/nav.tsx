@@ -5,12 +5,14 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LoaderCircle, Search, Upload } from "lucide-react";
 import { Command as CommandPrimitive } from "cmdk";
+import { mutate } from "swr";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
-import { ApiError } from "@/lib/api/items";
+import { ApiError } from "@/lib/api/api-client";
 import { importActivities } from "@/lib/api/activities";
+import { POSITIONS_KEY, PORTFOLIO_SUMMARY_KEY } from "@/lib/api/positions";
 import { Command, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
-import { holdingsData, stockWatchlistData, mockTickerDirectory } from "@/lib/mock-portfolio";
+import { stockWatchlistData, mockTickerDirectory } from "@/lib/mock-portfolio";
 import { useNavSlotRegistration } from "@/components/nav-slot";
 
 const NAV_LINKS = [
@@ -37,8 +39,7 @@ const Nav = () => {
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const trackedTickers = useMemo(() => {
-    const tickers = [...holdingsData.map((p) => p.symbol), ...stockWatchlistData.map((a) => a.ticker)];
-    return Array.from(new Set(tickers));
+    return Array.from(new Set(stockWatchlistData.map((a) => a.ticker)));
   }, []);
 
   const searchResults = useMemo(() => mockTickerDirectory.filter((entry) => !trackedTickers.includes(entry.symbol)), [trackedTickers]);
@@ -72,6 +73,9 @@ const Nav = () => {
     try {
       await importActivities(file);
       toast.success("Import complete");
+      // The portfolio page polls every 30s; refetch now so new holdings show up at once.
+      mutate(POSITIONS_KEY);
+      mutate(PORTFOLIO_SUMMARY_KEY);
     } catch (err) {
       // persist: true — a rejection tells the user what to fix (e.g. which
       // date to re-export from), so it shouldn't vanish on a timer.

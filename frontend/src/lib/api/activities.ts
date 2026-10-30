@@ -2,7 +2,7 @@
 // multipart proxy route (api/proxy/activities/import/route.ts), not the JSON
 // catch-all — same reason as there: the backend's X-API-Key must never reach
 // the browser.
-import { ApiError } from "@/lib/api/items";
+import { ApiError, messageFromDetail } from "@/lib/api/api-client";
 
 // Mirrors backend/app/schemas/activity.py.
 export interface AccountImportResult {
@@ -17,21 +17,6 @@ export interface AccountImportResult {
 
 export interface ImportResult {
   accounts: AccountImportResult[];
-}
-
-// Error `detail` comes back in several shapes: an object for this route's own
-// rejections ({code, message, ...extras} — LedgerImportError), an array for
-// FastAPI's own validation errors, a plain string from the proxy's
-// misconfiguration 500, or nothing parseable at all. ApiError.detail stays a
-// plain string (every other call site passes it straight to toast.error), so
-// this collapses whichever shape arrived into one readable message.
-function messageFromDetail(detail: unknown, status: number): string {
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail) && typeof detail[0]?.msg === "string") return detail[0].msg;
-  if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
-    return (detail as { message: string }).message;
-  }
-  return `Request failed with status ${status}`;
 }
 
 export async function importActivities(file: File): Promise<ImportResult> {
