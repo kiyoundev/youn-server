@@ -58,6 +58,13 @@ erDiagram
     VARCHAR type
   }
 
+  fx_rate_history {
+    INTEGER id PK
+    VARCHAR currency
+    DATE date
+    FLOAT rate_to_cad
+  }
+
   fx_rates {
     VARCHAR currency PK
     DATETIME fetched_at

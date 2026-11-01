@@ -3758,7 +3758,7 @@ Raised while building #19's Holdings tile, which can have 1 to 20 rows: the page
 
 ---
 
-## [ ] Issue #74 — USD→CAD Rate History (Source for Past Portfolio Values)
+## [x] Issue #74 — USD→CAD Rate History (Source for Past Portfolio Values)
 
 **Type:** feat / AFK
 **Estimate:** ~2h *(rough; to be re-estimated when planned)*
@@ -3786,11 +3786,11 @@ Raised while deciding what #23's per-range change needs. The total on `/portfoli
 
 ### Acceptance criteria
 
-- [ ] A function returns the USD→CAD rate for any past date, and for a date range as a series
-- [ ] A date with no published rate (weekend, holiday) gets the last earlier rate; a date before the first available one is a clear error, not 0 or 1
-- [ ] The chosen source is the same one the live `fx_rates` refresh uses, or the decision to differ is written down with its effect on the chart's last point
-- [ ] A failed upstream call returns an error the caller can handle, never a wrong rate
-- [ ] Tests cover the weekend carry-forward and the failure path (network mocked)
+- [x] A function returns the USD→CAD rate for any past date, and for a date range as a series
+- [x] A date with no published rate (weekend, holiday) gets the last earlier rate; a date before the first available one is a clear error, not 0 or 1
+- [x] The chosen source is the same one the live `fx_rates` refresh uses, or the decision to differ is written down with its effect on the chart's last point
+- [x] A failed upstream call returns an error the caller can handle, never a wrong rate
+- [x] Tests cover the weekend carry-forward and the failure path (network mocked)
 
 
 ---
