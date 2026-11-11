@@ -116,6 +116,17 @@ def test_portfolio_route_correct_api_key_reaches_the_handler(client: TestClient)
     assert response.json() == []
 
 
+def test_portfolio_history_route_missing_api_key_returns_401(client: TestClient) -> None:
+    # 401 and not 404/422 also proves positions.router (and this route) is
+    # registered in main.py: an unregistered route would 404 before auth runs.
+    assert client.get("/api/portfolio/history", params={"range": "1W"}).status_code == 401
+
+
+def test_market_history_route_missing_api_key_returns_401(client: TestClient) -> None:
+    # Same proof for market.router, registered separately from positions.router.
+    assert client.get("/api/market/AAPL/history", params={"range": "1M"}).status_code == 401
+
+
 def test_openapi_declares_the_api_key_scheme(client: TestClient) -> None:
     # This is what gives Swagger UI its Authorize button.
     schema = client.get("/openapi.json").json()

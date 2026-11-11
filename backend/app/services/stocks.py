@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 
 import httpx
 import websockets
@@ -20,6 +22,30 @@ _FINNHUB_WS_URL = "wss://ws.finnhub.io"
 _FINNHUB_REST_URL = "https://finnhub.io/api/v1"
 _RECONNECT_INITIAL = 1.0
 _RECONNECT_MAX = 60.0
+
+DateRange = Literal["1D", "1W", "1M", "3M", "6M", "YTD", "ALL"]
+
+# (yfinance period, interval) per range (schema.md). Interval decides whether
+# get_price_history's returned date keeps a time component (intraday) or not.
+_RANGE_TO_YFINANCE: dict[DateRange, tuple[str, str]] = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "1h"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "6M": ("6mo", "1d"),
+    "YTD": ("ytd", "1d"),
+    "ALL": ("max", "1mo"),
+}
+_INTRADAY_INTERVALS = {"5m", "1h"}
+
+
+def is_intraday_range(range_: DateRange) -> bool:
+    """Whether get_price_history's date field keeps a time component for this
+    range — true for any range whose resolved interval is sub-daily (1D and
+    1W, currently), regardless of whether the range's own output granularity
+    is itself daily (1W's chart points are one-per-day even though its
+    source bars are hourly — portfolio_history.py collapses that gap)."""
+    return _RANGE_TO_YFINANCE[range_][1] in _INTRADAY_INTERVALS
 
 
 @dataclass
@@ -56,9 +82,7 @@ class FinnhubClient:
             return
 
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(StockAlert).where(StockAlert.active == True)
-            )
+            result = await session.execute(select(StockAlert).where(StockAlert.active == True))
             for alert in result.scalars().all():
                 self._add_to_cache(alert)
 
@@ -183,13 +207,11 @@ class FinnhubClient:
             return
         now = datetime.now(timezone.utc)
         for state in alerts:
-            crossed = (
-                (state.direction == "above" and price >= state.target_price)
-                or (state.direction == "below" and price <= state.target_price)
+            crossed = (state.direction == "above" and price >= state.target_price) or (
+                state.direction == "below" and price <= state.target_price
             )
-            recovered = (
-                (state.direction == "above" and price < state.target_price)
-                or (state.direction == "below" and price > state.target_price)
+            recovered = (state.direction == "above" and price < state.target_price) or (
+                state.direction == "below" and price > state.target_price
             )
             if crossed and state.alerted_at is None:
                 try:
@@ -204,9 +226,7 @@ class FinnhubClient:
                 except Exception:
                     _log.error("Failed to clear alerted_at for alert %d", state.id, exc_info=True)
 
-    async def _fire_event(
-        self, state: _AlertState, ticker: str, price: float, now: datetime
-    ) -> None:
+    async def _fire_event(self, state: _AlertState, ticker: str, price: float, now: datetime) -> None:
         payload = {
             "alert_id": state.id,
             "ticker": ticker,
@@ -226,7 +246,11 @@ class FinnhubClient:
         await self._queue.put(event.id)
         _log.info(
             "STOCK_THRESHOLD fired: %s @ %.4f (target %.4f %s, %s)",
-            ticker, price, state.target_price, state.direction, state.alert_type,
+            ticker,
+            price,
+            state.target_price,
+            state.direction,
+            state.alert_type,
         )
 
     async def _clear_alerted_at(self, alert_id: int) -> None:
@@ -258,16 +282,33 @@ class FinnhubClient:
     async def validate_ticker(self, ticker: str) -> bool:
         return await self.get_price(ticker) is not None
 
-    async def get_price_history(self, ticker: str, period: str = "1mo") -> list[dict]:
+    async def get_price_history(self, ticker: str, range_: DateRange, native_currency: Literal["USD", "CAD"] | None = None) -> list[dict]:
+        # local import: prices.py imports FinnhubClient from this module
+        from app.services.prices import yfinance_symbol
+
+        period, interval = _RANGE_TO_YFINANCE[range_]
+        query_symbol = yfinance_symbol(ticker) if native_currency == "CAD" else ticker
+        intraday = interval in _INTRADAY_INTERVALS
         loop = asyncio.get_running_loop()
         try:
+
             def _fetch() -> list[dict]:
-                hist = yf.Ticker(ticker).history(period=period)
-                return [
-                    {"date": str(idx.date()), "close": float(row["Close"])}
-                    for idx, row in hist.iterrows()
-                ]
+                hist = yf.Ticker(query_symbol).history(period=period, interval=interval)
+                points: list[dict] = []
+                for idx, row in hist.iterrows():
+                    close = float(row["Close"])
+                    if not math.isfinite(close):
+                        # yfinance reports NaN for a bar with no actual trade
+                        # (a halted symbol, a holiday gap) — treat it as no
+                        # data for that bar, same as a missing date elsewhere
+                        # in this pipeline, not a real price. Unfiltered, it
+                        # reaches json.dumps(allow_nan=False) downstream and
+                        # 500s the whole response.
+                        continue
+                    points.append({"date": str(idx) if intraday else str(idx.date()), "close": close})
+                return points
+
             return await loop.run_in_executor(None, _fetch)
         except Exception:
-            _log.warning("yfinance history failed for %s %s", ticker, period, exc_info=True)
+            _log.warning("yfinance history failed for %s %s", query_symbol, range_, exc_info=True)
             return []

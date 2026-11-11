@@ -67,7 +67,7 @@ One `Product` (shared name + target price) can have many `Listing` rows (one per
 | `POST` | `/api/stockalerts/{id}/analyze` | Manually trigger TradingAgents for this ticker — 404 if alert not found |
 | `GET` | `/api/stockalerts/{id}/analysis` | List analysis results — query: `?limit=10` — 404 if alert not found |
 
-**Current consumer:** `/portfolio`'s Watchlist tile reads `GET /api/stockalerts` — but the endpoint itself is generic (all alerts, no section/tile scoping), it's just the only thing calling it today. Config data only (target price, direction, `run_analysis`, etc.) — a separate, richer, ticker-scoped (not alert-scoped) market-data endpoint is planned for the detail page and Popular Assets, not yet built: see `.doc/issues.md` `#19` (`Position`/Holdings), `#30` (`/api/market/trending`, Popular Assets), `#31` (`/api/market/{ticker}/details`, works for any ticker regardless of whether it has an alert).
+**Current consumer:** `/portfolio`'s Watchlist tile reads `GET /api/stockalerts` — but the endpoint itself is generic (all alerts, no section/tile scoping), it's just the only thing calling it today. Config data only (target price, direction, `run_analysis`, etc.) — holdings and price-history data live on a separate, ticker-scoped set of routes instead: see "Positions, Portfolio & Market History" below. A richer per-ticker details endpoint (trending/popular assets) is still planned, not yet built: `.doc/issues.md` `#30` (`/api/market/trending`), `#31` (`/api/market/{ticker}/details`).
 
 `direction`: `"above"` or `"below"`. **POST** validates ticker via Finnhub REST on creation — returns 400 if invalid, 409 if an alert for this `(ticker, direction, alert_type)` triple already exists (active or paused). (yfinance is used only for `/history`-style chart data, not validation.)
 
@@ -119,9 +119,30 @@ Only `Trade`/`BUY`, `MoneyMovement`/`EFT`, `MoneyMovement`/`E_TRFIN`, `Interest`
 
 **DELETE /api/activities** deletes every `Activity` row for one `account_id` — the recovery path for the frozen-past limitation (a correction to an already-frozen row is never picked up by a normal import, so it needs a reset and a full re-import). Backend-only: no frontend caller, deliberately — it's rare and destructive enough that a `curl` with the API key is the right amount of friction. Deleting an account with no rows returns `deleted: 0`.
 
-There is no read endpoint for holdings here — `GET /api/positions` and the rest belong to `.doc/issues.md` `#19`, which calls `compute_positions` against the committed rows.
+There is no read endpoint for holdings here — see "Positions, Portfolio & Market History" below, which calls `compute_positions` against the committed rows.
 
 **Frontend**: the Upload button in the nav POSTs the file to `/api/proxy/activities/import` — a dedicated route handler, not the JSON catch-all `[...path]`, which forces `Content-Type: application/json` and would corrupt the multipart boundary. It forwards the raw body and `Content-Type` verbatim (buffered, not streamed) with the `X-API-Key` added server-side. It refuses an oversized upload up front (`413`, from `Content-Length`, before buffering it) and gives the backend 30 seconds — a timeout answers `504` and an unreachable backend `502`, each with a plain string `detail`. Success shows an "Import complete" toast; a rejection shows the `message` in a persistent error toast, with the full `detail` logged to the browser console.
+
+### Positions, Portfolio & Market History
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/positions` | Merged holdings (one row per symbol + native currency), priced |
+| `GET` | `/api/portfolio/summary` | Per-currency subtotals, cash, CAD balance, invested cost basis |
+| `GET` | `/api/portfolio/history` | `[{date, value, total_deposits_cad}]` for the portfolio overview chart — query: `?range=` |
+| `GET` | `/api/market/{ticker}/history` | `[{date, close}]` for one ticker's chart — query: `?range=&native_currency=` |
+
+None of these read a `Position` table — there isn't one (issue #19, #23). Holdings, cash and this history are all derived on read from the committed `Activity` ledger via `compute_positions`/`portfolio_history.py`; nothing here is stored pre-aggregated.
+
+`range` (all three history-shaped routes above, and the per-alert chart on `/market/{ticker}`) is one of `"1D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "ALL"` — 422 on anything else. `1D`/`1W` resolve to intraday yfinance bars (5m/1h); `date` is then a full ISO datetime instead of a plain `YYYY-MM-DD`, except `1D` itself which keeps the full per-bar timestamp while every other range collapses intraday bars down to one point per calendar day.
+
+**GET /api/positions** — one row per `(symbol, native_currency)` across every account, priced via `PriceService` (Finnhub REST for USD-native, yfinance for CAD-native — Finnhub's free tier 403s on `.TO` symbols). `price_status` is `"ok" | "stale" | "unavailable" | "currency_mismatch"`; a `"stale"` row still carries the last known price (with `price_as_of` showing its real age), `"unavailable"`/`"currency_mismatch"` null out every price-derived field rather than guess.
+
+**GET /api/portfolio/summary** — `balance_cad` is CAD market value + USD market value at today's FX rate + cash, `null` if USD holdings exist but no FX rate does. `invested_cad` is cost basis at each holding's own purchase-time FX rate, regardless of pricing status — it's the "Committed" figure on `/portfolio`, and is what the frontend's range badge is checked against, not `balance_cad`.
+
+**GET /api/portfolio/history** — `value` is the account's total CAD value on that date (actual historical holdings + cash, so a deposit shows as a visible jump — this is the chart line itself). `total_deposits_cad` is a different, narrower figure: cumulative net external cash (`MoneyMovement` rows only — a `Trade` just reallocates money already in the account, never counted) from the ledger's start through that date. The frontend never shows `total_deposits_cad` directly; it uses the *difference* between the range's first and active (hovered, or latest-if-unhovered) points to strip deposits back out of the raw `value` diff for the range %/$ change badge, with the active point's own total as the % denominator. This replaced an earlier "today's fixed holdings, backfilled" approach that didn't reproduce Wealthsimple's own reported returns; the deposit-diff formula does, verified against a real account (exact match on multi-month ranges once a live-quote gap between data sources was accounted for).
+
+**GET /api/market/{ticker}/history** — works for any ticker, held or not (Popular Assets, ad-hoc search, same reusability reasoning as #31's planned `/details` endpoint). `native_currency` should be passed when the ticker is a known holding (routes a CDR like `AVGO` through yfinance's `.TO`-suffixed quote instead of its US listing); omitted for a ticker with no known native currency.
 
 ### TradingAgents Management
 

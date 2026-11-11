@@ -53,7 +53,11 @@ function ReferencePriceLabel({ viewBox, value }: ReferencePriceLabelProps) {
 
 /** "Jul 31, 2026 12:05 PM ET" for intraday points, "Jul 31, 2026" for daily+ points. */
 function formatHoverLabel(dateStr: string): string {
-  const hasTime = dateStr.includes("T");
+  // Backend intraday timestamps are space-separated ("2026-11-10 09:30:00-05:00",
+  // Python's default str(datetime)), never "T" — a plain date has no space at
+  // all. Checking for "T" here always missed, appending a bogus "T00:00:00"
+  // onto an already-complete timestamp and producing an Invalid Date.
+  const hasTime = dateStr.includes(" ");
   const d = new Date(hasTime ? dateStr : `${dateStr}T00:00:00`);
   const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   if (!hasTime) return datePart;

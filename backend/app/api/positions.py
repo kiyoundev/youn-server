@@ -15,13 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.deps import get_ledger_cache
 from app.models.fx_rate import FxRate
-from app.schemas.positions import PortfolioSummary, PositionResponse
+from app.schemas.positions import PortfolioHistoryPoint, PortfolioSummary, PositionResponse
+from app.services import portfolio_history
 from app.services.asset_types import AssetTypeService
 from app.services.fx import STALE_THRESHOLD_HOURS
 from app.services.ledger_cache import LedgerCache, LedgerSnapshot
 from app.services.ledger_errors import LedgerImportError
 from app.services.portfolio import PositionRow, build_rows, build_summary
 from app.services.prices import PriceService
+from app.services.stocks import DateRange, FinnhubClient
 
 router = APIRouter()
 
@@ -32,6 +34,10 @@ def get_price_service(request: Request) -> PriceService:
 
 def get_asset_type_service(request: Request) -> AssetTypeService:
     return request.app.state.asset_types
+
+
+def get_finnhub_client(request: Request) -> FinnhubClient:
+    return request.app.state.finnhub
 
 
 async def _load_snapshot(ledger: LedgerCache, db: AsyncSession) -> LedgerSnapshot:
@@ -133,3 +139,37 @@ async def get_portfolio_summary(
 ) -> PortfolioSummary:
     snapshot, rows, (rate, stale) = await _load_priced_rows(ledger, prices, db)
     return PortfolioSummary(**asdict(build_summary(rows, snapshot.cash, rate, stale, snapshot.invested_cad)))
+
+
+@router.get(
+    "/api/portfolio/history",
+    response_model=list[PortfolioHistoryPoint],
+    summary="Get portfolio value history",
+    description=(
+        "[{date, value, total_deposits_cad}] for the given range — shares "
+        "held each day via compute_positions on a ledger prefix, priced and "
+        "FX-converted per day, plus cash. date is a plain YYYY-MM-DD for "
+        "daily+ ranges, a full datetime for 1D. total_deposits_cad is "
+        "cumulative net external cash (deposits minus withdrawals, never "
+        "Trade rows) from the ledger's start through that date — the basis "
+        "for a deposit-adjusted range return, so a deposit landing mid-range "
+        "doesn't read as investment gain. A symbol with no resolvable price "
+        "anywhere in the range is logged and excluded from the affected "
+        "points rather than counted as zero. An empty ledger is []. Not "
+        "polled — fetched only on load or range change, unlike /positions "
+        "and /portfolio/summary."
+    ),
+)
+async def get_portfolio_history_route(
+    range: DateRange,
+    db: AsyncSession = Depends(get_db),
+    finnhub: FinnhubClient = Depends(get_finnhub_client),
+) -> list[PortfolioHistoryPoint]:
+    try:
+        history = await portfolio_history.get_portfolio_history(db, range, finnhub)
+    except LedgerImportError as e:
+        # Same fault as _load_snapshot's: the ledger passed its integrity
+        # checks at import time, so this means the stored rows were changed
+        # behind the app's back — a server fault, not a bad request.
+        raise HTTPException(status_code=500, detail={"code": e.code, "message": e.message}) from e
+    return [PortfolioHistoryPoint(**point) for point in history]

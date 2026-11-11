@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api import activities, analysis, events, fx, health, items, poll, positions, stock_alerts, system
+from app.api import activities, analysis, events, fx, health, items, market, poll, positions, stock_alerts, system
 from app.consumers import dispatcher
 from app.core.auth import verify_api_key
 from app.core.config import settings
@@ -112,3 +112,4 @@ app.include_router(system.router, dependencies=[Depends(verify_api_key)])
 app.include_router(fx.router, dependencies=[Depends(verify_api_key)])
 app.include_router(activities.router, dependencies=[Depends(verify_api_key)])
 app.include_router(positions.router, dependencies=[Depends(verify_api_key)])
+app.include_router(market.router, dependencies=[Depends(verify_api_key)])

@@ -468,3 +468,62 @@ def test_summary_integrity_failure_is_a_500_with_the_error_code() -> None:
     assert response.status_code == 500
     assert response.json() == {"detail": {"code": "negative_cash", "message": "cash went negative"}}
     assert prices.asked is None
+
+
+# ---- GET /api/portfolio/history ------------------------------------------
+# portfolio_history.get_portfolio_history's own behavior (date points, carry-
+# forward, 1D, FX) is covered in tests/services/test_portfolio_history.py —
+# these only prove the route's wiring: query validation and response mapping.
+
+def _history_request(range_: str | None, monkeypatch, result: list | None = None, error: Exception | None = None):
+    async def _fake_get_portfolio_history(db, range_arg, finnhub):
+        if error:
+            raise error
+        return result if result is not None else []
+
+    monkeypatch.setattr(positions.portfolio_history, "get_portfolio_history", _fake_get_portfolio_history)
+
+    app = FastAPI()
+    app.include_router(positions.router)
+
+    async def _override_db():
+        yield _Db()
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[positions.get_finnhub_client] = lambda: object()
+    client = TestClient(app, raise_server_exceptions=False)
+    params = {"range": range_} if range_ is not None else {}
+    return client.get("/api/portfolio/history", params=params)
+
+
+def test_portfolio_history_maps_the_service_result_to_the_response_shape(monkeypatch) -> None:
+    points = [
+        {"date": "2026-01-01", "value": 1000.0, "total_deposits_cad": 800.0},
+        {"date": "2026-01-02", "value": 1050.0, "total_deposits_cad": 850.0},
+    ]
+    response = _history_request("1W", monkeypatch, result=points)
+
+    assert response.status_code == 200
+    assert response.json() == points
+
+
+def test_portfolio_history_an_invalid_range_422s(monkeypatch) -> None:
+    assert _history_request("bogus", monkeypatch).status_code == 422
+
+
+def test_portfolio_history_a_missing_range_422s(monkeypatch) -> None:
+    assert _history_request(None, monkeypatch).status_code == 422
+
+
+def test_portfolio_history_empty_ledger_is_an_empty_list(monkeypatch) -> None:
+    response = _history_request("1M", monkeypatch, result=[])
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_portfolio_history_integrity_failure_is_a_500_with_the_error_code(monkeypatch) -> None:
+    response = _history_request("1M", monkeypatch, error=LedgerImportError("negative_cash", "cash went negative"))
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": {"code": "negative_cash", "message": "cash went negative"}}

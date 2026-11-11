@@ -444,7 +444,7 @@ async def test_get_price_history_success(client: FinnhubClient) -> None:
     fake_ticker.history.return_value = _History()
 
     with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker):
-        result = await client.get_price_history("AAPL", "1mo")
+        result = await client.get_price_history("AAPL", "1M")
 
     assert result == [
         {"date": "2026-01-01", "close": 101.5},
@@ -453,8 +453,119 @@ async def test_get_price_history_success(client: FinnhubClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_price_history_drops_a_nan_close_instead_of_returning_it(client: FinnhubClient) -> None:
+    # yfinance reports NaN Close for a bar with no actual trade (a halted
+    # symbol, a holiday gap) — unfiltered, that NaN reaches
+    # json.dumps(allow_nan=False) downstream in the API response and 500s
+    # the whole request, not just that one bar.
+    class _Idx:
+        def __init__(self, d: dt.date):
+            self._d = d
+
+        def date(self):
+            return self._d
+
+    class _History:
+        def iterrows(self):
+            yield _Idx(dt.date(2026, 1, 1)), {"Close": 101.5}
+            yield _Idx(dt.date(2026, 1, 2)), {"Close": float("nan")}
+            yield _Idx(dt.date(2026, 1, 3)), {"Close": 102.25}
+
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = _History()
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker):
+        result = await client.get_price_history("AAPL", "1M")
+
+    assert result == [
+        {"date": "2026-01-01", "close": 101.5},
+        {"date": "2026-01-03", "close": 102.25},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_price_history_returns_empty_on_error(client: FinnhubClient) -> None:
     with patch("app.services.stocks.yf.Ticker", side_effect=RuntimeError("down")):
-        result = await client.get_price_history("AAPL", "1mo")
+        result = await client.get_price_history("AAPL", "1M")
 
     assert result == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "range_,expected_period,expected_interval",
+    [
+        ("1D", "1d", "5m"),
+        ("1W", "5d", "1h"),
+        ("1M", "1mo", "1d"),
+        ("3M", "3mo", "1d"),
+        ("6M", "6mo", "1d"),
+        ("YTD", "ytd", "1d"),
+        ("ALL", "max", "1mo"),
+    ],
+)
+async def test_get_price_history_maps_each_range_to_its_yfinance_period_and_interval(
+    client: FinnhubClient, range_: str, expected_period: str, expected_interval: str
+) -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = MagicMock(iterrows=MagicMock(return_value=iter([])))
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker) as ticker_cls:
+        await client.get_price_history("AAPL", range_)
+
+    ticker_cls.assert_called_once_with("AAPL")
+    fake_ticker.history.assert_called_once_with(period=expected_period, interval=expected_interval)
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_resolves_a_cad_native_ticker_through_dot_to(client: FinnhubClient) -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = MagicMock(iterrows=MagicMock(return_value=iter([])))
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker) as ticker_cls:
+        await client.get_price_history("RY", "1M", native_currency="CAD")
+
+    ticker_cls.assert_called_once_with("RY.TO")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_currency", [None, "USD"])
+async def test_get_price_history_queries_the_bare_ticker_when_not_cad(
+    client: FinnhubClient, native_currency: str | None
+) -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = MagicMock(iterrows=MagicMock(return_value=iter([])))
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker) as ticker_cls:
+        await client.get_price_history("AAPL", "1M", native_currency=native_currency)
+
+    ticker_cls.assert_called_once_with("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_keeps_the_time_component_for_an_intraday_range(client: FinnhubClient) -> None:
+    # tz-aware, matching yfinance's real intraday index (exchange-local
+    # offset) — a naive datetime here would hide a fromisoformat/strptime
+    # mismatch in any downstream parser, exactly as it did for issue #23's
+    # portfolio_history.py (worked under dev's Python 3.12, raised under the
+    # backend image's 3.10).
+    idx = dt.datetime(2026, 1, 5, 9, 30, tzinfo=dt.timezone(dt.timedelta(hours=-5)))
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = MagicMock(iterrows=MagicMock(return_value=iter([(idx, {"Close": 101.5})])))
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker):
+        result = await client.get_price_history("AAPL", "1D")  # interval 5m -> intraday
+
+    assert result == [{"date": str(idx), "close": 101.5}]
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_drops_the_time_component_for_a_daily_range(client: FinnhubClient) -> None:
+    idx = dt.datetime(2026, 1, 5, 9, 30)
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = MagicMock(iterrows=MagicMock(return_value=iter([(idx, {"Close": 101.5})])))
+
+    with patch("app.services.stocks.yf.Ticker", return_value=fake_ticker):
+        result = await client.get_price_history("AAPL", "1M")  # interval 1d -> not intraday
+
+    assert result == [{"date": "2026-01-05", "close": 101.5}]

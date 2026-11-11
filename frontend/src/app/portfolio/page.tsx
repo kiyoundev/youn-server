@@ -15,7 +15,18 @@ import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext
 import { stockWatchlistData } from "@/lib/mock-portfolio";
 import { mockMarketDetails } from "@/lib/mock-market";
 import { POLL_INTERVAL_MS } from "@/lib/polling";
-import { POSITIONS_KEY, PORTFOLIO_SUMMARY_KEY, getPositions, getPortfolioSummary, type Position, type PortfolioSummary, type PriceStatus } from "@/lib/api/positions";
+import { DATE_RANGES, type DateRange } from "@/lib/api/market";
+import {
+  POSITIONS_KEY,
+  PORTFOLIO_SUMMARY_KEY,
+  getPositions,
+  getPortfolioSummary,
+  getPortfolioHistory,
+  type Position,
+  type PortfolioSummary,
+  type PortfolioHistoryPoint,
+  type PriceStatus,
+} from "@/lib/api/positions";
 import { TickerLogo } from "@/components/ui/ticker-logo";
 import { Spinner } from "@/components/ui/loading-screen";
 import { ApiError } from "@/lib/api/api-client";
@@ -70,109 +81,6 @@ function priceNote(status: PriceStatus, asOf: string | null) {
   }
 }
 
-type DateRange = "1D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "ALL";
-
-const DATE_RANGES: DateRange[] = ["1D", "1W", "1M", "3M", "6M", "YTD", "ALL"];
-
-const chartDataByRange: Record<DateRange, { date: string; value: number }[]> = {
-  "1D": [
-    { date: "2026-07-27T09:30", value: 58900 },
-    { date: "2026-07-27T10:30", value: 59200 },
-    { date: "2026-07-27T11:30", value: 58700 },
-    { date: "2026-07-27T12:30", value: 59400 },
-    { date: "2026-07-27T13:30", value: 59600 },
-    { date: "2026-07-27T14:30", value: 59000 },
-    { date: "2026-07-27T15:30", value: 59300 },
-    { date: "2026-07-27T16:00", value: 59100 },
-  ],
-  "1W": [
-    { date: "2026-07-21", value: 56200 },
-    { date: "2026-07-22", value: 55400 },
-    { date: "2026-07-23", value: 57100 },
-    { date: "2026-07-24", value: 56300 },
-    { date: "2026-07-25", value: 58200 },
-    { date: "2026-07-26", value: 57600 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-  "1M": [
-    { date: "2026-07-01", value: 48200 },
-    { date: "2026-07-02", value: 47650 },
-    { date: "2026-07-03", value: 48900 },
-    { date: "2026-07-04", value: 49200 },
-    { date: "2026-07-05", value: 48100 },
-    { date: "2026-07-06", value: 50300 },
-    { date: "2026-07-07", value: 49800 },
-    { date: "2026-07-08", value: 51200 },
-    { date: "2026-07-09", value: 50100 },
-    { date: "2026-07-10", value: 52400 },
-    { date: "2026-07-11", value: 51800 },
-    { date: "2026-07-12", value: 49600 },
-    { date: "2026-07-13", value: 50900 },
-    { date: "2026-07-14", value: 52100 },
-    { date: "2026-07-15", value: 53400 },
-    { date: "2026-07-16", value: 52700 },
-    { date: "2026-07-17", value: 54200 },
-    { date: "2026-07-18", value: 53100 },
-    { date: "2026-07-19", value: 55600 },
-    { date: "2026-07-20", value: 54900 },
-    { date: "2026-07-21", value: 56200 },
-    { date: "2026-07-22", value: 55400 },
-    { date: "2026-07-23", value: 57100 },
-    { date: "2026-07-24", value: 56300 },
-    { date: "2026-07-25", value: 58200 },
-    { date: "2026-07-26", value: 57600 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-  "3M": [
-    { date: "2026-05-01", value: 41200 },
-    { date: "2026-05-15", value: 43600 },
-    { date: "2026-06-01", value: 42100 },
-    { date: "2026-06-15", value: 45800 },
-    { date: "2026-07-01", value: 48200 },
-    { date: "2026-07-15", value: 53400 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-  "6M": [
-    { date: "2026-02-01", value: 33400 },
-    { date: "2026-02-15", value: 35100 },
-    { date: "2026-03-01", value: 34200 },
-    { date: "2026-03-15", value: 37800 },
-    { date: "2026-04-01", value: 39600 },
-    { date: "2026-04-15", value: 38100 },
-    { date: "2026-05-01", value: 41200 },
-    { date: "2026-05-15", value: 43600 },
-    { date: "2026-06-01", value: 42100 },
-    { date: "2026-06-15", value: 45800 },
-    { date: "2026-07-01", value: 48200 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-  YTD: [
-    { date: "2026-01-01", value: 28900 },
-    { date: "2026-01-15", value: 30200 },
-    { date: "2026-02-01", value: 33400 },
-    { date: "2026-02-15", value: 35100 },
-    { date: "2026-03-01", value: 34200 },
-    { date: "2026-03-15", value: 37800 },
-    { date: "2026-04-01", value: 39600 },
-    { date: "2026-04-15", value: 38100 },
-    { date: "2026-05-01", value: 41200 },
-    { date: "2026-05-15", value: 43600 },
-    { date: "2026-06-01", value: 42100 },
-    { date: "2026-06-15", value: 45800 },
-    { date: "2026-07-01", value: 48200 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-  ALL: [
-    { date: "2024-01-01", value: 8200 },
-    { date: "2024-07-01", value: 12600 },
-    { date: "2025-01-01", value: 15400 },
-    { date: "2025-07-01", value: 21900 },
-    { date: "2026-01-01", value: 28900 },
-    { date: "2026-04-01", value: 39600 },
-    { date: "2026-07-27", value: 59100 },
-  ],
-};
-
 export default function PortfolioPage() {
   const [selectedRange, setSelectedRange] = useState<DateRange>("1W");
   const [popularAssetsApi, setPopularAssetsApi] = useState<CarouselApi>();
@@ -193,7 +101,41 @@ export default function PortfolioPage() {
     isLoading: summaryLoading,
   } = useSWR<PortfolioSummary>(PORTFOLIO_SUMMARY_KEY, getPortfolioSummary, { refreshInterval: POLL_INTERVAL_MS });
 
-  const rangeData = chartDataByRange[selectedRange];
+  // No refreshInterval — a past point never changes; only a range change (new key) refetches.
+  const { data: history } = useSWR(["/api/proxy/portfolio/history", selectedRange], () => getPortfolioHistory(selectedRange));
+
+  // Null while unhovered — PortfolioLineChart fires this on mount too (with
+  // null), which is what resets this back to "unhovered" on a range change
+  // (the chart remounts via key={selectedRange} below).
+  const [hoveredPoint, setHoveredPoint] = useState<PortfolioHistoryPoint | null>(null);
+
+  // Both the headline $ and the %/$ badge track the hovered point; unhovered,
+  // both default to the selected range's own latest point.
+  const activePoint = hoveredPoint ?? (history && history.length > 0 ? history[history.length - 1] : null);
+  const headlineBalanceCad = activePoint ? activePoint.value : summary?.balance_cad;
+
+  // Raw value diff minus net deposits over the same stretch — a deposit
+  // elsewhere in the range inflates "value" but not "total_deposits_cad"'s
+  // own diff, so it cancels out instead of reading as a gain. The % denominator
+  // is deposits-to-date (not range-start value): verified against a real
+  // Wealthsimple account, where this reproduces its reported % exactly.
+  // Guarded the same way unrealized_gain_pct guards a zero/missing divisor
+  // elsewhere in this app.
+  const rangeStart = history?.[0];
+  const rangeChangeDollar =
+    activePoint && rangeStart
+      ? activePoint.value - rangeStart.value - (activePoint.total_deposits_cad - rangeStart.total_deposits_cad)
+      : null;
+  const rangeChangePct = rangeChangeDollar !== null && activePoint?.total_deposits_cad ? rangeChangeDollar / activePoint.total_deposits_cad : null;
+  const isRangeZero = rangeChangePct === 0;
+  const isRangeUp = rangeChangePct !== null && rangeChangePct > 0;
+  const rangeChangeColor =
+    rangeChangePct === null || isRangeZero ? "var(--status-neutral)" : isRangeUp ? "var(--status-success)" : "var(--status-error)";
+  const rangeChangeSign = isRangeZero ? "" : isRangeUp ? "+" : "-";
+  const rangeChangeText =
+    rangeChangePct === null
+      ? "—"
+      : `${rangeChangeSign}${fmtDollars(Math.abs(rangeChangeDollar!))} (${rangeChangeSign}${Math.abs(rangeChangePct * 100).toFixed(2)}%)`;
 
   // Tracks the Popular Assets carousel's own prev/next button state — synced
   // to popularAssetsApi (embla), not to anything this page owns. Re-subscribes
@@ -240,14 +182,11 @@ export default function PortfolioPage() {
         {/* Overview Left Section */}
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-4">
-            {/* The real total in CAD (holdings, USD converted at today's rate, plus cash). It does not
-                follow the range buttons or the chart: those are mock until there is portfolio value
-                history, and a change per range needs that history too. */}
             <Label className="font-ndot text-[40px] font-normal block">
-              {summary ? (summary.balance_cad === null ? "—" : fmtDollars(summary.balance_cad)) : summaryLoading ? "…" : "—"}
+              {headlineBalanceCad != null ? fmtDollars(headlineBalanceCad) : summaryLoading ? "…" : "—"}
             </Label>
             <div className="flex gap-2">
-              <Label className="text-muted-foreground">Current Value (CAD)</Label>
+              <Label className="text-base" style={{ color: rangeChangeColor }}>{rangeChangeText}</Label>
             </div>
           </div>
           <div className="flex gap-20" title={summaryError ? "Couldn't load the summary" : undefined}>
@@ -276,7 +215,12 @@ export default function PortfolioPage() {
         </div>
         {/* Overview Right Section */}
         <div className="flex-1">
-          <PortfolioLineChart key={selectedRange} data={rangeData} />
+          <PortfolioLineChart
+            key={selectedRange}
+            data={history ?? []}
+            investedAmount={summary?.invested_cad}
+            onHoverChange={setHoveredPoint}
+          />
           <div className="flex justify-end gap-1">
             {DATE_RANGES.map((range) => (
               <Button

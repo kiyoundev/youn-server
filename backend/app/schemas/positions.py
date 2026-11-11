@@ -58,3 +58,22 @@ class PortfolioSummary(BaseModel):
     fx_stale: bool
     unpriced_count: int
     invested_cad: float  # what the held shares cost in CAD at purchase-time rates, priced or not
+
+
+class PortfolioHistoryPoint(BaseModel):
+    """GET /api/portfolio/history. date is a plain YYYY-MM-DD for daily+
+    ranges, a full ISO datetime for 1D. value is the portfolio's total in CAD
+    on that date — holdings priced and FX-converted, plus cash.
+
+    total_deposits_cad is cumulative net external cash (deposits minus
+    withdrawals; a Trade doesn't count — it just reallocates money already in
+    the account) from the ledger's start through this date. The frontend's
+    range %/$ change badge subtracts this point's total from the range's
+    first point's total to strip deposits out of the raw value diff, and
+    uses the active point's own total as the % denominator — this is what
+    makes the badge match Wealthsimple's own reported returns rather than
+    being thrown off by a deposit landing mid-range."""
+
+    date: str
+    value: float
+    total_deposits_cad: float

@@ -17,11 +17,9 @@ import { RecentActivityCard } from "@/components/ui/recent-activity-card";
 import { createStockAlert, updateStockAlert, deleteStockAlert, type StockAlert } from "@/lib/api/stock-alerts";
 import { ApiError } from "@/lib/api/api-client";
 import { toast } from "@/lib/toast";
+import { DATE_RANGES, type DateRange, getMarketHistory } from "@/lib/api/market";
 import {
-  DATE_RANGES,
   type Activity,
-  type DateRange,
-  generateMockPriceSeries,
   getActivitiesForTicker,
   getMarketDetail,
   getPositionForTicker,
@@ -303,7 +301,9 @@ export default function MarketDetailPage() {
   const position = useMemo(() => getPositionForTicker(ticker), [ticker]);
   const activities = useMemo(() => getActivitiesForTicker(ticker), [ticker]);
 
-  const chartData = useMemo(() => generateMockPriceSeries(ticker, detail.currentPrice, selectedRange), [ticker, detail.currentPrice, selectedRange]);
+  // No refreshInterval — a past bar never changes; only a range change (new key) refetches.
+  const { data: history } = useSWR([ticker, selectedRange], () => getMarketHistory(ticker, selectedRange, position?.currency));
+  const chartData = useMemo(() => history?.map((p) => ({ date: p.date, value: p.close })) ?? [], [history]);
 
   const firstPoint = chartData[0]?.value ?? detail.currentPrice;
   const displayedPrice = hoveredPoint?.value ?? detail.currentPrice;

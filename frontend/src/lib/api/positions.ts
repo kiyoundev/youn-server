@@ -2,6 +2,7 @@
 // snake_case on both sides. Reached through the catch-all proxy
 // (api/proxy/[...path]/route.ts), which adds the X-API-Key server-side.
 import { request } from "@/lib/api/api-client";
+import type { DateRange } from "@/lib/api/market";
 
 export type NativeCurrency = "USD" | "CAD";
 export type AssetType = "Stock" | "ETF" | "CDR";
@@ -56,6 +57,20 @@ export interface PortfolioSummary {
   invested_cad: number; // what the held shares cost in CAD at purchase-time rates, priced or not
 }
 
+// date is the same intraday-ISO-vs-plain-date rule as MarketHistoryPoint;
+// value is CAD (cash + holdings, this date's actual holdings).
+export interface PortfolioHistoryPoint {
+  date: string;
+  value: number;
+  // Cumulative net external cash (deposits minus withdrawals; a Trade never
+  // counts — it just reallocates money already in the account) from the
+  // ledger's start through this date. The range %/$ change badge subtracts
+  // this point's total from the range's first point's total to strip
+  // deposits out of the raw value diff, and uses the active point's own
+  // total as the % denominator.
+  total_deposits_cad: number;
+}
+
 // Exported so other modules (e.g. the CSV import in nav.tsx) can mutate()
 // the exact same SWR keys the portfolio page reads.
 export const POSITIONS_KEY = "/api/proxy/positions";
@@ -63,3 +78,5 @@ export const PORTFOLIO_SUMMARY_KEY = "/api/proxy/portfolio/summary";
 
 export const getPositions = () => request<Position[]>(POSITIONS_KEY);
 export const getPortfolioSummary = () => request<PortfolioSummary>(PORTFOLIO_SUMMARY_KEY);
+export const getPortfolioHistory = (range: DateRange) =>
+  request<PortfolioHistoryPoint[]>(`/api/proxy/portfolio/history?range=${range}`);

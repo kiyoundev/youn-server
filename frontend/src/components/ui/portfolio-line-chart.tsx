@@ -9,14 +9,16 @@ export interface PortfolioChartPoint {
   value: number;
 }
 
-interface PortfolioLineChartProps {
-  data: PortfolioChartPoint[];
+interface PortfolioLineChartProps<T extends PortfolioChartPoint = PortfolioChartPoint> {
+  data: T[];
   /** Total deployed investment balance (cost basis) — dashed reference line, and the up/down threshold for the line color. */
   investedAmount?: number;
   height?: number;
   className?: string;
-  /** Fires with the hovered point (or null on mouse-leave) so the page can update the value/change header. */
-  onHoverChange?: (point: PortfolioChartPoint | null) => void;
+  /** Fires with the hovered point (or null on mouse-leave) so the page can update the value/change header.
+   * Typed as T, not just {date, value} — callers can pass a richer point type (e.g. portfolio's own
+   * PortfolioHistoryPoint) and get it back verbatim on hover, not just the two fields this component itself reads. */
+  onHoverChange?: (point: T | null) => void;
 }
 
 const SUCCESS = "var(--status-success)";
@@ -50,7 +52,11 @@ function ReferenceValueLabel({ viewBox, value }: ReferenceValueLabelProps) {
 
 /** "Jul 31, 2026 12:05 PM" for intraday points, "Jul 31, 2026" for daily+ points. */
 function formatHoverLabel(dateStr: string): string {
-  const hasTime = dateStr.includes("T");
+  // Backend intraday timestamps are space-separated ("2026-11-10 09:30:00-05:00",
+  // Python's default str(datetime)), never "T" — a plain date has no space at
+  // all. Checking for "T" here always missed, appending a bogus "T00:00:00"
+  // onto an already-complete timestamp and producing an Invalid Date.
+  const hasTime = dateStr.includes(" ");
   const d = new Date(hasTime ? dateStr : `${dateStr}T00:00:00`);
   const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   if (!hasTime) return datePart;
@@ -58,7 +64,13 @@ function formatHoverLabel(dateStr: string): string {
   return `${datePart} ${timePart}`;
 }
 
-function PortfolioLineChart({ data, investedAmount, height = 120, className, onHoverChange }: PortfolioLineChartProps) {
+function PortfolioLineChart<T extends PortfolioChartPoint>({
+  data,
+  investedAmount,
+  height = 120,
+  className,
+  onHoverChange,
+}: PortfolioLineChartProps<T>) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
   useEffect(() => {

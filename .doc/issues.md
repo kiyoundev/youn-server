@@ -35,7 +35,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 ✅ #3, ✅ #24, 🔀 #10.1 (→#36), ✅ #10.2 (testing skipped), 🔀 #10.3 (→#36), ✅ #36, ✅ #39, ✅ #15,  ✅ #40, ✅ #41, ✅ #44, ✅ #45, ✅ #47, ✅ #48, ✅ #50, ✅ #51, ⬜ #52, ✅ #53, ✅ #54, ⬜ #56, ✅ #57, ⬜ #58, ⬜ #59, ✅ #60, ⬜ #61, ⬜ #62, ✅ #63, ⬜ #64, ⬜ #65
 
 **Stocks / Portfolio**
-✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ⬜ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
+✅ #4, ✅ #10.4, ⬜ #10.6, ⬜ #11, ⬜ #19, ✅ #23, ⬜ #30, ✅ #31, ⬜ #35, ⬜ #37, ⬜ #38, ⬜ #46
 
 **TradingAgents / AI Chat**
 ✅ #9, ✅ #17, ⬜ #42, ✅ #25, ⬜ #26, ⬜ #27, ⬜ #28, ⬜ #49
@@ -86,7 +86,7 @@ Quick-jump index, grouped by what part of the app each issue touches — not the
 | ⬜ Open | #21 | System/Infra Status API (Docker, Pi Resources, Services, Schedules) | feat / AFK | ~3h | #8, #20 |
 | ✅ Done | #21.5 | Synology Storage Status API | feat / AFK | ~1h | #1.5 |
 | ⬜ Open | #22 | Overview Dashboard (`/`, Bentobox Summary) | feat / AFK | ~4h | #10.1–#10.5, #11, #19, #20, #21 |
-| ⬜ Open | #23 | Portfolio Value & Stock Price History Charts | feat / AFK | ~3h (re-estimate pending) | #19 |
+| ✅ Done | #23 | Portfolio Value & Stock Price History Charts | feat / AFK | ~3h (re-estimate pending) | #19 |
 | ✅ Done | #25 | Claude OAuth Auth Working in Docker | feat / AFK | ~1h | None |
 | ⬜ Open | #26 | Per-Report Chat Backend (Non-Streaming) | feat / AFK | ~4h | #8, #25 |
 | ⬜ Open | #27 | Streaming Chat Responses | feat / AFK | ~1.5h | #26 |
